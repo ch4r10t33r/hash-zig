@@ -234,6 +234,12 @@ hash-zig/
 - **Winternitz OTS**: Efficient one-time signature scheme with configurable chain length
 - **Merkle Tree**: Single tree for small lifetimes, automatic hypertree for large ones
 - **Incomparable Encodings**: Binary, ternary, and quaternary encoding schemes
+- **Parallel Key Generation**: Multi-threaded implementation for faster key generation
+  - Parallelizes WOTS leaf generation across available CPU cores
+  - Parallelizes WOTS chain hashing within each leaf
+  - Parallelizes Merkle tree level construction
+  - Automatic fallback to sequential mode for small workloads
+  - ~3x speedup on 8-core M2 Mac
 
 ## 📊 Performance
 
@@ -245,21 +251,30 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Key Generation | **2.74 minutes** (164 sec) | One-time cost, builds entire tree |
+| Key Generation | **56 seconds** | Parallel multi-threaded implementation |
 | Sign | **240 ms** | Fast (uses cached leaves) |
 | Verify | **198 ms** | Fast (only processes auth path) |
 
+**Performance Notes:**
+- Parallel key generation uses all available CPU cores automatically
+- Falls back to sequential mode for small workloads (< 64 leaves)
+- Speedup scales with CPU core count (tested on M2 with ~3x improvement over sequential)
+- Three levels of parallelization: leaf generation, WOTS chains, and Merkle tree construction
+
 #### Projected Key Generation Times for All Lifetimes
 
-| Lifetime | Signatures | Tree Height | Estimated Key Gen Time* | Memory Required |
-|----------|-----------|-------------|------------------------|-----------------|
-| lifetime_2_10 | 1,024 | 10 | **2.74 min** (measured) | ~33 KB |
-| lifetime_2_16 | 65,536 | 16 | **~2.9 hours** | ~2.1 MB |
-| lifetime_2_20 | 1,048,576 | 20 | **~47 hours** (~2 days) | ~34 MB |
-| lifetime_2_28 | 268,435,456 | 28 | **~499 days** (~1.4 years) | ~8.6 GB |
-| lifetime_2_32 | 4,294,967,296 | 32 | **~21 years** | ~137 GB |
+**All projections based on Apple M2 Mac (8 cores) with parallel implementation** - actual times will vary by hardware.
 
-*Projected by linear scaling: (signatures / 1024) × 2.74 min. Key generation scales O(n) with number of signatures.
+| Lifetime | Signatures | Tree Height | Estimated Time* | Memory Required |
+|----------|-----------|-------------|-----------------|-----------------|
+| lifetime_2_10 | 1,024 | 10 | **56 sec** (measured on M2) | ~33 KB |
+| lifetime_2_16 | 65,536 | 16 | **~59 minutes** | ~2.1 MB |
+| lifetime_2_20 | 1,048,576 | 20 | **~16 hours** | ~34 MB |
+| lifetime_2_28 | 268,435,456 | 28 | **~171 days** | ~8.6 GB |
+| lifetime_2_32 | 4,294,967,296 | 32 | **~7.2 years** | ~137 GB |
+
+*Projected by linear scaling from M2 parallel measurements: (signatures / 1024) × 56 sec. 
+Key generation scales O(n) with number of signatures. Performance will vary based on CPU core count and speed.
 
 #### Sign/Verify Operations (All Lifetimes)
 

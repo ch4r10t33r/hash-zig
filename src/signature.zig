@@ -63,6 +63,44 @@ pub const HashSignature = struct {
         }
     };
 
+    const LeafGenContext = struct {
+        hash_sig: *HashSignature,
+        secret_key: []const u8,
+        leaves: [][]const u8,
+        allocator: Allocator,
+        errors: []?anyerror,
+        mutex: std.Thread.Mutex,
+    };
+
+    fn generateLeafRange(context: *LeafGenContext, start: usize, end: usize) void {
+        for (start..end) |i| {
+            const secret_key_part = context.hash_sig.wots.generatePrivateKey(
+                context.allocator,
+                context.secret_key,
+                i * 1000,
+            ) catch |err| {
+                context.mutex.lock();
+                defer context.mutex.unlock();
+                context.errors[i] = err;
+                return;
+            };
+            defer {
+                for (secret_key_part) |k| context.allocator.free(k);
+                context.allocator.free(secret_key_part);
+            }
+
+            context.leaves[i] = context.hash_sig.wots.generatePublicKey(
+                context.allocator,
+                secret_key_part,
+            ) catch |err| {
+                context.mutex.lock();
+                defer context.mutex.unlock();
+                context.errors[i] = err;
+                return;
+            };
+        }
+    }
+
     pub fn generateKeyPair(self: *HashSignature, allocator: Allocator) !KeyPair {
         var seed: [32]u8 = undefined;
         crypto.random.bytes(&seed);
@@ -73,18 +111,72 @@ pub const HashSignature = struct {
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
         var leaves = try allocator.alloc([]const u8, num_leaves);
         defer {
-            for (leaves) |leaf| allocator.free(leaf);
+            for (leaves) |leaf| {
+                if (leaf.len > 0) allocator.free(leaf);
+            }
             allocator.free(leaves);
         }
 
-        for (0..num_leaves) |i| {
-            const secret_key_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
-            defer {
-                for (secret_key_part) |k| allocator.free(k);
-                allocator.free(secret_key_part);
+        // Initialize leaves to empty slices
+        for (leaves) |*leaf| {
+            leaf.* = &[_]u8{};
+        }
+
+        // Determine optimal number of threads (use CPU count or default to 8)
+        const num_cpus = std.Thread.getCpuCount() catch 8;
+        const num_threads = @min(num_cpus, num_leaves);
+
+        if (num_threads <= 1 or num_leaves < 64) {
+            // Fall back to sequential for small workloads
+            for (0..num_leaves) |i| {
+                const secret_key_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
+                defer {
+                    for (secret_key_part) |k| allocator.free(k);
+                    allocator.free(secret_key_part);
+                }
+
+                leaves[i] = try self.wots.generatePublicKey(allocator, secret_key_part);
+            }
+        } else {
+            // Parallel leaf generation
+            const errors = try allocator.alloc(?anyerror, num_leaves);
+            defer allocator.free(errors);
+            for (errors) |*err| err.* = null;
+
+            var context = LeafGenContext{
+                .hash_sig = self,
+                .secret_key = secret_key,
+                .leaves = leaves,
+                .allocator = allocator,
+                .errors = errors,
+                .mutex = std.Thread.Mutex{},
+            };
+
+            var threads = try allocator.alloc(std.Thread, num_threads);
+            defer allocator.free(threads);
+
+            const leaves_per_thread = num_leaves / num_threads;
+            const remainder = num_leaves % num_threads;
+
+            // Spawn worker threads
+            for (0..num_threads) |t| {
+                const start = t * leaves_per_thread + @min(t, remainder);
+                const end = start + leaves_per_thread + (if (t < remainder) @as(usize, 1) else 0);
+                threads[t] = try std.Thread.spawn(.{}, generateLeafRange, .{ &context, start, end });
             }
 
-            leaves[i] = try self.wots.generatePublicKey(allocator, secret_key_part);
+            // Wait for all threads to complete
+            for (threads) |thread| {
+                thread.join();
+            }
+
+            // Check for errors
+            for (errors, 0..) |err, i| {
+                if (err) |e| {
+                    std.debug.print("Error generating leaf {d}: {}\n", .{ i, e });
+                    return e;
+                }
+            }
         }
 
         const public_key = try self.tree.buildTree(allocator, leaves);
