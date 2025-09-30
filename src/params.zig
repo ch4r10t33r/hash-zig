@@ -19,6 +19,7 @@ pub const EncodingType = enum {
 pub const KeyLifetime = enum {
     lifetime_2_10, // 2^10 = 1,024 signatures
     lifetime_2_16, // 2^16 = 65,536 signatures
+    lifetime_2_18, // 2^18 = 262,144 signatures (for benchmarking)
     lifetime_2_20, // 2^20 = 1,048,576 signatures
     lifetime_2_28, // 2^28 = 268,435,456 signatures
     lifetime_2_32, // 2^32 = 4,294,967,296 signatures
@@ -27,6 +28,7 @@ pub const KeyLifetime = enum {
         return switch (self) {
             .lifetime_2_10 => 10,
             .lifetime_2_16 => 16,
+            .lifetime_2_18 => 18,
             .lifetime_2_20 => 20,
             .lifetime_2_28 => 28,
             .lifetime_2_32 => 32,
