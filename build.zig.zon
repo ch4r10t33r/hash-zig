@@ -1,0 +1,22 @@
+.{
+    .name = .hash_zig,
+    .version = "0.1.0",
+    .fingerprint = 0xc2f8b6b2acaee93c,
+    .minimum_zig_version = "0.14.1",
+
+    .dependencies = .{
+        .zlinter = .{
+            .url = "git+https://github.com/kurtwagner/zlinter?ref=0.14.x#61d13720da00e47855d67397a8a36a7827aba165",
+            .hash = "1220ef236272ded3155b3fa6e198f3cf57c9c82606fcb18ca4f76e1b2242fad2dfd2",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "examples",
+        "README.md",
+        "LICENSE",
+    },
+}

@@ -1,0 +1,59 @@
+# Zig build artifacts
+zig-cache/
+zig-out/
+.zig-cache/
+
+# Build outputs
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.lib
+*.exe
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test artifacts
+test_*
+*.test
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Logs
+*.log
+
+# Documentation build artifacts
+docs/
+site/
+
+# OS-specific files
+Thumbs.db
+desktop.ini
+
+# Backup files
+*.bak
+*.backup
+
+# Lock files (keep .lock files for reproducible builds)
+# Uncomment if you want to ignore lock files:
+# *.lock
+
+# Local configuration
+config.local.*
+.env
+.env.local
+
+# Coverage reports
+coverage/
+*.profdata
+*.profraw
