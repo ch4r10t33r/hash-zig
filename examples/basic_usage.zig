@@ -19,9 +19,13 @@ pub fn main() !void {
 
     std.debug.print("Generating keypair...\n", .{});
 
+    // Generate a random seed for key generation
+    var seed: [32]u8 = undefined;
+    std.crypto.random.bytes(&seed);
+
     // Measure key generation time
     const start_time = std.time.nanoTimestamp();
-    var keypair = try sig_scheme.generateKeyPair(allocator);
+    var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
     const end_time = std.time.nanoTimestamp();
     defer keypair.deinit(allocator);
 
