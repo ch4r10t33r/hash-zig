@@ -18,16 +18,30 @@ pub fn main() !void {
     defer sig_scheme.deinit();
 
     std.debug.print("Generating keypair...\n", .{});
+
+    // Measure key generation time
+    const start_time = std.time.nanoTimestamp();
     var keypair = try sig_scheme.generateKeyPair(allocator);
+    const end_time = std.time.nanoTimestamp();
     defer keypair.deinit(allocator);
 
-    std.debug.print("Public key (first 16 bytes): ", .{});
-    for (keypair.public_key[0..@min(16, keypair.public_key.len)]) |byte| {
+    const duration_ns = end_time - start_time;
+    const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
+
+    std.debug.print("Key generation completed in {d:.2} ms\n", .{duration_ms});
+
+    std.debug.print("\nPublic Key:\n", .{});
+    std.debug.print("  Length: {} bytes\n", .{keypair.public_key.len});
+    std.debug.print("  Content: ", .{});
+    for (keypair.public_key) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
-    std.debug.print("\n", .{});
-    std.debug.print("Secret key (first 16 bytes): ", .{});
-    for (keypair.secret_key[0..@min(16, keypair.secret_key.len)]) |byte| {
+    std.debug.print("\n\n", .{});
+
+    std.debug.print("Secret Key:\n", .{});
+    std.debug.print("  Length: {} bytes\n", .{keypair.secret_key.len});
+    std.debug.print("  Content: ", .{});
+    for (keypair.secret_key) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
     std.debug.print("\n\n", .{});
@@ -36,19 +50,29 @@ pub fn main() !void {
     const message = "Hello, Hash-based Signatures with Poseidon2!";
     std.debug.print("Signing message: \"{s}\"\n", .{message});
 
+    const sign_start = std.time.nanoTimestamp();
     var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
+    const sign_end = std.time.nanoTimestamp();
     defer signature.deinit(allocator);
 
-    std.debug.print("Signature generated (index: {})\n\n", .{signature.index});
+    const sign_duration_ms = @as(f64, @floatFromInt(sign_end - sign_start)) / 1_000_000.0;
+    std.debug.print("Signature generated (index: {}) in {d:.2} ms\n", .{ signature.index, sign_duration_ms });
+    std.debug.print("  OTS signature parts: {}\n", .{signature.ots_signature.len});
+    std.debug.print("  Auth path length: {}\n\n", .{signature.auth_path.len});
 
     // Verify the signature
     std.debug.print("Verifying signature...\n", .{});
+
+    const verify_start = std.time.nanoTimestamp();
     const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
+    const verify_end = std.time.nanoTimestamp();
+
+    const verify_duration_ms = @as(f64, @floatFromInt(verify_end - verify_start)) / 1_000_000.0;
 
     if (is_valid) {
-        std.debug.print("✓ Signature is VALID\n", .{});
+        std.debug.print("✓ Signature is VALID (verified in {d:.2} ms)\n", .{verify_duration_ms});
     } else {
-        std.debug.print("✗ Signature is INVALID\n", .{});
+        std.debug.print("✗ Signature is INVALID (checked in {d:.2} ms)\n", .{verify_duration_ms});
     }
 
     // Try with wrong message

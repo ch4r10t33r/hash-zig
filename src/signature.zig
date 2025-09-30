@@ -17,6 +17,7 @@ pub const HashSignature = struct {
     wots: WinternitzOTS,
     tree: MerkleTree,
     allocator: Allocator,
+    cached_leaves: ?[][]const u8,
 
     pub fn init(allocator: Allocator, parameters: Parameters) !HashSignature {
         return .{
@@ -24,12 +25,19 @@ pub const HashSignature = struct {
             .wots = try WinternitzOTS.init(allocator, parameters),
             .tree = try MerkleTree.init(allocator, parameters),
             .allocator = allocator,
+            .cached_leaves = null,
         };
     }
 
     pub fn deinit(self: *HashSignature) void {
         self.wots.deinit();
         self.tree.deinit();
+
+        // Free cached leaves if they exist
+        if (self.cached_leaves) |leaves| {
+            for (leaves) |leaf| self.allocator.free(leaf);
+            self.allocator.free(leaves);
+        }
     }
 
     pub const KeyPair = struct {
@@ -81,6 +89,14 @@ pub const HashSignature = struct {
 
         const public_key = try self.tree.buildTree(allocator, leaves);
 
+        // Cache the leaves for future signing operations
+        // Make a copy since we're about to free the local leaves
+        const cached = try allocator.alloc([]const u8, num_leaves);
+        for (leaves, 0..) |leaf, i| {
+            cached[i] = try allocator.dupe(u8, leaf);
+        }
+        self.cached_leaves = cached;
+
         return KeyPair{
             .public_key = public_key,
             .secret_key = secret_key,
@@ -88,33 +104,23 @@ pub const HashSignature = struct {
     }
 
     pub fn sign(self: *HashSignature, allocator: Allocator, message: []const u8, secret_key: []const u8, index: u64) !Signature {
+        // Generate the OTS private key deterministically for this index
+        // Using the PRF approach: derive from secret_key + index
         const private_key = try self.wots.generatePrivateKey(allocator, secret_key, index * 1000);
         defer {
             for (private_key) |pk| allocator.free(pk);
             allocator.free(private_key);
         }
 
+        // Sign the message with the one-time signature scheme
         const ots_signature = try self.wots.sign(allocator, message, private_key);
 
-        // Generate all leaves to create the authentication path
-        const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
-        var leaves = try allocator.alloc([]const u8, num_leaves);
-        defer {
-            for (leaves) |leaf| allocator.free(leaf);
-            allocator.free(leaves);
-        }
-
-        for (0..num_leaves) |i| {
-            const sk_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
-            defer {
-                for (sk_part) |k| allocator.free(k);
-                allocator.free(sk_part);
-            }
-            leaves[i] = try self.wots.generatePublicKey(allocator, sk_part);
-        }
-
-        // Generate authentication path for this leaf index
-        const auth_path = try self.tree.generateAuthPath(allocator, leaves, @intCast(index));
+        // Generate authentication path using cached leaves
+        // This is the key optimization: leaves were already generated during key generation
+        const auth_path = if (self.cached_leaves) |leaves|
+            try self.tree.generateAuthPath(allocator, leaves, @intCast(index))
+        else
+            return error.LeavesNotCached; // Signing requires cached leaves
 
         return Signature{
             .index = index,

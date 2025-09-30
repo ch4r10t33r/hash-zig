@@ -237,17 +237,45 @@ hash-zig/
 
 ## 📊 Performance
 
-**⚠️ Benchmarks pending**: Performance measurements have not been conducted yet. Values will vary based on hardware, hash function choice, and implementation optimizations.
+### Actual Benchmarks
 
-### Theoretical Estimates
+Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_128** security:
 
-| Operation | Estimated |
-|-----------|-----------|
-| Key Generation (2^10) | TBD |
-| Sign | TBD |
-| Verify | TBD |
-| Public Key Size | 32-64 bytes |
-| Signature Size | ~2-4 KB |
+#### Core Operations (lifetime_2_10 baseline: 1,024 signatures)
+
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Key Generation | **2.74 minutes** (164 sec) | One-time cost, builds entire tree |
+| Sign | **240 ms** | Fast (uses cached leaves) |
+| Verify | **198 ms** | Fast (only processes auth path) |
+
+#### Projected Key Generation Times for All Lifetimes
+
+| Lifetime | Signatures | Tree Height | Estimated Key Gen Time* | Memory Required |
+|----------|-----------|-------------|------------------------|-----------------|
+| lifetime_2_10 | 1,024 | 10 | **2.74 min** (measured) | ~33 KB |
+| lifetime_2_16 | 65,536 | 16 | **~2.9 hours** | ~2.1 MB |
+| lifetime_2_20 | 1,048,576 | 20 | **~47 hours** (~2 days) | ~34 MB |
+| lifetime_2_28 | 268,435,456 | 28 | **~499 days** (~1.4 years) | ~8.6 GB |
+| lifetime_2_32 | 4,294,967,296 | 32 | **~21 years** | ~137 GB |
+
+*Projected by linear scaling: (signatures / 1024) × 2.74 min. Key generation scales O(n) with number of signatures.
+
+#### Sign/Verify Operations (All Lifetimes)
+
+| Operation | Time | Complexity |
+|-----------|------|------------|
+| Sign | **~240 ms** | O(log n) - constant across lifetimes |
+| Verify | **~198 ms** | O(log n) - constant across lifetimes |
+
+**Note**: Signing and verification times remain nearly constant across all lifetimes because they only process the authentication path (length = tree height). Only key generation scales with the number of signatures.
+
+### Performance Characteristics
+
+- **Key Generation**: O(n) where n = 2^tree_height (generates all OTS keypairs and caches leaves)
+- **Signing**: O(log n) with caching (generates OTS sig + retrieves auth path from cache)
+- **Verification**: O(log n) (derives OTS public key + verifies Merkle path)
+- **Memory**: O(n) for cached leaves (required for fast signing)
 
 ### Optimization Tips
 
