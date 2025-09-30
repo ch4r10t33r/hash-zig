@@ -13,7 +13,7 @@ pub fn main() !void {
     std.debug.print("================\n\n", .{});
 
     // Initialize with 128-bit security
-    const params = hash_sig.Parameters.init(.level_128, .lifetime_2_16);
+    const params = hash_sig.Parameters.init(.level_128, .lifetime_2_10);
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 

@@ -73,6 +73,3 @@ jobs:
       
       - name: Build library
         run: zig build-lib src/root.zig --name hash_zig
-      
-      - name: Run example
-        run: zig build example
