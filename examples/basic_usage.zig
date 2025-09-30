@@ -13,9 +13,14 @@ pub fn main() !void {
     std.debug.print("================\n\n", .{});
 
     // Initialize with 128-bit security (only security level supported)
-    const params = hash_sig.Parameters.init(.lifetime_2_10);
+    // Using lifetime_2_18 for benchmarking against Rust implementation
+    const params = hash_sig.Parameters.init(.lifetime_2_18);
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
+
+    std.debug.print("Lifetime: 2^18 = 262,144 signatures\n", .{});
+    std.debug.print("Parameters: 64 chains of length 8 (w=8)\n", .{});
+    std.debug.print("Hash: Poseidon2\n\n", .{});
 
     std.debug.print("Generating keypair...\n", .{});
 
@@ -31,8 +36,10 @@ pub fn main() !void {
 
     const duration_ns = end_time - start_time;
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
+    const duration_sec = duration_ms / 1000.0;
 
-    std.debug.print("Key generation completed in {d:.2} ms\n", .{duration_ms});
+    std.debug.print("Key generation completed in {d:.3} seconds\n", .{duration_sec});
+    std.debug.print("\nBENCHMARK_RESULT: {d:.6}\n", .{duration_sec});
 
     std.debug.print("\nPublic Key:\n", .{});
     std.debug.print("  Length: {} bytes\n", .{keypair.public_key.len});
