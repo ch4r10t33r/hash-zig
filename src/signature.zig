@@ -101,11 +101,10 @@ pub const HashSignature = struct {
         }
     }
 
-    pub fn generateKeyPair(self: *HashSignature, allocator: Allocator) !KeyPair {
-        var seed: [32]u8 = undefined;
-        crypto.random.bytes(&seed);
+    pub fn generateKeyPair(self: *HashSignature, allocator: Allocator, seed: []const u8) !KeyPair {
+        if (seed.len != 32) return error.InvalidSeedLength;
 
-        const secret_key = try allocator.dupe(u8, &seed);
+        const secret_key = try allocator.dupe(u8, seed);
         errdefer allocator.free(secret_key);
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);

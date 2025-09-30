@@ -86,8 +86,12 @@ pub fn main() !void {
     var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
-    // Generate keypair
-    var keypair = try sig_scheme.generateKeyPair(allocator);
+    // Generate a random seed for key generation (32 bytes required)
+    var seed: [32]u8 = undefined;
+    std.crypto.random.bytes(&seed);
+
+    // Generate keypair from seed
+    var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
     defer keypair.deinit(allocator);
 
     // Sign a message
@@ -113,8 +117,12 @@ const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
 var sig = try hash_zig.HashSignature.init(allocator, params);
 defer sig.deinit();
 
-// Generate keys
-var keypair = try sig.generateKeyPair(allocator);
+// Generate a random seed (32 bytes required)
+var seed: [32]u8 = undefined;
+std.crypto.random.bytes(&seed);
+
+// Generate keys from seed
+var keypair = try sig.generateKeyPair(allocator, &seed);
 defer keypair.deinit(allocator);
 
 // Sign
@@ -123,6 +131,25 @@ defer signature.deinit(allocator);
 
 // Verify
 const valid = try sig.verify(allocator, "message", signature, keypair.public_key);
+```
+
+### Deterministic Key Generation
+
+The `generateKeyPair` function requires a 32-byte seed. You can use this for:
+- **Random key generation**: Use `std.crypto.random.bytes(&seed)`
+- **Deterministic key generation**: Derive seed from a password/phrase using a KDF
+- **Key recovery**: Store the seed securely to regenerate the same keypair
+
+```zig
+// Random key generation (default approach)
+var random_seed: [32]u8 = undefined;
+std.crypto.random.bytes(&random_seed);
+var keypair = try sig.generateKeyPair(allocator, &random_seed);
+
+// Deterministic key generation from a known seed
+const deterministic_seed: [32]u8 = .{1} ** 32; // Use a proper KDF in production!
+var keypair2 = try sig.generateKeyPair(allocator, &deterministic_seed);
+// Same seed will always generate the same keypair
 ```
 
 ### Using SHA3 Hash Function
