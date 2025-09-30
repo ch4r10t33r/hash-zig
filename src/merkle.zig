@@ -33,10 +33,6 @@ pub const MerkleTree = struct {
         }
 
         var level = try allocator.alloc([]u8, leaves.len);
-        defer {
-            for (level) |node| allocator.free(node);
-            allocator.free(level);
-        }
 
         for (leaves, 0..) |leaf, i| {
             level[i] = try allocator.dupe(u8, leaf);
@@ -63,6 +59,7 @@ pub const MerkleTree = struct {
                 }
             }
 
+            // Free the current level
             for (level[0..current_len]) |node| allocator.free(node);
             allocator.free(level);
 
@@ -70,12 +67,11 @@ pub const MerkleTree = struct {
             current_len = next_len;
         }
 
+        // Return the root (move ownership to caller)
         const root = level[0];
-        const result = try allocator.dupe(u8, root);
-        allocator.free(root);
         allocator.free(level);
 
-        return result;
+        return root;
     }
 
     pub fn generateAuthPath(self: *MerkleTree, allocator: Allocator, leaves: [][]const u8, leaf_idx: usize) ![][]u8 {
