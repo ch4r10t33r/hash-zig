@@ -14,9 +14,9 @@ A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA
 - **Multiple Security Levels**: 128-bit, 192-bit, and 256-bit security
 - **Flexible Key Lifetimes**: Support from 2^10 to 2^32 signatures per keypair
 - **Incomparable Encodings**: Binary, ternary, and quaternary encoding schemes
-- **Hypertree Optimization**: Efficient handling of large signature trees
 - **Pure Zig**: Minimal dependencies, fully type-safe
 - **Well-Tested**: Comprehensive unit and integration tests
+- **Parallel Key Generation**: Multi-threaded implementation (~3x speedup on 8-core M2)
 
 ## 📋 Table of Contents
 
@@ -94,14 +94,15 @@ pub fn main() !void {
     var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
     defer keypair.deinit(allocator);
 
-    // Sign a message
-    const message = "Hello, hash-based signatures!";
-    var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
-    defer signature.deinit(allocator);
+// Sign a message (index must be tracked by your application!)
+const message = "Hello, hash-based signatures!";
+const index: u64 = 0; // YOUR APP must track this and never reuse!
+var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, index);
+defer signature.deinit(allocator);
 
-    // Verify signature
-    const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
-    std.debug.print("Signature valid: {}\n", .{is_valid});
+// Verify signature
+const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
+std.debug.print("Signature valid: {}\n", .{is_valid});
 }
 ```
 
@@ -125,8 +126,9 @@ std.crypto.random.bytes(&seed);
 var keypair = try sig.generateKeyPair(allocator, &seed);
 defer keypair.deinit(allocator);
 
-// Sign
-var signature = try sig.sign(allocator, "message", keypair.secret_key, 0);
+// Sign (YOU must track indices and never reuse!)
+const index: u64 = 0; // Track this in your app's database!
+var signature = try sig.sign(allocator, "message", keypair.secret_key, index);
 defer signature.deinit(allocator);
 
 // Verify
@@ -229,7 +231,7 @@ const params_extreme = hash_zig.Parameters.init(.level_128, .lifetime_2_32);
 | lifetime_2_28 | 28 | 268,435,456 | ~8.6 GB |
 | lifetime_2_32 | 32 | 4,294,967,296 | ~137 GB |
 
-*Memory estimates based on 32-byte hashes. For large lifetimes, hypertree optimization is automatically used.
+*Memory estimates based on 32-byte hashes and cached leaves. Actual memory usage may vary.
 
 ## 🏗️ Architecture
 
@@ -258,8 +260,8 @@ hash-zig/
 
 - **Poseidon2**: Arithmetic hash over BN254 scalar field, optimized for ZK proofs
 - **SHA3**: NIST-standardized Keccak-based hash for general-purpose cryptography
-- **Winternitz OTS**: Efficient one-time signature scheme with configurable chain length
-- **Merkle Tree**: Single tree for small lifetimes, automatic hypertree for large ones
+- **Winternitz OTS**: Efficient one-time signature scheme with configurable chain length (w=16)
+- **Merkle Tree**: Binary tree implementation for managing OTS public keys
 - **Incomparable Encodings**: Binary, ternary, and quaternary encoding schemes
 - **Parallel Key Generation**: Multi-threaded implementation for faster key generation
   - Parallelizes WOTS leaf generation across available CPU cores
@@ -326,14 +328,16 @@ Key generation scales O(n) with number of signatures. Performance will vary base
    - **Poseidon2** for ZK-proof systems
    - **SHA3** for NIST compliance and interoperability
 3. Batch key generation offline when possible
-4. Always persist signature state
-5. Use hypertree for lifetimes > 2^20
+4. Always persist signature state to prevent index reuse
 
 ## 🔒 Security Considerations
 
 ### ⚠️ Critical Rules
 
 1. **NEVER reuse a signature index** - Each index must be used only once
+   - **Your application MUST track which indices have been used**
+   - Store the last used index persistently before generating each signature
+   - The library does not enforce this - it's your responsibility!
 2. **Protect the secret key** - Use secure storage (encrypted, HSM, etc.)
 3. **Verify signatures properly** - Always check return values
 4. **Plan key rotation** - Generate new keypair before exhausting signatures
@@ -341,9 +345,34 @@ Key generation scales O(n) with number of signatures. Performance will vary base
 ### Security Properties
 
 - **Post-quantum secure**: Resistant to quantum attacks
-- **Stateful**: Requires tracking used indices
+- **Stateful**: Requires tracking used indices (application responsibility)
 - **Forward secure**: Old signatures valid even if key compromised
 - **One-time per index**: Each tree index used once only
+
+### State Management (Application Responsibility)
+
+**Important**: This library does NOT manage signature state. Your application MUST:
+
+1. **Track the next available index** - Start at 0, increment after each signature
+2. **Persist state before signing** - Save index to disk/database BEFORE calling `sign()`
+3. **Never reuse an index** - Reusing an index can compromise security
+4. **Handle crashes gracefully** - Use atomic writes or write-ahead logging
+
+Example state management pattern:
+```zig
+// Pseudo-code for safe state management
+fn signMessage(db: *Database, sig_scheme: *HashSignature, message: []const u8, secret_key: []const u8) !Signature {
+    // 1. Get and increment index atomically
+    const index = try db.getAndIncrementIndex();
+    
+    // 2. Persist the new index BEFORE signing
+    try db.saveIndex(index + 1);
+    try db.flush(); // Ensure it's on disk
+    
+    // 3. Now safe to sign
+    return sig_scheme.sign(allocator, message, secret_key, index);
+}
+```
 
 ## 📚 API Reference
 
@@ -496,12 +525,9 @@ See `.github/workflows/ci.yml` for details.
 
 ## 🐛 Known Issues
 
-- **Signature verification not fully implemented**: The verify function is a placeholder. Full XMSS verification requires Merkle authentication paths which are not yet implemented
-- Hypertree authentication paths not yet implemented  
-- State persistence needs implementation
-- Large tree generation (2^28+) requires significant resources
-
-**⚠️ Important**: This is a research/prototype implementation. The signature verification currently does not perform full Merkle tree validation and should NOT be used in production.
+- Large tree generation (2^28+) requires significant time and memory resources
+- No hypertree optimization for very large lifetimes
+- Performance benchmarks are hardware-specific (tested only on M2 Mac)
 
 ## 📄 License
 
@@ -519,4 +545,4 @@ Apache License 2.0 - see [LICENSE](LICENSE) file.
 
 ---
 
-**⚠️ IMPORTANT DISCLAIMER**: This is a prototype implementation for research and experimentation. The signature verification is incomplete (Merkle authentication paths not implemented). This code has NOT been audited and should NOT be used in production systems.
+**⚠️ IMPORTANT DISCLAIMER**: This is a prototype implementation for research and experimentation. This code has NOT been audited and should NOT be used in production systems. **Applications using this library MUST implement proper state management to prevent signature index reuse** - the library does not enforce this.
