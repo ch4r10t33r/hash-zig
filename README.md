@@ -190,6 +190,9 @@ const params_short = hash_zig.Parameters.init(.lifetime_2_10);
 // lifetime_2_16: 2^16 = 65,536 signatures (default)
 const params_medium = hash_zig.Parameters.init(.lifetime_2_16);
 
+// lifetime_2_18: 2^18 = 262,144 signatures (for benchmarking against Rust impl)
+const params_benchmark = hash_zig.Parameters.init(.lifetime_2_18);
+
 // lifetime_2_20: 2^20 = 1,048,576 signatures
 const params_long = hash_zig.Parameters.init(.lifetime_2_20);
 
@@ -231,6 +234,7 @@ Both hash functions provide 128-bit post-quantum security with 32-byte (256-bit)
 |----------|-------------|----------------|------------------|
 | lifetime_2_10 | 10 | 1,024 | ~32 KB |
 | lifetime_2_16 | 16 | 65,536 | ~2 MB |
+| lifetime_2_18 | 18 | 262,144 | ~8.4 MB |
 | lifetime_2_20 | 20 | 1,048,576 | ~33 MB |
 | lifetime_2_28 | 28 | 268,435,456 | ~8.6 GB |
 | lifetime_2_32 | 32 | 4,294,967,296 | ~137 GB |
@@ -403,6 +407,7 @@ pub const HashFunction = enum { poseidon2, sha3 };
 pub const KeyLifetime = enum { 
     lifetime_2_10,   // 1,024 signatures
     lifetime_2_16,   // 65,536 signatures
+    lifetime_2_18,   // 262,144 signatures
     lifetime_2_20,   // 1,048,576 signatures
     lifetime_2_28,   // 268,435,456 signatures
     lifetime_2_32    // 4,294,967,296 signatures
