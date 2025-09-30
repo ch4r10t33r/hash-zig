@@ -64,4 +64,13 @@ pub fn build(b: *std.Build) void {
     // Run step (alias for example)
     const run_step = b.step("run", "Run the example application");
     run_step.dependOn(&run_example.step);
+
+    // Documentation
+    const docs = b.addInstallDirectory(.{
+        .source_dir = lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Generate documentation");
+    docs_step.dependOn(&docs.step);
 }

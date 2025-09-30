@@ -334,6 +334,14 @@ zig build
 zig build example
 \`\`\`
 
+### Generate Documentation
+
+\`\`\`bash
+zig build docs
+\`\`\`
+
+This will generate HTML documentation in `zig-out/docs/`. Open `zig-out/docs/index.html` in your browser to view the API documentation.
+
 ### Test Examples
 
 **Poseidon2:**

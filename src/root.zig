@@ -8,6 +8,7 @@
 pub const params = @import("params.zig");
 pub const poseidon2 = @import("poseidon2/hash.zig");
 pub const field = @import("poseidon2/field.zig");
+pub const sha3 = @import("sha3.zig");
 pub const encoding = @import("encoding.zig");
 pub const tweakable_hash = @import("tweakable_hash.zig");
 pub const winternitz = @import("winternitz.zig");
@@ -22,6 +23,7 @@ pub const EncodingType = params.EncodingType;
 
 pub const FieldElement = field.FieldElement;
 pub const Poseidon2 = poseidon2.Poseidon2;
+pub const Sha3 = sha3.Sha3;
 pub const IncomparableEncoding = encoding.IncomparableEncoding;
 pub const TweakableHash = tweakable_hash.TweakableHash;
 pub const WinternitzOTS = winternitz.WinternitzOTS;
