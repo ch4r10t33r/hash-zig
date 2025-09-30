@@ -20,42 +20,19 @@ pub const Sha3 = struct {
         _ = allocator;
     }
 
-    /// Hash arbitrary bytes and return the hash output based on security level
+    /// Hash arbitrary bytes and return the hash output (SHA3-256 for 128-bit security)
     pub fn hashBytes(self: *Sha3, allocator: Allocator, data: []const u8) ![]u8 {
-        const output_len = switch (self.security_level) {
-            .level_128 => @as(usize, 32), // SHA3-256
-            .level_192 => @as(usize, 48), // SHA3-384
-            .level_256 => @as(usize, 64), // SHA3-512
-        };
+        _ = self;
+        const output_len = 32; // SHA3-256
 
         const output = try allocator.alloc(u8, output_len);
 
-        switch (self.security_level) {
-            .level_128 => {
-                // SHA3-256
-                var hash_state = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hash_state.update(data);
-                var digest: [32]u8 = undefined;
-                hash_state.final(&digest);
-                @memcpy(output, &digest);
-            },
-            .level_192 => {
-                // SHA3-384
-                var hash_state = std.crypto.hash.sha3.Sha3_384.init(.{});
-                hash_state.update(data);
-                var digest: [48]u8 = undefined;
-                hash_state.final(&digest);
-                @memcpy(output, &digest);
-            },
-            .level_256 => {
-                // SHA3-512
-                var hash_state = std.crypto.hash.sha3.Sha3_512.init(.{});
-                hash_state.update(data);
-                var digest: [64]u8 = undefined;
-                hash_state.final(&digest);
-                @memcpy(output, &digest);
-            },
-        }
+        // SHA3-256 for 128-bit security
+        var hash_state = std.crypto.hash.sha3.Sha3_256.init(.{});
+        hash_state.update(data);
+        var digest: [32]u8 = undefined;
+        hash_state.final(&digest);
+        @memcpy(output, &digest);
 
         return output;
     }
@@ -71,33 +48,7 @@ test "sha3 256 basic hash" {
     const hash = try sha3.hashBytes(allocator, data);
     defer allocator.free(hash);
 
-    try std.testing.expect(hash.len == 32);
-}
-
-test "sha3 384 basic hash" {
-    const allocator = std.testing.allocator;
-
-    var sha3 = try Sha3.init(allocator, .level_192);
-    defer sha3.deinit(allocator);
-
-    const data = "test data";
-    const hash = try sha3.hashBytes(allocator, data);
-    defer allocator.free(hash);
-
-    try std.testing.expect(hash.len == 48);
-}
-
-test "sha3 512 basic hash" {
-    const allocator = std.testing.allocator;
-
-    var sha3 = try Sha3.init(allocator, .level_256);
-    defer sha3.deinit(allocator);
-
-    const data = "test data";
-    const hash = try sha3.hashBytes(allocator, data);
-    defer allocator.free(hash);
-
-    try std.testing.expect(hash.len == 64);
+    try std.testing.expect(hash.len == 32); // SHA3-256 for 128-bit security
 }
 
 test "sha3 produces different hashes for different inputs" {

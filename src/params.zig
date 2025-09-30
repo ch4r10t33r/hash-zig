@@ -1,24 +1,17 @@
 //! Parameters and type definitions for hash-zig
+//! Based on hypercube hash-sig parameters: https://github.com/b-wagn/hypercube-hashsig-parameters
 
 pub const SecurityLevel = enum {
-    level_128,
-    level_192,
-    level_256,
+    level_128, // Only 128-bit security supported
 };
 
 pub const HashFunction = enum {
-    poseidon2_128,
-    poseidon2_192,
-    poseidon2_256,
-    sha3_256,
-    sha3_384,
-    sha3_512,
+    poseidon2, // Poseidon2 for 128-bit security
+    sha3, // SHA3-256 for 128-bit security
 };
 
 pub const EncodingType = enum {
-    binary,
-    ternary,
-    quaternary,
+    binary, // Binary encoding for 128-bit security
 };
 
 /// Key lifetime configuration
@@ -50,82 +43,52 @@ pub const Parameters = struct {
     hash_function: HashFunction,
     encoding_type: EncodingType,
     tree_height: u32,
-    winternitz_w: u32,
+    winternitz_w: u32, // Chain length (8 or 16 supported)
+    num_chains: u32, // Number of chains (48 or 64 supported)
     hash_output_len: u32,
     key_lifetime: KeyLifetime,
 
-    /// Initialize with security level and key lifetime
-    pub fn init(security_level: SecurityLevel, key_lifetime: KeyLifetime) Parameters {
+    /// Initialize with Poseidon2 hash function (default)
+    /// Parameters based on hypercube-hashsig-parameters:
+    /// - 64 chains of length 8 (w=8) for 128-bit security
+    ///   OR 48 chains of length 10 (w=10)
+    /// - Binary encoding
+    /// - 32-byte hash output
+    /// Using 64 chains of length 8 as recommended
+    pub fn init(key_lifetime: KeyLifetime) Parameters {
         const tree_height = key_lifetime.treeHeight();
 
-        return switch (security_level) {
-            .level_128 => .{
-                .security_level = security_level,
-                .hash_function = .poseidon2_128,
-                .encoding_type = .binary,
-                .tree_height = tree_height,
-                .winternitz_w = 16,
-                .hash_output_len = 32,
-                .key_lifetime = key_lifetime,
-            },
-            .level_192 => .{
-                .security_level = security_level,
-                .hash_function = .poseidon2_192,
-                .encoding_type = .ternary,
-                .tree_height = tree_height,
-                .winternitz_w = 16,
-                .hash_output_len = 48,
-                .key_lifetime = key_lifetime,
-            },
-            .level_256 => .{
-                .security_level = security_level,
-                .hash_function = .poseidon2_256,
-                .encoding_type = .quaternary,
-                .tree_height = tree_height,
-                .winternitz_w = 16,
-                .hash_output_len = 64,
-                .key_lifetime = key_lifetime,
-            },
+        return .{
+            .security_level = .level_128,
+            .hash_function = .poseidon2,
+            .encoding_type = .binary,
+            .tree_height = tree_height,
+            .winternitz_w = 8, // Chain length (8 as per hypercube-hashsig-parameters)
+            .num_chains = 64, // Number of chains
+            .hash_output_len = 32, // 256-bit output for 128-bit security
+            .key_lifetime = key_lifetime,
+        };
+    }
+
+    /// Initialize with SHA3 hash function
+    /// Uses same parameters as Poseidon2 variant (64 chains of length 8)
+    pub fn initWithSha3(key_lifetime: KeyLifetime) Parameters {
+        const tree_height = key_lifetime.treeHeight();
+
+        return .{
+            .security_level = .level_128,
+            .hash_function = .sha3,
+            .encoding_type = .binary,
+            .tree_height = tree_height,
+            .winternitz_w = 8, // Chain length (8 as per hypercube-hashsig-parameters)
+            .num_chains = 64,
+            .hash_output_len = 32,
+            .key_lifetime = key_lifetime,
         };
     }
 
     /// Convenience initializer with default medium lifetime
-    pub fn initDefault(security_level: SecurityLevel) Parameters {
-        return init(security_level, .lifetime_2_16);
-    }
-
-    /// Initialize with SHA3 hash function and key lifetime
-    pub fn initWithSha3(security_level: SecurityLevel, key_lifetime: KeyLifetime) Parameters {
-        const tree_height = key_lifetime.treeHeight();
-
-        return switch (security_level) {
-            .level_128 => .{
-                .security_level = security_level,
-                .hash_function = .sha3_256,
-                .encoding_type = .binary,
-                .tree_height = tree_height,
-                .winternitz_w = 16,
-                .hash_output_len = 32,
-                .key_lifetime = key_lifetime,
-            },
-            .level_192 => .{
-                .security_level = security_level,
-                .hash_function = .sha3_384,
-                .encoding_type = .ternary,
-                .tree_height = tree_height,
-                .winternitz_w = 16,
-                .hash_output_len = 48,
-                .key_lifetime = key_lifetime,
-            },
-            .level_256 => .{
-                .security_level = security_level,
-                .hash_function = .sha3_512,
-                .encoding_type = .quaternary,
-                .tree_height = tree_height,
-                .winternitz_w = 16,
-                .hash_output_len = 64,
-                .key_lifetime = key_lifetime,
-            },
-        };
+    pub fn initDefault() Parameters {
+        return init(.lifetime_2_16);
     }
 };
