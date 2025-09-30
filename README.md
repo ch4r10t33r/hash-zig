@@ -426,9 +426,12 @@ See `.github/workflows/ci.yml` for details.
 
 ## 🐛 Known Issues
 
-- Hypertree authentication paths not yet implemented
+- **Signature verification not fully implemented**: The verify function is a placeholder. Full XMSS verification requires Merkle authentication paths which are not yet implemented
+- Hypertree authentication paths not yet implemented  
 - State persistence needs implementation
 - Large tree generation (2^28+) requires significant resources
+
+**⚠️ Important**: This is a research/prototype implementation. The signature verification currently does not perform full Merkle tree validation and should NOT be used in production.
 
 ## 📄 License
 
@@ -446,4 +449,4 @@ Apache License 2.0 - see [LICENSE](LICENSE) file.
 
 ---
 
-**Note**: Prototype implementation for research. Not audited - do not use in production without security review.
+**⚠️ IMPORTANT DISCLAIMER**: This is a prototype implementation for research and experimentation. The signature verification is incomplete (Merkle authentication paths not implemented). This code has NOT been audited and should NOT be used in production systems.
