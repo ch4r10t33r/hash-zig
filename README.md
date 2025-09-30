@@ -38,7 +38,7 @@ A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA
 
 Add to your `build.zig.zon`:
 
-\`\`\`zig
+```zig
 .{
     .name = .my_project,
     .version = "0.1.0",
@@ -49,30 +49,30 @@ Add to your `build.zig.zon`:
         },
     },
 }
-\`\`\`
+```
 
 In your `build.zig`:
 
-\`\`\`zig
+```zig
 const hash_zig_dep = b.dependency("hash-zig", .{
     .target = target,
     .optimize = optimize,
 });
 
 exe.root_module.addImport("hash-zig", hash_zig_dep.module("hash-zig"));
-\`\`\`
+```
 
 ### Manual Installation
 
-\`\`\`bash
+```bash
 git clone https://github.com/ch4r10t33r/hash-zig.git
 cd hash-zig
 zig build test
-\`\`\`
+```
 
 ## ⚡ Quick Start
 
-\`\`\`zig
+```zig
 const std = @import("std");
 const hash_zig = @import("hash-zig");
 
@@ -99,13 +99,13 @@ pub fn main() !void {
     const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
     std.debug.print("Signature valid: {}\n", .{is_valid});
 }
-\`\`\`
+```
 
 ## 📖 Usage
 
 ### Basic Signing and Verification
 
-\`\`\`zig
+```zig
 const hash_zig = @import("hash-zig");
 
 // Configure parameters with Poseidon2 (default)
@@ -123,22 +123,22 @@ defer signature.deinit(allocator);
 
 // Verify
 const valid = try sig.verify(allocator, "message", signature, keypair.public_key);
-\`\`\`
+```
 
 ### Using SHA3 Hash Function
 
-\`\`\`zig
+```zig
 // Initialize with SHA3-256 instead of Poseidon2
 const params = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
 
 // Everything else works the same way
 var sig = try hash_zig.HashSignature.init(allocator, params);
 defer sig.deinit();
-\`\`\`
+```
 
 ### Different Security Levels
 
-\`\`\`zig
+```zig
 // 128-bit security with Poseidon2
 const params_128 = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
 
@@ -150,11 +150,11 @@ const params_256 = hash_zig.Parameters.init(.level_256, .lifetime_2_16);
 
 // Or use SHA3
 const params_sha3 = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
-\`\`\`
+```
 
 ### Different Key Lifetimes
 
-\`\`\`zig
+```zig
 // lifetime_2_10: 2^10 = 1,024 signatures
 const params_short = hash_zig.Parameters.init(.level_128, .lifetime_2_10);
 
@@ -169,7 +169,7 @@ const params_very_long = hash_zig.Parameters.init(.level_128, .lifetime_2_28);
 
 // lifetime_2_32: 2^32 = 4,294,967,296 signatures
 const params_extreme = hash_zig.Parameters.init(.level_128, .lifetime_2_32);
-\`\`\`
+```
 
 ## ⚙️ Configuration
 
@@ -206,7 +206,7 @@ const params_extreme = hash_zig.Parameters.init(.level_128, .lifetime_2_32);
 
 ## 🏗️ Architecture
 
-\`\`\`
+```
 hash-zig/
 ├── src/
 │   ├── root.zig              # Main module entry point
@@ -225,7 +225,7 @@ hash-zig/
 ├── test/
 │   └── integration_test.zig
 └── build.zig
-\`\`\`
+```
 
 ### Key Components
 
@@ -279,7 +279,7 @@ hash-zig/
 
 ### Parameters
 
-\`\`\`zig
+```zig
 // Poseidon2 (default)
 const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
 
@@ -288,11 +288,11 @@ const params_sha3 = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16)
 
 // Default (Poseidon2, lifetime_2_16)
 const params_default = hash_zig.Parameters.initDefault(.level_128);
-\`\`\`
+```
 
 ### Enums
 
-\`\`\`zig
+```zig
 pub const SecurityLevel = enum { level_128, level_192, level_256 };
 pub const HashFunction = enum { 
     poseidon2_128, poseidon2_192, poseidon2_256,
@@ -306,46 +306,46 @@ pub const KeyLifetime = enum {
     lifetime_2_32    // 4,294,967,296 signatures
 };
 pub const EncodingType = enum { binary, ternary, quaternary };
-\`\`\`
+```
 
 ## 🧪 Testing
 
 ### Run All Tests
 
-\`\`\`bash
+```bash
 zig build test
-\`\`\`
+```
 
 ### Run Linter
 
-\`\`\`bash
+```bash
 zig build lint
-\`\`\`
+```
 
 ### Build Library
 
-\`\`\`bash
+```bash
 zig build
-\`\`\`
+```
 
 ### Run Example
 
-\`\`\`bash
+```bash
 zig build example
-\`\`\`
+```
 
 ### Generate Documentation
 
-\`\`\`bash
+```bash
 zig build docs
-\`\`\`
+```
 
 This will generate HTML documentation in `zig-out/docs/`. Open `zig-out/docs/index.html` in your browser to view the API documentation.
 
 ### Test Examples
 
 **Poseidon2:**
-\`\`\`zig
+```zig
 test "poseidon2 hashing" {
     const allocator = std.testing.allocator;
     const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
@@ -358,10 +358,10 @@ test "poseidon2 hashing" {
     
     try std.testing.expect(result.len == 32);
 }
-\`\`\`
+```
 
 **SHA3:**
-\`\`\`zig
+```zig
 test "sha3 hashing" {
     const allocator = std.testing.allocator;
     const params = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
@@ -374,10 +374,10 @@ test "sha3 hashing" {
     
     try std.testing.expect(result.len == 32); // SHA3-256
 }
-\`\`\`
+```
 
 **Comparison:**
-\`\`\`zig
+```zig
 test "compare hash functions" {
     const allocator = std.testing.allocator;
     
@@ -400,7 +400,7 @@ test "compare hash functions" {
     // Different hash functions produce different outputs
     try std.testing.expect(!std.mem.eql(u8, h1, h2));
 }
-\`\`\`
+```
 
 ## 🤝 Contributing
 
@@ -429,15 +429,6 @@ See `.github/workflows/ci.yml` for details.
 - Hypertree authentication paths not yet implemented
 - State persistence needs implementation
 - Large tree generation (2^28+) requires significant resources
-
-## 🗺️ Roadmap
-
-- [ ] Complete hypertree authentication paths
-- [ ] Implement state persistence
-- [ ] Add incremental tree building
-- [ ] Comprehensive benchmarking suite
-- [ ] Add BLAKE3 hash function support
-- [ ] Hardware acceleration
 
 ## 📄 License
 
