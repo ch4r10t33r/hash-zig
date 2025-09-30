@@ -6,7 +6,7 @@ const hash_sig = @import("hash-sig");
 test "full signature workflow" {
     const allocator = std.testing.allocator;
 
-    const params = hash_sig.Parameters.init(.Level128);
+    const params = hash_sig.Parameters.initDefault();
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
@@ -23,28 +23,27 @@ test "full signature workflow" {
     try std.testing.expect(is_valid);
 }
 
-test "all security levels" {
+test "default parameters" {
     const allocator = std.testing.allocator;
 
-    inline for ([_]hash_sig.SecurityLevel{ .Level128, .Level192, .Level256 }) |level| {
-        const params = hash_sig.Parameters.init(level);
-        var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
-        defer sig_scheme.deinit();
+    const params = hash_sig.Parameters.initDefault();
+    var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
+    defer sig_scheme.deinit();
 
-        var seed: [32]u8 = undefined;
-        std.crypto.random.bytes(&seed);
-        var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
-        defer keypair.deinit(allocator);
+    var seed: [32]u8 = undefined;
+    std.crypto.random.bytes(&seed);
+    var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+    defer keypair.deinit(allocator);
 
-        try std.testing.expect(keypair.public_key.len > 0);
-        try std.testing.expect(keypair.secret_key.len > 0);
-    }
+    try std.testing.expect(keypair.public_key.len > 0);
+    try std.testing.expect(keypair.secret_key.len > 0);
+    try std.testing.expect(keypair.public_key.len == 32); // 128-bit security
 }
 
 test "deterministic key generation from same seed" {
     const allocator = std.testing.allocator;
 
-    const params = hash_sig.Parameters.init(.Level128);
+    const params = hash_sig.Parameters.initDefault();
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
@@ -72,7 +71,7 @@ test "deterministic key generation from same seed" {
 test "different seeds generate different keys" {
     const allocator = std.testing.allocator;
 
-    const params = hash_sig.Parameters.init(.Level128);
+    const params = hash_sig.Parameters.initDefault();
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
@@ -97,7 +96,7 @@ test "different seeds generate different keys" {
 test "invalid seed length returns error" {
     const allocator = std.testing.allocator;
 
-    const params = hash_sig.Parameters.init(.Level128);
+    const params = hash_sig.Parameters.initDefault();
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 

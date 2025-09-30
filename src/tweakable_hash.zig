@@ -22,11 +22,11 @@ pub const TweakableHash = struct {
 
     pub fn init(allocator: Allocator, parameters: Parameters) !TweakableHash {
         const hash_impl = switch (parameters.hash_function) {
-            .poseidon2_128, .poseidon2_192, .poseidon2_256 => blk: {
+            .poseidon2 => blk: {
                 const poseidon_instance = try Poseidon2.init(allocator, parameters.security_level);
                 break :blk HashImpl{ .poseidon2 = poseidon_instance };
             },
-            .sha3_256, .sha3_384, .sha3_512 => blk: {
+            .sha3 => blk: {
                 const sha3_instance = try Sha3.init(allocator, parameters.security_level);
                 break :blk HashImpl{ .sha3 = sha3_instance };
             },
@@ -66,7 +66,7 @@ pub const TweakableHash = struct {
 
 test "tweakable hash different tweaks poseidon2" {
     const allocator = std.testing.allocator;
-    const parameters = Parameters.init(.level_128, .lifetime_2_16);
+    const parameters = Parameters.init(.lifetime_2_16);
     var hash = try TweakableHash.init(allocator, parameters);
     defer hash.deinit();
 
@@ -83,7 +83,7 @@ test "tweakable hash different tweaks sha3" {
     const allocator = std.testing.allocator;
 
     // Create parameters with SHA3
-    const parameters = Parameters.initWithSha3(.level_128, .lifetime_2_16);
+    const parameters = Parameters.initWithSha3(.lifetime_2_16);
 
     var hash = try TweakableHash.init(allocator, parameters);
     defer hash.deinit();

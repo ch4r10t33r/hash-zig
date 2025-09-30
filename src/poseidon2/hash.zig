@@ -22,11 +22,8 @@ pub const Poseidon2 = struct {
             rounds_p: usize,
         };
 
-        const config = switch (security_level) {
-            .level_128 => Config{ .state_width = 3, .rounds_f = 8, .rounds_p = 56 },
-            .level_192 => Config{ .state_width = 4, .rounds_f = 8, .rounds_p = 57 },
-            .level_256 => Config{ .state_width = 5, .rounds_f = 8, .rounds_p = 60 },
-        };
+        // 128-bit security: 3-wide state, 8 full rounds, 56 partial rounds
+        const config = Config{ .state_width = 3, .rounds_f = 8, .rounds_p = 56 };
 
         const total_rounds = config.rounds_f + config.rounds_p;
         var round_constants = try allocator.alloc(FieldElement, total_rounds * config.state_width);
@@ -142,11 +139,8 @@ pub const Poseidon2 = struct {
 
         const result = self.hash(elements);
 
-        const output_len = switch (self.security_level) {
-            .level_128 => @as(usize, 32),
-            .level_192 => @as(usize, 48),
-            .level_256 => @as(usize, 64),
-        };
+        // 128-bit security uses 32-byte output
+        const output_len = 32;
 
         var output = try allocator.alloc(u8, output_len);
         var temp_bytes: [32]u8 = undefined;

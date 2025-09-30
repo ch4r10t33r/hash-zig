@@ -13,11 +13,8 @@ pub const IncomparableEncoding = struct {
     }
 
     pub fn encode(self: IncomparableEncoding, allocator: Allocator, data: []const u8) ![]u8 {
-        return switch (self.encoding_type) {
-            .binary => self.encodeBinary(allocator, data),
-            .ternary => self.encodeTernary(allocator, data),
-            .quaternary => self.encodeQuaternary(allocator, data),
-        };
+        // Only binary encoding supported for 128-bit security
+        return self.encodeBinary(allocator, data);
     }
 
     fn encodeBinary(self: IncomparableEncoding, allocator: Allocator, data: []const u8) ![]u8 {

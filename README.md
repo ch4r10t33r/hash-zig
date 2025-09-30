@@ -4,16 +4,17 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** hash functions with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf).
+A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** hash functions with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with parameters inspired by the [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) project.
 
 ## 🌟 Features
 
-- **Multiple Hash Functions**: Support for both Poseidon2 (ZK-optimized) and SHA3 (NIST standard)
+- **Multiple Hash Functions**: Support for both Poseidon2 (ZK-optimized) and SHA3-256 (NIST standard)
 - **Poseidon2 Hash Function**: Efficient arithmetic hash optimized for zero-knowledge proof systems
-- **SHA3 Hash Function**: NIST-standardized cryptographic hash (SHA3-256, SHA3-384, SHA3-512)
-- **Multiple Security Levels**: 128-bit, 192-bit, and 256-bit security
+- **SHA3 Hash Function**: NIST-standardized cryptographic hash (SHA3-256)
+- **128-bit Security**: Focused on a single, well-tested security level
 - **Flexible Key Lifetimes**: Support from 2^10 to 2^32 signatures per keypair
-- **Incomparable Encodings**: Binary, ternary, and quaternary encoding schemes
+- **Optimized Parameters**: 64 chains of length 8 based on [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Binary Encoding**: Incomparable binary encoding scheme
 - **Pure Zig**: Minimal dependencies, fully type-safe
 - **Well-Tested**: Comprehensive unit and integration tests
 - **Parallel Key Generation**: Multi-threaded implementation (~3x speedup on 8-core M2)
@@ -81,8 +82,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize with 128-bit security and medium lifetime (2^16 signatures)
-    const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+    // Initialize with medium lifetime (2^16 signatures)
+    // Only 128-bit security is supported
+    const params = hash_zig.Parameters.init(.lifetime_2_16);
     var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
@@ -114,7 +116,8 @@ std.debug.print("Signature valid: {}\n", .{is_valid});
 const hash_zig = @import("hash-zig");
 
 // Configure parameters with Poseidon2 (default)
-const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+// 128-bit security with 64 chains of length 8
+const params = hash_zig.Parameters.init(.lifetime_2_16);
 var sig = try hash_zig.HashSignature.init(allocator, params);
 defer sig.deinit();
 
@@ -158,68 +161,69 @@ var keypair2 = try sig.generateKeyPair(allocator, &deterministic_seed);
 
 ```zig
 // Initialize with SHA3-256 instead of Poseidon2
-const params = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
+const params = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
 
 // Everything else works the same way
 var sig = try hash_zig.HashSignature.init(allocator, params);
 defer sig.deinit();
 ```
 
-### Different Security Levels
+### Hash Function Selection
 
 ```zig
-// 128-bit security with Poseidon2
-const params_128 = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+// Poseidon2 (default) - optimized for ZK proof systems
+const params_p2 = hash_zig.Parameters.init(.lifetime_2_16);
 
-// 192-bit security with Poseidon2
-const params_192 = hash_zig.Parameters.init(.level_192, .lifetime_2_16);
+// SHA3-256 - NIST standard
+const params_sha3 = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
 
-// 256-bit security with Poseidon2
-const params_256 = hash_zig.Parameters.init(.level_256, .lifetime_2_16);
-
-// Or use SHA3
-const params_sha3 = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
+// Default parameters (Poseidon2 with lifetime_2_16)
+const params_default = hash_zig.Parameters.initDefault();
 ```
 
 ### Different Key Lifetimes
 
 ```zig
 // lifetime_2_10: 2^10 = 1,024 signatures
-const params_short = hash_zig.Parameters.init(.level_128, .lifetime_2_10);
+const params_short = hash_zig.Parameters.init(.lifetime_2_10);
 
 // lifetime_2_16: 2^16 = 65,536 signatures (default)
-const params_medium = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+const params_medium = hash_zig.Parameters.init(.lifetime_2_16);
 
 // lifetime_2_20: 2^20 = 1,048,576 signatures
-const params_long = hash_zig.Parameters.init(.level_128, .lifetime_2_20);
+const params_long = hash_zig.Parameters.init(.lifetime_2_20);
 
 // lifetime_2_28: 2^28 = 268,435,456 signatures
-const params_very_long = hash_zig.Parameters.init(.level_128, .lifetime_2_28);
+const params_very_long = hash_zig.Parameters.init(.lifetime_2_28);
 
 // lifetime_2_32: 2^32 = 4,294,967,296 signatures
-const params_extreme = hash_zig.Parameters.init(.level_128, .lifetime_2_32);
+const params_extreme = hash_zig.Parameters.init(.lifetime_2_32);
 ```
 
 ## ⚙️ Configuration
 
-### Security Levels
+### Security Parameters
 
-| Level | Hash Output | Encoding | Security Bits |
-|-------|-------------|----------|---------------|
-| level_128 | 32 bytes | binary | 128-bit |
-| level_192 | 48 bytes | ternary | 192-bit |
-| level_256 | 64 bytes | quaternary | 256-bit |
+Based on [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters):
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Security Level | 128-bit | Post-quantum secure |
+| Hash Output | 32 bytes | 256-bit hash for 128-bit security |
+| Encoding | Binary | Incomparable binary encoding |
+| Winternitz w | 8 | Chain length (as per hypercube-hashsig) |
+| Number of Chains | 64 | Optimized for 128-bit security |
+
+**Note**: The [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) repository recommends "**48 chains of length 10**" or "**64 chains of length 8**". We use **64 chains of length 8**.
 
 ### Hash Functions
 
 | Function | Security | Output Size | Use Case |
 |----------|----------|-------------|----------|
-| poseidon2_128 | 128-bit | 32 bytes | ZK proofs, arithmetic circuits |
-| poseidon2_192 | 192-bit | 48 bytes | ZK proofs, arithmetic circuits |
-| poseidon2_256 | 256-bit | 64 bytes | ZK proofs, arithmetic circuits |
-| sha3_256 | 128-bit | 32 bytes | NIST standard, general crypto |
-| sha3_384 | 192-bit | 48 bytes | NIST standard, general crypto |
-| sha3_512 | 256-bit | 64 bytes | NIST standard, general crypto |
+| Poseidon2 | 128-bit | 32 bytes | ZK proofs, arithmetic circuits |
+| SHA3-256 | 128-bit | 32 bytes | NIST standard, general crypto |
+
+Both hash functions provide 128-bit post-quantum security with 32-byte (256-bit) output.
 
 ### Key Lifetimes
 
@@ -259,10 +263,10 @@ hash-zig/
 ### Key Components
 
 - **Poseidon2**: Arithmetic hash over BN254 scalar field, optimized for ZK proofs
-- **SHA3**: NIST-standardized Keccak-based hash for general-purpose cryptography
-- **Winternitz OTS**: Efficient one-time signature scheme with configurable chain length (w=16)
+- **SHA3-256**: NIST-standardized Keccak-based hash for general-purpose cryptography
+- **Winternitz OTS**: One-time signature with 64 chains of length 8 (w=8)
 - **Merkle Tree**: Binary tree implementation for managing OTS public keys
-- **Incomparable Encodings**: Binary, ternary, and quaternary encoding schemes
+- **Binary Encoding**: Incomparable binary encoding for 128-bit security
 - **Parallel Key Generation**: Multi-threaded implementation for faster key generation
   - Parallelizes WOTS leaf generation across available CPU cores
   - Parallelizes WOTS chain hashing within each leaf
@@ -280,15 +284,17 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Key Generation | **56 seconds** | Parallel multi-threaded implementation |
-| Sign | **240 ms** | Fast (uses cached leaves) |
-| Verify | **198 ms** | Fast (only processes auth path) |
+| Key Generation | **41 seconds** | Parallel multi-threaded (w=8) |
+| Sign | **191 ms** | Fast (uses cached leaves, 86 chains) |
+| Verify | **99 ms** | Fast (only processes auth path) |
 
 **Performance Notes:**
+- Using **w=8** (64 chains of length 8) per [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
 - Parallel key generation uses all available CPU cores automatically
 - Falls back to sequential mode for small workloads (< 64 leaves)
 - Speedup scales with CPU core count (tested on M2 with ~3x improvement over sequential)
 - Three levels of parallelization: leaf generation, WOTS chains, and Merkle tree construction
+- Fast verification (~99ms) thanks to shorter chain length
 
 #### Projected Key Generation Times for All Lifetimes
 
@@ -296,21 +302,21 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Lifetime | Signatures | Tree Height | Estimated Time* | Memory Required |
 |----------|-----------|-------------|-----------------|-----------------|
-| lifetime_2_10 | 1,024 | 10 | **56 sec** (measured on M2) | ~33 KB |
-| lifetime_2_16 | 65,536 | 16 | **~59 minutes** | ~2.1 MB |
-| lifetime_2_20 | 1,048,576 | 20 | **~16 hours** | ~34 MB |
-| lifetime_2_28 | 268,435,456 | 28 | **~171 days** | ~8.6 GB |
-| lifetime_2_32 | 4,294,967,296 | 32 | **~7.2 years** | ~137 GB |
+| lifetime_2_10 | 1,024 | 10 | **41 sec** (measured on M2) | ~33 KB |
+| lifetime_2_16 | 65,536 | 16 | **~43 minutes** | ~2.1 MB |
+| lifetime_2_20 | 1,048,576 | 20 | **~11.5 hours** | ~34 MB |
+| lifetime_2_28 | 268,435,456 | 28 | **~125 days** | ~8.6 GB |
+| lifetime_2_32 | 4,294,967,296 | 32 | **~5.3 years** | ~137 GB |
 
-*Projected by linear scaling from M2 parallel measurements: (signatures / 1024) × 56 sec. 
+*Projected by linear scaling from M2 parallel measurements with w=8: (signatures / 1024) × 41 sec. 
 Key generation scales O(n) with number of signatures. Performance will vary based on CPU core count and speed.
 
 #### Sign/Verify Operations (All Lifetimes)
 
 | Operation | Time | Complexity |
 |-----------|------|------------|
-| Sign | **~240 ms** | O(log n) - constant across lifetimes |
-| Verify | **~198 ms** | O(log n) - constant across lifetimes |
+| Sign | **~191 ms** | O(log n) - constant across lifetimes |
+| Verify | **~99 ms** | O(log n) - constant across lifetimes |
 
 **Note**: Signing and verification times remain nearly constant across all lifetimes because they only process the authentication path (length = tree height). Only key generation scales with the number of signatures.
 
@@ -380,23 +386,20 @@ fn signMessage(db: *Database, sig_scheme: *HashSignature, message: []const u8, s
 
 ```zig
 // Poseidon2 (default)
-const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+const params = hash_zig.Parameters.init(.lifetime_2_16);
 
-// SHA3
-const params_sha3 = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
+// SHA3-256
+const params_sha3 = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
 
-// Default (Poseidon2, lifetime_2_16)
-const params_default = hash_zig.Parameters.initDefault(.level_128);
+// Default (Poseidon2, lifetime_2_16, 128-bit security)
+const params_default = hash_zig.Parameters.initDefault();
 ```
 
 ### Enums
 
 ```zig
-pub const SecurityLevel = enum { level_128, level_192, level_256 };
-pub const HashFunction = enum { 
-    poseidon2_128, poseidon2_192, poseidon2_256,
-    sha3_256, sha3_384, sha3_512
-};
+pub const SecurityLevel = enum { level_128 }; // Only 128-bit supported
+pub const HashFunction = enum { poseidon2, sha3 };
 pub const KeyLifetime = enum { 
     lifetime_2_10,   // 1,024 signatures
     lifetime_2_16,   // 65,536 signatures
@@ -404,7 +407,7 @@ pub const KeyLifetime = enum {
     lifetime_2_28,   // 268,435,456 signatures
     lifetime_2_32    // 4,294,967,296 signatures
 };
-pub const EncodingType = enum { binary, ternary, quaternary };
+pub const EncodingType = enum { binary }; // Only binary encoding supported
 ```
 
 ## 🧪 Testing
@@ -447,7 +450,7 @@ This will generate HTML documentation in `zig-out/docs/`. Open `zig-out/docs/ind
 ```zig
 test "poseidon2 hashing" {
     const allocator = std.testing.allocator;
-    const params = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+    const params = hash_zig.Parameters.init(.lifetime_2_16);
     
     var hash = try hash_zig.TweakableHash.init(allocator, params);
     defer hash.deinit();
@@ -463,7 +466,7 @@ test "poseidon2 hashing" {
 ```zig
 test "sha3 hashing" {
     const allocator = std.testing.allocator;
-    const params = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
+    const params = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
     
     var hash = try hash_zig.TweakableHash.init(allocator, params);
     defer hash.deinit();
@@ -481,12 +484,12 @@ test "compare hash functions" {
     const allocator = std.testing.allocator;
     
     // Poseidon2
-    const params_p2 = hash_zig.Parameters.init(.level_128, .lifetime_2_16);
+    const params_p2 = hash_zig.Parameters.init(.lifetime_2_16);
     var hash_p2 = try hash_zig.TweakableHash.init(allocator, params_p2);
     defer hash_p2.deinit();
     
-    // SHA3
-    const params_sha3 = hash_zig.Parameters.initWithSha3(.level_128, .lifetime_2_16);
+    // SHA3-256
+    const params_sha3 = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
     var hash_sha3 = try hash_zig.TweakableHash.init(allocator, params_sha3);
     defer hash_sha3.deinit();
     
