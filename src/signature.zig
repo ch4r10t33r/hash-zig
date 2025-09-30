@@ -95,7 +95,26 @@ pub const HashSignature = struct {
         }
 
         const ots_signature = try self.wots.sign(allocator, message, private_key);
-        const auth_path = try allocator.alloc([]u8, 0);
+
+        // Generate all leaves to create the authentication path
+        const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
+        var leaves = try allocator.alloc([]const u8, num_leaves);
+        defer {
+            for (leaves) |leaf| allocator.free(leaf);
+            allocator.free(leaves);
+        }
+
+        for (0..num_leaves) |i| {
+            const sk_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
+            defer {
+                for (sk_part) |k| allocator.free(k);
+                allocator.free(sk_part);
+            }
+            leaves[i] = try self.wots.generatePublicKey(allocator, sk_part);
+        }
+
+        // Generate authentication path for this leaf index
+        const auth_path = try self.tree.generateAuthPath(allocator, leaves, @intCast(index));
 
         return Signature{
             .index = index,
@@ -105,17 +124,82 @@ pub const HashSignature = struct {
     }
 
     pub fn verify(self: *HashSignature, allocator: Allocator, message: []const u8, signature: Signature, public_key: []const u8) !bool {
-        // XMSS verification requires:
-        // 1. Compute the OTS leaf public key from the signature
-        // 2. Use the authentication path to compute the Merkle root
-        // 3. Compare computed root with the provided public_key (expected root)
-        //
-        // This is a SIMPLIFIED implementation for demonstration
-        // Authentication paths are not yet implemented
-        // TODO: Implement full Merkle authentication path verification
+        // Step 1: Compute the OTS leaf public key from the signature
+        const msg_hash = try self.wots.hash.hash(allocator, message, 0);
+        defer allocator.free(msg_hash);
 
-        // Verify the OTS signature by deriving the leaf public key
-        // and checking it's valid (without full Merkle path verification)
-        return self.wots.verify(allocator, message, signature.ots_signature, public_key);
+        const enc = IncomparableEncoding.init(self.params.encoding_type);
+        const encoded = try enc.encode(allocator, msg_hash);
+        defer allocator.free(encoded);
+
+        const chain_len = self.wots.getChainLength();
+        const hash_output_len = self.params.hash_output_len;
+
+        var public_parts = try allocator.alloc([]u8, signature.ots_signature.len);
+        defer {
+            for (public_parts) |part| allocator.free(part);
+            allocator.free(public_parts);
+        }
+
+        // Derive public key parts from signature by completing hash chains
+        for (signature.ots_signature, 0..) |sig, i| {
+            var current = try allocator.dupe(u8, sig);
+
+            const start_val = if (i < encoded.len) encoded[i] else 0;
+            const remaining = chain_len - start_val;
+
+            for (0..remaining) |_| {
+                const next = try self.wots.hash.hash(allocator, current, i);
+                allocator.free(current);
+                current = next;
+            }
+
+            public_parts[i] = current;
+        }
+
+        // Combine public key parts into the leaf
+        var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
+        defer allocator.free(combined);
+
+        for (public_parts, 0..) |part, i| {
+            @memcpy(combined[i * hash_output_len ..][0..hash_output_len], part);
+        }
+
+        var current_hash = try self.wots.hash.hash(allocator, combined, 0);
+        defer allocator.free(current_hash);
+
+        // Step 2: Use authentication path to compute the Merkle root
+        var leaf_idx = signature.index;
+
+        for (signature.auth_path, 0..) |sibling, level| {
+            // Determine if current node is left or right child
+            const is_left = (leaf_idx % 2 == 0);
+
+            // Combine current hash with sibling
+            const combined_len = current_hash.len + sibling.len;
+            const combined_nodes = try allocator.alloc(u8, combined_len);
+            defer allocator.free(combined_nodes);
+
+            if (is_left) {
+                @memcpy(combined_nodes[0..current_hash.len], current_hash);
+                @memcpy(combined_nodes[current_hash.len..], sibling);
+            } else {
+                @memcpy(combined_nodes[0..sibling.len], sibling);
+                @memcpy(combined_nodes[sibling.len..], current_hash);
+            }
+
+            // Hash to get parent node
+            const parent = try self.wots.hash.hash(allocator, combined_nodes, level);
+            allocator.free(current_hash);
+            current_hash = parent;
+
+            // Move to parent index
+            leaf_idx = leaf_idx / 2;
+        }
+
+        // Step 3: Compare computed root with provided public_key
+        const roots_match = std.mem.eql(u8, current_hash, public_key);
+
+        return roots_match;
     }
 };

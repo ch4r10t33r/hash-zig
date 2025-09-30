@@ -75,10 +75,79 @@ pub const MerkleTree = struct {
     }
 
     pub fn generateAuthPath(self: *MerkleTree, allocator: Allocator, leaves: [][]const u8, leaf_idx: usize) ![][]u8 {
-        _ = self;
-        _ = allocator;
-        _ = leaves;
-        _ = leaf_idx;
-        return error.NotImplemented;
+        if (leaves.len == 0) return error.EmptyLeaves;
+        if (leaf_idx >= leaves.len) return error.InvalidIndex;
+
+        const tree_height = @ctz(@as(u64, leaves.len));
+        var auth_path = try allocator.alloc([]u8, tree_height);
+        errdefer {
+            for (auth_path) |node| allocator.free(node);
+            allocator.free(auth_path);
+        }
+
+        // Build the tree level by level and collect sibling nodes
+        var level = try allocator.alloc([]u8, leaves.len);
+        defer {
+            for (level) |node| allocator.free(node);
+            allocator.free(level);
+        }
+
+        for (leaves, 0..) |leaf, i| {
+            level[i] = try allocator.dupe(u8, leaf);
+        }
+
+        var current_idx = leaf_idx;
+        var current_len = leaves.len;
+        var path_idx: usize = 0;
+
+        while (current_len > 1) {
+            // Get sibling index
+            const sibling_idx = if (current_idx % 2 == 0) current_idx + 1 else current_idx - 1;
+
+            // Save sibling to auth path (if it exists)
+            if (sibling_idx < current_len) {
+                auth_path[path_idx] = try allocator.dupe(u8, level[sibling_idx]);
+                path_idx += 1;
+            }
+
+            // Build next level
+            const next_len = (current_len + 1) / 2;
+            var next_level = try allocator.alloc([]u8, next_len);
+
+            for (0..next_len) |i| {
+                const left_idx = i * 2;
+                const right_idx = left_idx + 1;
+
+                if (right_idx < current_len) {
+                    const combined = try allocator.alloc(u8, level[left_idx].len + level[right_idx].len);
+                    defer allocator.free(combined);
+                    @memcpy(combined[0..level[left_idx].len], level[left_idx]);
+                    @memcpy(combined[level[left_idx].len..], level[right_idx]);
+                    next_level[i] = try self.hash.hash(allocator, combined, i);
+                } else {
+                    next_level[i] = try allocator.dupe(u8, level[left_idx]);
+                }
+            }
+
+            // Free current level
+            for (level[0..current_len]) |node| allocator.free(node);
+            allocator.free(level);
+
+            level = next_level;
+            current_idx = current_idx / 2;
+            current_len = next_len;
+        }
+
+        // Resize auth_path to actual size (may be less than tree_height)
+        if (path_idx < tree_height) {
+            const resized = try allocator.alloc([]u8, path_idx);
+            for (0..path_idx) |i| {
+                resized[i] = auth_path[i];
+            }
+            allocator.free(auth_path);
+            return resized;
+        }
+
+        return auth_path;
     }
 };
