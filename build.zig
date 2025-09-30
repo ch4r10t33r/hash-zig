@@ -65,12 +65,16 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the example application");
     run_step.dependOn(&run_example.step);
 
-    // Documentation
-    const docs = b.addInstallDirectory(.{
-        .source_dir = lib.getEmittedDocs(),
+    // Documentation (separate from main library build)
+    const docs_obj = b.addObject(.{
+        .name = "hash-zig-docs",
+        .root_module = hash_zig_module,
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_obj.getEmittedDocs(),
         .install_dir = .prefix,
         .install_subdir = "docs",
     });
     const docs_step = b.step("docs", "Generate documentation");
-    docs_step.dependOn(&docs.step);
+    docs_step.dependOn(&install_docs.step);
 }
