@@ -19,13 +19,21 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    // Lint (using zig fmt check)
-    const lint_step = b.step("lint", "Check code formatting");
-    const fmt_check = b.addFmt(.{
-        .paths = &.{ "src", "examples", "test" },
-        .check = true,
+    // Lint (using zlinter)
+    const zlinter = @import("zlinter");
+    const lint_step = b.step("lint", "Run zlinter");
+    lint_step.dependOn(step: {
+        var builder = zlinter.builder(b, .{});
+        builder.addPaths(.{
+            .include = &.{ b.path("src/"), b.path("examples/"), b.path("test/") },
+        });
+        builder.addRule(.{ .builtin = .field_naming }, .{});
+        builder.addRule(.{ .builtin = .declaration_naming }, .{});
+        builder.addRule(.{ .builtin = .function_naming }, .{});
+        builder.addRule(.{ .builtin = .no_unused }, .{});
+        builder.addRule(.{ .builtin = .no_deprecated }, .{});
+        break :step builder.build();
     });
-    lint_step.dependOn(&fmt_check.step);
 
     // Tests
     const lib_unit_tests = b.addTest(.{

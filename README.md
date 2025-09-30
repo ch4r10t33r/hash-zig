@@ -1,7 +1,7 @@
 # hash-zig
 
 [![CI](https://github.com/ch4r10t33r/hash-zig/actions/workflows/ci.yml/badge.svg)](https://github.com/ch4r10t33r/hash-zig/actions/workflows/ci.yml)
-[![Zig](https://img.shields.io/badge/zig-0.14.1%20%7C%200.15.1-orange.svg)](https://ziglang.org/)
+[![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** hash functions with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf).
@@ -408,11 +408,13 @@ Contributions welcome! Please:
 ### CI/CD
 
 GitHub Actions automatically runs on pushes/PRs to `main`, `master`, or `develop`:
-- Linting (zig fmt check)
+- Linting using [zlinter](https://github.com/kurtwagner/zlinter)
 - Tests on Ubuntu, macOS, Windows
-- Tests on Zig 0.14.1 and 0.15.1
+- Uses Zig 0.14.1 (required for zlinter compatibility)
 
 See `.github/workflows/ci.yml` for details.
+
+**Note:** The project currently requires Zig 0.14.1 because zlinter only supports the 0.14.x branch. Once zlinter adds support for Zig 0.15+, we'll update to the latest version.
 
 ## 🐛 Known Issues
 

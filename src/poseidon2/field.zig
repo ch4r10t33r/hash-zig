@@ -23,14 +23,14 @@ pub const FieldElement = struct {
     pub fn pow(self: FieldElement, exp: u64) FieldElement {
         var result = init(1);
         var base = self;
-        var e = exp;
+        var exponent = exp;
 
-        while (e > 0) {
-            if (e & 1 == 1) {
+        while (exponent > 0) {
+            if (exponent & 1 == 1) {
                 result = result.mul(base);
             }
             base = base.mul(base);
-            e >>= 1;
+            exponent >>= 1;
         }
 
         return result;
@@ -54,11 +54,11 @@ pub const FieldElement = struct {
 };
 
 test "field element operations" {
-    const a = FieldElement.init(100);
-    const b = FieldElement.init(200);
+    const field_a = FieldElement.init(100);
+    const field_b = FieldElement.init(200);
 
-    const sum = a.add(b);
-    const product = a.mul(b);
+    const sum = field_a.add(field_b);
+    const product = field_a.mul(field_b);
 
     try std.testing.expect(sum.value == 300);
     try std.testing.expect(product.value == 20000);

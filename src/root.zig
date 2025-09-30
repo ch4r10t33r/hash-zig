@@ -4,8 +4,6 @@
 //! and incomparable encodings, based on the framework from
 //! https://eprint.iacr.org/2025/055.pdf
 
-const std = @import("std");
-
 // Re-export all public APIs
 pub const params = @import("params.zig");
 pub const poseidon2 = @import("poseidon2/hash.zig");

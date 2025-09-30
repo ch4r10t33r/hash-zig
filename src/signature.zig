@@ -68,13 +68,13 @@ pub const HashSignature = struct {
         }
 
         for (0..num_leaves) |i| {
-            const sk = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
+            const secret_key_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
             defer {
-                for (sk) |k| allocator.free(k);
-                allocator.free(sk);
+                for (secret_key_part) |k| allocator.free(k);
+                allocator.free(secret_key_part);
             }
 
-            leaves[i] = try self.wots.generatePublicKey(allocator, sk);
+            leaves[i] = try self.wots.generatePublicKey(allocator, secret_key_part);
         }
 
         const public_key = try self.tree.buildTree(allocator, leaves);

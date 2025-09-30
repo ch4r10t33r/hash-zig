@@ -29,9 +29,9 @@ pub const WinternitzOTS = struct {
     }
 
     pub fn generatePrivateKey(self: *WinternitzOTS, allocator: Allocator, seed: []const u8, addr: u64) ![][]u8 {
-        const w = self.params.winternitz_w;
-        const n = self.params.hash_output_len;
-        const len = (8 * n + @ctz(w) - 1) / @ctz(w);
+        const winternitz_w = self.params.winternitz_w;
+        const hash_output_len = self.params.hash_output_len;
+        const len = (8 * hash_output_len + @ctz(winternitz_w) - 1) / @ctz(winternitz_w);
 
         var private_key = try allocator.alloc([]u8, len);
         errdefer {
@@ -48,7 +48,7 @@ pub const WinternitzOTS = struct {
 
     pub fn generatePublicKey(self: *WinternitzOTS, allocator: Allocator, private_key: [][]u8) ![]u8 {
         const chain_len = self.getChainLength();
-        const n = self.params.hash_output_len;
+        const hash_output_len = self.params.hash_output_len;
 
         var public_parts = try allocator.alloc([]u8, private_key.len);
         defer {
@@ -68,10 +68,10 @@ pub const WinternitzOTS = struct {
             public_parts[i] = current;
         }
 
-        var combined = try allocator.alloc(u8, public_parts.len * n);
+        var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
         defer allocator.free(combined);
         for (public_parts, 0..) |part, i| {
-            @memcpy(combined[i * n ..][0..n], part);
+            @memcpy(combined[i * hash_output_len ..][0..hash_output_len], part);
         }
 
         return self.hash.hash(allocator, combined, 0);
@@ -116,7 +116,7 @@ pub const WinternitzOTS = struct {
         defer allocator.free(encoded);
 
         const chain_len = self.getChainLength();
-        const n = self.params.hash_output_len;
+        const hash_output_len = self.params.hash_output_len;
 
         var public_parts = try allocator.alloc([]u8, signature.len);
         defer {
@@ -139,11 +139,11 @@ pub const WinternitzOTS = struct {
             public_parts[i] = current;
         }
 
-        var combined = try allocator.alloc(u8, public_parts.len * n);
+        var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
         defer allocator.free(combined);
 
         for (public_parts, 0..) |part, i| {
-            @memcpy(combined[i * n ..][0..n], part);
+            @memcpy(combined[i * hash_output_len ..][0..hash_output_len], part);
         }
 
         const derived_pk = try self.hash.hash(allocator, combined, 0);

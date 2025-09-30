@@ -13,10 +13,10 @@ pub const TweakableHash = struct {
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, parameters: Parameters) !TweakableHash {
-        const p2 = try Poseidon2.init(allocator, parameters.security_level);
+        const poseidon_instance = try Poseidon2.init(allocator, parameters.security_level);
         return .{
             .params = parameters,
-            .poseidon = p2,
+            .poseidon = poseidon_instance,
             .allocator = allocator,
         };
     }
@@ -47,10 +47,10 @@ test "tweakable hash different tweaks" {
     defer hash.deinit();
 
     const data = "test";
-    const h1 = try hash.hash(allocator, data, 0);
-    defer allocator.free(h1);
-    const h2 = try hash.hash(allocator, data, 1);
-    defer allocator.free(h2);
+    const hash1 = try hash.hash(allocator, data, 0);
+    defer allocator.free(hash1);
+    const hash2 = try hash.hash(allocator, data, 1);
+    defer allocator.free(hash2);
 
-    try std.testing.expect(!std.mem.eql(u8, h1, h2));
+    try std.testing.expect(!std.mem.eql(u8, hash1, hash2));
 }
