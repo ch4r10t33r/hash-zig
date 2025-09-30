@@ -26,6 +26,50 @@ pub const MerkleTree = struct {
         self.hash.deinit();
     }
 
+    const MerkleNodeContext = struct {
+        tree: *MerkleTree,
+        current_level: [][]u8,
+        next_level: [][]u8,
+        current_len: usize,
+        allocator: Allocator,
+        errors: []?anyerror,
+        mutex: std.Thread.Mutex,
+    };
+
+    fn buildNodeRange(context: *MerkleNodeContext, start: usize, end: usize) void {
+        for (start..end) |i| {
+            const left_idx = i * 2;
+            const right_idx = left_idx + 1;
+
+            if (right_idx < context.current_len) {
+                const left = context.current_level[left_idx];
+                const right = context.current_level[right_idx];
+                const combined = context.allocator.alloc(u8, left.len + right.len) catch |err| {
+                    context.mutex.lock();
+                    defer context.mutex.unlock();
+                    context.errors[i] = err;
+                    return;
+                };
+                defer context.allocator.free(combined);
+                @memcpy(combined[0..left.len], left);
+                @memcpy(combined[left.len..], right);
+                context.next_level[i] = context.tree.hash.hash(context.allocator, combined, i) catch |err| {
+                    context.mutex.lock();
+                    defer context.mutex.unlock();
+                    context.errors[i] = err;
+                    return;
+                };
+            } else {
+                context.next_level[i] = context.allocator.dupe(u8, context.current_level[left_idx]) catch |err| {
+                    context.mutex.lock();
+                    defer context.mutex.unlock();
+                    context.errors[i] = err;
+                    return;
+                };
+            }
+        }
+    }
+
     pub fn buildTree(self: *MerkleTree, allocator: Allocator, leaves: [][]const u8) ![]u8 {
         if (leaves.len == 0) return error.EmptyLeaves;
         if (leaves.len == 1) {
@@ -40,22 +84,81 @@ pub const MerkleTree = struct {
 
         var current_len = leaves.len;
 
+        const num_cpus = std.Thread.getCpuCount() catch 8;
+
         while (current_len > 1) {
             const next_len = (current_len + 1) / 2;
             var next_level = try allocator.alloc([]u8, next_len);
 
-            for (0..next_len) |i| {
-                const left_idx = i * 2;
-                const right_idx = left_idx + 1;
+            // Initialize to empty slices
+            for (next_level) |*node| {
+                node.* = &[_]u8{};
+            }
 
-                if (right_idx < current_len) {
-                    const combined = try allocator.alloc(u8, level[left_idx].len + level[right_idx].len);
-                    defer allocator.free(combined);
-                    @memcpy(combined[0..level[left_idx].len], level[left_idx]);
-                    @memcpy(combined[level[left_idx].len..], level[right_idx]);
-                    next_level[i] = try self.hash.hash(allocator, combined, i);
-                } else {
-                    next_level[i] = try allocator.dupe(u8, level[left_idx]);
+            const num_threads = @min(num_cpus, next_len);
+
+            if (num_threads <= 1 or next_len < 32) {
+                // Sequential for small workloads
+                for (0..next_len) |i| {
+                    const left_idx = i * 2;
+                    const right_idx = left_idx + 1;
+
+                    if (right_idx < current_len) {
+                        const combined = try allocator.alloc(u8, level[left_idx].len + level[right_idx].len);
+                        defer allocator.free(combined);
+                        @memcpy(combined[0..level[left_idx].len], level[left_idx]);
+                        @memcpy(combined[level[left_idx].len..], level[right_idx]);
+                        next_level[i] = try self.hash.hash(allocator, combined, i);
+                    } else {
+                        next_level[i] = try allocator.dupe(u8, level[left_idx]);
+                    }
+                }
+            } else {
+                // Parallel node hashing
+                const errors = try allocator.alloc(?anyerror, next_len);
+                defer allocator.free(errors);
+                for (errors) |*err| err.* = null;
+
+                var context = MerkleNodeContext{
+                    .tree = self,
+                    .current_level = level,
+                    .next_level = next_level,
+                    .current_len = current_len,
+                    .allocator = allocator,
+                    .errors = errors,
+                    .mutex = std.Thread.Mutex{},
+                };
+
+                var threads = try allocator.alloc(std.Thread, num_threads);
+                defer allocator.free(threads);
+
+                const nodes_per_thread = next_len / num_threads;
+                const remainder = next_len % num_threads;
+
+                for (0..num_threads) |t| {
+                    const start = t * nodes_per_thread + @min(t, remainder);
+                    const end = start + nodes_per_thread + (if (t < remainder) @as(usize, 1) else 0);
+                    threads[t] = try std.Thread.spawn(.{}, buildNodeRange, .{ &context, start, end });
+                }
+
+                for (threads) |thread| {
+                    thread.join();
+                }
+
+                // Check for errors
+                for (errors, 0..) |err, i| {
+                    if (err) |e| {
+                        // Clean up next_level on error
+                        for (next_level) |node| {
+                            if (node.len > 0) allocator.free(node);
+                        }
+                        allocator.free(next_level);
+                        // Clean up current level
+                        for (level[0..current_len]) |node| allocator.free(node);
+                        allocator.free(level);
+                        std.debug.print("Error building node {d}: {}\n", .{ i, e });
+                        return e;
+                    }
                 }
             }
 

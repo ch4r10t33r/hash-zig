@@ -46,26 +46,116 @@ pub const WinternitzOTS = struct {
         return private_key;
     }
 
+    const ChainGenContext = struct {
+        wots: *WinternitzOTS,
+        private_key: [][]u8,
+        public_parts: [][]u8,
+        chain_len: u32,
+        allocator: Allocator,
+        errors: []?anyerror,
+        mutex: std.Thread.Mutex,
+    };
+
+    fn generateChainRange(context: *ChainGenContext, start: usize, end: usize) void {
+        for (start..end) |i| {
+            var current = context.allocator.dupe(u8, context.private_key[i]) catch |err| {
+                context.mutex.lock();
+                defer context.mutex.unlock();
+                context.errors[i] = err;
+                return;
+            };
+
+            for (0..context.chain_len) |_| {
+                const next = context.wots.hash.hash(context.allocator, current, i) catch |err| {
+                    context.allocator.free(current);
+                    context.mutex.lock();
+                    defer context.mutex.unlock();
+                    context.errors[i] = err;
+                    return;
+                };
+                context.allocator.free(current);
+                current = next;
+            }
+
+            context.public_parts[i] = current;
+        }
+    }
+
     pub fn generatePublicKey(self: *WinternitzOTS, allocator: Allocator, private_key: [][]u8) ![]u8 {
         const chain_len = self.getChainLength();
         const hash_output_len = self.params.hash_output_len;
 
         var public_parts = try allocator.alloc([]u8, private_key.len);
         defer {
-            for (public_parts) |part| allocator.free(part);
+            for (public_parts) |part| {
+                if (part.len > 0) allocator.free(part);
+            }
             allocator.free(public_parts);
         }
 
-        for (private_key, 0..) |pk, i| {
-            var current = try allocator.dupe(u8, pk);
+        // Initialize to empty slices
+        for (public_parts) |*part| {
+            part.* = &[_]u8{};
+        }
 
-            for (0..chain_len) |_| {
-                const next = try self.hash.hash(allocator, current, i);
-                allocator.free(current);
-                current = next;
+        const num_chains = private_key.len;
+        const num_cpus = std.Thread.getCpuCount() catch 8;
+        const num_threads = @min(num_cpus, num_chains);
+
+        if (num_threads <= 1 or num_chains < 16) {
+            // Sequential fallback for small workloads
+            for (private_key, 0..) |pk, i| {
+                var current = try allocator.dupe(u8, pk);
+
+                for (0..chain_len) |_| {
+                    const next = try self.hash.hash(allocator, current, i);
+                    allocator.free(current);
+                    current = next;
+                }
+
+                public_parts[i] = current;
+            }
+        } else {
+            // Parallel chain generation
+            const errors = try allocator.alloc(?anyerror, num_chains);
+            defer allocator.free(errors);
+            for (errors) |*err| err.* = null;
+
+            var context = ChainGenContext{
+                .wots = self,
+                .private_key = private_key,
+                .public_parts = public_parts,
+                .chain_len = chain_len,
+                .allocator = allocator,
+                .errors = errors,
+                .mutex = std.Thread.Mutex{},
+            };
+
+            var threads = try allocator.alloc(std.Thread, num_threads);
+            defer allocator.free(threads);
+
+            const chains_per_thread = num_chains / num_threads;
+            const remainder = num_chains % num_threads;
+
+            // Spawn worker threads
+            for (0..num_threads) |t| {
+                const start = t * chains_per_thread + @min(t, remainder);
+                const end = start + chains_per_thread + (if (t < remainder) @as(usize, 1) else 0);
+                threads[t] = try std.Thread.spawn(.{}, generateChainRange, .{ &context, start, end });
             }
 
-            public_parts[i] = current;
+            // Wait for all threads
+            for (threads) |thread| {
+                thread.join();
+            }
+
+            // Check for errors
+            for (errors, 0..) |err, i| {
+                if (err) |e| {
+                    std.debug.print("Error generating chain {d}: {}\n", .{ i, e });
+                    return e;
+                }
+            }
         }
 
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
