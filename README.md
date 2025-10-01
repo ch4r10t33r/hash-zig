@@ -280,6 +280,29 @@ hash-zig/
 
 ## 📊 Performance
 
+### Benchmarking Against Reference Implementation
+
+This implementation is benchmarked against the reference Rust implementation using the [hash-sig-benchmarks](https://github.com/ch4r10t33r/hash-sig-benchmarks) suite.
+
+The benchmark repository provides:
+- **Automated comparison**: Side-by-side performance testing of Rust vs Zig implementations
+- **Fair parameters**: Both implementations use identical parameters (w=8, 64 chains, Poseidon2)
+- **Statistical analysis**: Multiple iterations with mean, median, and standard deviation
+- **Reproducible results**: Standalone wrappers for each implementation ensure consistent testing
+
+**Benchmark the implementations yourself**:
+```bash
+git clone https://github.com/ch4r10t33r/hash-sig-benchmarks.git
+cd hash-sig-benchmarks
+python3 benchmark.py 3  # Run 3 iterations
+```
+
+The benchmark suite automatically:
+1. Clones both [hash-sig](https://github.com/b-wagn/hash-sig) (Rust) and [hash-zig](https://github.com/ch4r10t33r/hash-zig) (Zig)
+2. Builds standalone benchmark wrappers for each
+3. Runs key generation benchmarks with identical parameters
+4. Compares and reports performance differences
+
 ### Actual Benchmarks
 
 Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_128** security:
@@ -288,17 +311,19 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Key Generation | **41 seconds** | Parallel multi-threaded (w=8) |
+| Key Generation | **32 seconds** | Parallel multi-threaded (w=8, optimized) |
 | Sign | **191 ms** | Fast (uses cached leaves, 86 chains) |
 | Verify | **99 ms** | Fast (only processes auth path) |
 
 **Performance Notes:**
 - Using **w=8** (64 chains of length 8) per [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Optimized with inline hints** for field arithmetic operations (~23% improvement)
 - Parallel key generation uses all available CPU cores automatically
 - Falls back to sequential mode for small workloads (< 64 leaves)
 - Speedup scales with CPU core count (tested on M2 with ~3x improvement over sequential)
 - Three levels of parallelization: leaf generation, WOTS chains, and Merkle tree construction
 - Fast verification (~99ms) thanks to shorter chain length
+- **Benchmark against Rust**: Use [hash-sig-benchmarks](https://github.com/ch4r10t33r/hash-sig-benchmarks) for head-to-head comparison
 
 #### Projected Key Generation Times for All Lifetimes
 
@@ -306,13 +331,14 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Lifetime | Signatures | Tree Height | Estimated Time* | Memory Required |
 |----------|-----------|-------------|-----------------|-----------------|
-| lifetime_2_10 | 1,024 | 10 | **41 sec** (measured on M2) | ~33 KB |
-| lifetime_2_16 | 65,536 | 16 | **~43 minutes** | ~2.1 MB |
-| lifetime_2_20 | 1,048,576 | 20 | **~11.5 hours** | ~34 MB |
-| lifetime_2_28 | 268,435,456 | 28 | **~125 days** | ~8.6 GB |
-| lifetime_2_32 | 4,294,967,296 | 32 | **~5.3 years** | ~137 GB |
+| lifetime_2_10 | 1,024 | 10 | **32 sec** (measured on M2, optimized) | ~33 KB |
+| lifetime_2_16 | 65,536 | 16 | **~34 minutes** | ~2.1 MB |
+| lifetime_2_18 | 262,144 | 18 | **~2.2 hours** | ~8.4 MB |
+| lifetime_2_20 | 1,048,576 | 20 | **~9 hours** | ~34 MB |
+| lifetime_2_28 | 268,435,456 | 28 | **~97 days** | ~8.6 GB |
+| lifetime_2_32 | 4,294,967,296 | 32 | **~4.1 years** | ~137 GB |
 
-*Projected by linear scaling from M2 parallel measurements with w=8: (signatures / 1024) × 41 sec. 
+*Projected by linear scaling from M2 parallel measurements with optimizations: (signatures / 1024) × 32 sec. 
 Key generation scales O(n) with number of signatures. Performance will vary based on CPU core count and speed.
 
 #### Sign/Verify Operations (All Lifetimes)
