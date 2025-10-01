@@ -163,12 +163,12 @@ pub const HashSignature = struct {
 
             var jobs = try allocator.alloc(LeafJob, num_jobs);
             defer allocator.free(jobs);
-            var j: usize = 0;
+            var job_idx: usize = 0;
             var i: usize = 0;
             while (i < num_leaves) : (i += job_size) {
                 const end = @min(i + job_size, num_leaves);
-                jobs[j] = .{ .start = i, .end = end };
-                j += 1;
+                jobs[job_idx] = .{ .start = i, .end = end };
+                job_idx += 1;
             }
 
             var queue = LeafQueue.init(jobs);
