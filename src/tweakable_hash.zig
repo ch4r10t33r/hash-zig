@@ -2,11 +2,11 @@
 
 const std = @import("std");
 const params = @import("params.zig");
-const poseidon2 = @import("poseidon2/hash.zig");
+const poseidon2_mod = @import("poseidon2_hash.zig");
 const sha3_mod = @import("sha3.zig");
 const Parameters = params.Parameters;
 const HashFunction = params.HashFunction;
-const Poseidon2 = poseidon2.Poseidon2;
+const Poseidon2 = poseidon2_mod.Poseidon2;
 const Sha3 = sha3_mod.Sha3;
 const Allocator = std.mem.Allocator;
 
@@ -23,7 +23,7 @@ pub const TweakableHash = struct {
     pub fn init(allocator: Allocator, parameters: Parameters) !TweakableHash {
         const hash_impl = switch (parameters.hash_function) {
             .poseidon2 => blk: {
-                const poseidon_instance = try Poseidon2.init(allocator, parameters.security_level);
+                const poseidon_instance = try Poseidon2.init(allocator);
                 break :blk HashImpl{ .poseidon2 = poseidon_instance };
             },
             .sha3 => blk: {
@@ -41,7 +41,7 @@ pub const TweakableHash = struct {
 
     pub fn deinit(self: *TweakableHash) void {
         switch (self.hash_impl) {
-            .poseidon2 => |*p| p.deinit(self.allocator),
+            .poseidon2 => |*p| p.deinit(),
             .sha3 => |*s| s.deinit(self.allocator),
         }
     }
