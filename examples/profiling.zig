@@ -2,9 +2,9 @@ const std = @import("std");
 const hash_sig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     std.debug.print("=== Hash-zig Performance Profiling ===\n\n", .{});
 
@@ -22,15 +22,15 @@ pub fn main() !void {
     // Profile individual WOTS operations
     std.debug.print("--- Single WOTS Operation Profile ---\n", .{});
     
-    const t1 = std.time.nanoTimestamp();
+    const wots_priv_start_ts = std.time.nanoTimestamp();
     const priv_key = try sig_scheme.wots.generatePrivateKey(allocator, &seed, 0);
-    const t2 = std.time.nanoTimestamp();
+    const wots_priv_end_ts = std.time.nanoTimestamp();
     
     const pub_key = try sig_scheme.wots.generatePublicKey(allocator, priv_key);
-    const t3 = std.time.nanoTimestamp();
+    const wots_pub_end_ts = std.time.nanoTimestamp();
     
-    const priv_time = @as(f64, @floatFromInt(t2 - t1)) / 1_000_000.0;
-    const pub_time = @as(f64, @floatFromInt(t3 - t2)) / 1_000_000.0;
+    const priv_time = @as(f64, @floatFromInt(wots_priv_end_ts - wots_priv_start_ts)) / 1_000_000.0;
+    const pub_time = @as(f64, @floatFromInt(wots_pub_end_ts - wots_priv_end_ts)) / 1_000_000.0;
     
     std.debug.print("  generatePrivateKey: {d:.3} ms\n", .{priv_time});
     std.debug.print("  generatePublicKey:  {d:.3} ms\n", .{pub_time});
@@ -44,12 +44,12 @@ pub fn main() !void {
     std.debug.print("--- Hash Operation Profile ---\n", .{});
     const test_data = "test data for hashing";
     
-    const h1 = std.time.nanoTimestamp();
+    const hash_start_ts = std.time.nanoTimestamp();
     const hash_result = try sig_scheme.wots.hash.hash(allocator, test_data, 0);
-    const h2 = std.time.nanoTimestamp();
+    const hash_end_ts = std.time.nanoTimestamp();
     allocator.free(hash_result);
     
-    const hash_time = @as(f64, @floatFromInt(h2 - h1)) / 1_000_000.0;
+    const hash_time = @as(f64, @floatFromInt(hash_end_ts - hash_start_ts)) / 1_000_000.0;
     std.debug.print("  Single hash call: {d:.3} ms\n\n", .{hash_time});
 
     // Calculate expected times
