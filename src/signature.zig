@@ -67,21 +67,16 @@ pub const HashSignature = struct {
 
     const LeafQueue = struct {
         jobs: []LeafJob,
-        head: usize,
-        tail: usize,
-        mutex: std.Thread.Mutex,
+        next: std.atomic.Value(usize),
 
         fn init(jobs: []LeafJob) LeafQueue {
-            return .{ .jobs = jobs, .head = 0, .tail = jobs.len, .mutex = .{} };
+            return .{ .jobs = jobs, .next = std.atomic.Value(usize).init(0) };
         }
 
         fn pop(self: *LeafQueue) ?LeafJob {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            if (self.head >= self.tail) return null;
-            const job = self.jobs[self.head];
-            self.head += 1;
-            return job;
+            const idx = self.next.fetchAdd(1, .monotonic);
+            if (idx >= self.jobs.len) return null;
+            return self.jobs[idx];
         }
     };
 
@@ -141,7 +136,9 @@ pub const HashSignature = struct {
         const num_cpus = std.Thread.getCpuCount() catch 8;
         const num_threads = @min(num_cpus, num_leaves);
 
-        if (num_threads <= 1 or num_leaves < 64) {
+        // Use adaptive threshold: parallelize aggressively for large trees
+        const parallel_threshold: usize = if (num_leaves >= 1 << 16) 512 else if (num_leaves >= 8192) 256 else 2048;
+        if (num_threads <= 1 or num_leaves < parallel_threshold) {
             // Fall back to sequential for small workloads
             for (0..num_leaves) |i| {
                 const secret_key_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
@@ -156,9 +153,12 @@ pub const HashSignature = struct {
             // Parallel leaf generation using a global queue and workers
             var error_flag = std.atomic.Value(bool).init(false);
 
-            // Determine job size so each job is ~5-20ms. Start with 128 and adjust if tiny inputs.
-            const base_job = 128;
-            const job_size = if (num_leaves / num_threads < base_job) @max(32, num_leaves / (num_threads * 2)) else base_job;
+            // Determine job size adaptively for max throughput on large trees
+            const base_job: usize = if (num_leaves >= (1 << 20)) 2048 else if (num_leaves >= (1 << 16)) 1024 else 256;
+            const job_size = if (num_leaves / num_threads < base_job)
+                @max(64, num_leaves / (num_threads * 2))
+            else
+                base_job;
             const num_jobs = (num_leaves + job_size - 1) / job_size;
 
             var jobs = try allocator.alloc(LeafJob, num_jobs);

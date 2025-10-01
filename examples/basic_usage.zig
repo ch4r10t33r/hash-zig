@@ -13,12 +13,12 @@ pub fn main() !void {
     std.debug.print("================\n\n", .{});
 
     // Initialize with 128-bit security (only security level supported)
-    // Using lifetime_2_10 (1,024 signatures)
-    const params = hash_sig.Parameters.init(.lifetime_2_10);
+    // Using lifetime_2_16 (65,536 signatures)
+    const params = hash_sig.Parameters.init(.lifetime_2_16);
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
-    std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
+    std.debug.print("Lifetime: 2^16 = 65,536 signatures\n", .{});
     std.debug.print("Parameters: 64 chains of length 8 (w=8)\n", .{});
     std.debug.print("Hash: Poseidon2\n\n", .{});
 
