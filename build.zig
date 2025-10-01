@@ -65,6 +65,24 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the example application");
     run_step.dependOn(&run_example.step);
 
+    // Profiling executable
+    const profiling_module = b.createModule(.{
+        .root_source_file = b.path("examples/profiling.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    profiling_module.addImport("hash-zig", hash_zig_module);
+
+    const profiling = b.addExecutable(.{
+        .name = "hash-zig-profile",
+        .root_module = profiling_module,
+    });
+    b.installArtifact(profiling);
+
+    const run_profiling = b.addRunArtifact(profiling);
+    const profile_step = b.step("profile", "Run profiling analysis");
+    profile_step.dependOn(&run_profiling.step);
+
     // Documentation (separate from main library build)
     const docs_obj = b.addObject(.{
         .name = "hash-zig-docs",

@@ -24,7 +24,7 @@ pub const WinternitzOTS = struct {
         self.hash.deinit();
     }
 
-    pub fn getChainLength(self: WinternitzOTS) u32 {
+    pub inline fn getChainLength(self: WinternitzOTS) u32 {
         return @as(u32, 1) << @intCast(@ctz(self.params.winternitz_w));
     }
 

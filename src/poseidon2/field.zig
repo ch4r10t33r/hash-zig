@@ -8,15 +8,15 @@ pub const FieldElement = struct {
     /// BN254 scalar field modulus
     pub const modulus: u256 = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
-    pub fn init(val: u256) FieldElement {
+    pub inline fn init(val: u256) FieldElement {
         return .{ .value = @mod(val, modulus) };
     }
 
-    pub fn add(self: FieldElement, other: FieldElement) FieldElement {
+    pub inline fn add(self: FieldElement, other: FieldElement) FieldElement {
         return init(@mod(self.value + other.value, modulus));
     }
 
-    pub fn mul(self: FieldElement, other: FieldElement) FieldElement {
+    pub inline fn mul(self: FieldElement, other: FieldElement) FieldElement {
         return init(@mod(self.value *% other.value, modulus));
     }
 
@@ -36,7 +36,7 @@ pub const FieldElement = struct {
         return result;
     }
 
-    pub fn toBytes(self: FieldElement, out: []u8) void {
+    pub inline fn toBytes(self: FieldElement, out: []u8) void {
         var val = self.value;
         for (0..out.len) |i| {
             out[i] = @truncate(val);
@@ -44,7 +44,7 @@ pub const FieldElement = struct {
         }
     }
 
-    pub fn fromBytes(bytes: []const u8) FieldElement {
+    pub inline fn fromBytes(bytes: []const u8) FieldElement {
         var val: u256 = 0;
         for (bytes, 0..) |byte, i| {
             val |= @as(u256, byte) << @intCast(i * 8);
