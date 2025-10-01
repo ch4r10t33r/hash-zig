@@ -4,8 +4,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const poseidon2_core = @import("poseidon2/root.zig");
 
-const WIDTH = 16;
-const OUTPUT_LEN = 8; // 8 field elements = 32 bytes (8 * 4 bytes)
+const width = 16;
+const output_len = 8; // 8 field elements = 32 bytes (8 * 4 bytes)
 
 pub const Poseidon2 = struct {
     allocator: Allocator,
@@ -25,25 +25,25 @@ pub const Poseidon2 = struct {
     pub fn hashBytes(self: *Poseidon2, allocator: Allocator, data: []const u8) ![]u8 {
         _ = self;
 
-        const F = poseidon2_core.KoalaBearField;
-        const Poseidon2Core = poseidon2_core.Poseidon2KoalaBear16;
+        const field_mod = poseidon2_core.koalabear_field;
+        const poseidon2_core_type = poseidon2_core.poseidon2_koalabear16;
 
         // Initialize state in Montgomery form
-        var state: [WIDTH]F.MontFieldElem = undefined;
-        for (0..WIDTH) |i| {
-            F.toMontgomery(&state[i], 0);
+        var state: [width]field_mod.MontFieldElem = undefined;
+        for (0..width) |i| {
+            field_mod.toMontgomery(&state[i], 0);
         }
 
         // Process data in 64-byte chunks (WIDTH * 4 bytes)
         var offset: usize = 0;
-        const chunk_size = WIDTH * 4; // 64 bytes per chunk
+        const chunk_size = width * 4; // 64 bytes per chunk
 
         while (offset < data.len) {
             // Pack bytes into field elements and XOR into state
             const remaining = data.len - offset;
             const to_process = @min(remaining, chunk_size);
 
-            var chunk: [WIDTH]u32 = std.mem.zeroes([WIDTH]u32);
+            var chunk: [width]u32 = std.mem.zeroes([width]u32);
             for (0..to_process) |i| {
                 const elem_idx = i / 4;
                 const byte_idx = i % 4;
@@ -51,22 +51,22 @@ pub const Poseidon2 = struct {
             }
 
             // XOR chunk into state (in Montgomery form)
-            for (0..WIDTH) |i| {
-                var chunk_mont: F.MontFieldElem = undefined;
-                F.toMontgomery(&chunk_mont, chunk[i]);
-                F.add(&state[i], state[i], chunk_mont);
+            for (0..width) |i| {
+                var chunk_mont: field_mod.MontFieldElem = undefined;
+                field_mod.toMontgomery(&chunk_mont, chunk[i]);
+                field_mod.add(&state[i], state[i], chunk_mont);
             }
 
             // Apply permutation
-            Poseidon2Core.permutation(&state);
+            poseidon2_core_type.permutation(&state);
 
             offset += chunk_size;
         }
 
         // Convert OUTPUT_LEN elements back from Montgomery form
         var output = try allocator.alloc(u8, 32);
-        for (0..OUTPUT_LEN) |i| {
-            const val = F.toNormal(state[i]);
+        for (0..output_len) |i| {
+            const val = field_mod.toNormal(state[i]);
             output[i * 4 + 0] = @truncate(val);
             output[i * 4 + 1] = @truncate(val >> 8);
             output[i * 4 + 2] = @truncate(val >> 16);

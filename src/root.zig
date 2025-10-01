@@ -23,8 +23,8 @@ pub const EncodingType = params.EncodingType;
 
 // Primary hash implementations
 pub const Poseidon2 = poseidon2_hash.Poseidon2;
-pub const Poseidon2KoalaBear16 = poseidon2_core.Poseidon2KoalaBear16;
-pub const KoalaBearField = poseidon2_core.KoalaBearField;
+pub const poseidon2_koalabear16 = poseidon2_core.poseidon2_koalabear16;
+pub const koalabear_field = poseidon2_core.koalabear_field;
 pub const Sha3 = sha3.Sha3;
 pub const IncomparableEncoding = encoding.IncomparableEncoding;
 pub const TweakableHash = tweakable_hash.TweakableHash;

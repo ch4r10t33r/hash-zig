@@ -2,12 +2,12 @@ const std = @import("std");
 
 // MontgomeryField31 is a generic implementation of a field with modulus with at most 31 bits.
 pub fn MontgomeryField31(comptime modulus: u32) type {
-    const R: u64 = 1 << 32;
-    const R_square_mod_modulus: u64 = @intCast((@as(u128, R) * @as(u128, R)) % modulus);
+    const mont_r: u64 = 1 << 32;
+    const r_square_mod_modulus: u64 = @intCast((@as(u128, mont_r) * @as(u128, mont_r)) % modulus);
 
-    // modulus_prime = -modulus^-1 mod R
-    const modulus_prime = R - euclideanAlgorithm(modulus, R) % R;
-    std.debug.assert(modulus * modulus_prime % R == R - 1);
+    // modulus_prime = -modulus^-1 mod mont_r
+    const modulus_prime = mont_r - euclideanAlgorithm(modulus, mont_r) % mont_r;
+    std.debug.assert(modulus * modulus_prime % mont_r == mont_r - 1);
 
     return struct {
         pub const FieldElem = u32;
@@ -16,7 +16,7 @@ pub fn MontgomeryField31(comptime modulus: u32) type {
         };
 
         pub fn toMontgomery(out: *MontFieldElem, value: FieldElem) void {
-            out.* = .{ .value = montReduce(@as(u64, value) * R_square_mod_modulus) };
+            out.* = .{ .value = montReduce(@as(u64, value) * r_square_mod_modulus) };
         }
 
         pub fn square(out1: *MontFieldElem, value: MontFieldElem) void {
@@ -41,7 +41,7 @@ pub fn MontgomeryField31(comptime modulus: u32) type {
 
         fn montReduce(mont_value: u64) FieldElem {
             const tmp = mont_value + (((mont_value & 0xFFFFFFFF) * modulus_prime) & 0xFFFFFFFF) * modulus;
-            std.debug.assert(tmp % R == 0);
+            std.debug.assert(tmp % mont_r == 0);
             const t = tmp >> 32;
             if (t >= modulus) {
                 return @intCast(t - modulus);
@@ -52,29 +52,29 @@ pub fn MontgomeryField31(comptime modulus: u32) type {
 }
 
 fn euclideanAlgorithm(a: u64, b: u64) u64 {
-    var t: i64 = 0;
+    var t_coef: i64 = 0;
     var new_t: i64 = 1;
-    var r: i64 = @intCast(b);
+    var r_val: i64 = @intCast(b);
     var new_r: i64 = @intCast(a);
 
     while (new_r != 0) {
-        const quotient = r / new_r;
+        const quotient = r_val / new_r;
 
-        const temp_t = t;
-        t = new_t;
+        const temp_t = t_coef;
+        t_coef = new_t;
         new_t = temp_t - quotient * new_t;
 
-        const temp_r = r;
-        r = new_r;
+        const temp_r = r_val;
+        r_val = new_r;
         new_r = temp_r - quotient * new_r;
     }
 
-    if (r != 1) {
+    if (r_val != 1) {
         @compileError("modular inverse does not exist");
     }
 
-    if (t < 0) {
-        t += @intCast(b);
+    if (t_coef < 0) {
+        t_coef += @intCast(b);
     }
-    return @intCast(t);
+    return @intCast(t_coef);
 }

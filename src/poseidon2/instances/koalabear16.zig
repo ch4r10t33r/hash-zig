@@ -2,16 +2,16 @@ const std = @import("std");
 const poseidon2 = @import("../poseidon2.zig");
 const koalabear = @import("../fields/koalabear/montgomery.zig").MontgomeryField;
 
-const WIDTH = 16;
-const EXTERNAL_ROUNDS = 8;
-const INTERNAL_ROUNDS = 20;
+const width = 16;
+const external_rounds = 8;
+const internal_rounds = 20;
 // KoalaBear uses S-Box degree 3 (not 7 like BabyBear!)
-const SBOX_DEGREE = 3;
+const sbox_degree = 3;
 
 // Optimized Diagonal for KoalaBear16:
 // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
 // These are the actual field element values in KoalaBear field (mod 0x7f000001)
-const DIAGONAL = [WIDTH]u32{
+const diagonal = [width]u32{
     parseHex("7efffffe"), // -2
     parseHex("00000001"), // 1
     parseHex("00000002"), // 2
@@ -30,20 +30,20 @@ const DIAGONAL = [WIDTH]u32{
     parseHex("7fffff7f"), // -1/2^24
 };
 
-const Poseidon2KoalaBear = poseidon2.Poseidon2(
+const poseidon2_koalabear = poseidon2.Poseidon2(
     koalabear,
-    WIDTH,
-    INTERNAL_ROUNDS,
-    EXTERNAL_ROUNDS,
-    SBOX_DEGREE,
-    DIAGONAL,
-    EXTERNAL_RCS,
-    INTERNAL_RCS,
+    width,
+    internal_rounds,
+    external_rounds,
+    sbox_degree,
+    diagonal,
+    external_rcs,
+    internal_rcs,
 );
 
 // External round constants from plonky3 KoalaBear
 // Initial 4 rounds (first half of external rounds)
-const EXTERNAL_RCS = [EXTERNAL_ROUNDS][WIDTH]u32{
+const external_rcs = [external_rounds][width]u32{
     .{ // Round 0
         parseHex("7ee85058"), parseHex("1133f10b"), parseHex("12dc4a5e"), parseHex("7ec8fa25"),
         parseHex("196c9975"), parseHex("66399548"), parseHex("3e407156"), parseHex("67b5de45"),
@@ -95,7 +95,7 @@ const EXTERNAL_RCS = [EXTERNAL_ROUNDS][WIDTH]u32{
 };
 
 // Internal round constants from plonky3 KoalaBear (20 rounds)
-const INTERNAL_RCS = [INTERNAL_ROUNDS]u32{
+const internal_rcs = [internal_rounds]u32{
     parseHex("7d534856"), parseHex("5b5d07dd"), parseHex("5599ba48"), parseHex("77f1ce88"),
     parseHex("320baaeb"), parseHex("490cec7a"), parseHex("77e7d3df"), parseHex("224fd61b"),
     parseHex("4e0c1451"), parseHex("2edbe709"), parseHex("3b543710"), parseHex("65891c21"),
@@ -109,31 +109,30 @@ fn parseHex(s: []const u8) u32 {
 }
 
 // Export the main Poseidon2 type
-pub const Poseidon2 = Poseidon2KoalaBear;
+pub const poseidon2_type = poseidon2_koalabear;
 
 test "koalabear16 basic" {
     @setEvalBranchQuota(100_000);
-    
+
     // Test with zero input
-    const input_state = std.mem.zeroes([WIDTH]u32);
+    const input_state = std.mem.zeroes([width]u32);
     const output = testPermutation(input_state);
-    
+
     // Just verify it runs without crashing
     // We'll verify exact outputs against plonky3 later
     _ = output;
 }
 
-fn testPermutation(state: [WIDTH]u32) [WIDTH]u32 {
-    const F = Poseidon2KoalaBear.Field;
-    var mont_state: [WIDTH]F.MontFieldElem = undefined;
-    inline for (0..WIDTH) |j| {
-        F.toMontgomery(&mont_state[j], state[j]);
+fn testPermutation(state: [width]u32) [width]u32 {
+    const FieldMod = poseidon2_koalabear.Field;
+    var mont_state: [width]FieldMod.MontFieldElem = undefined;
+    inline for (0..width) |j| {
+        FieldMod.toMontgomery(&mont_state[j], state[j]);
     }
-    Poseidon2KoalaBear.permutation(&mont_state);
-    var ret: [WIDTH]u32 = undefined;
-    inline for (0..WIDTH) |j| {
-        ret[j] = F.toNormal(mont_state[j]);
+    poseidon2_koalabear.permutation(&mont_state);
+    var ret: [width]u32 = undefined;
+    inline for (0..width) |j| {
+        ret[j] = FieldMod.toNormal(mont_state[j]);
     }
     return ret;
 }
-
