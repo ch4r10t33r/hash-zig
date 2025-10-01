@@ -26,44 +26,43 @@ pub const MerkleTree = struct {
         self.hash.deinit();
     }
 
-    const MerkleNodeContext = struct {
+    const NodeWorkerCtx = struct {
         tree: *MerkleTree,
         current_level: [][]u8,
         next_level: [][]u8,
         current_len: usize,
         allocator: Allocator,
-        errors: []?anyerror,
-        mutex: std.Thread.Mutex,
+        index: std.atomic.Value(usize),
+        error_flag: std.atomic.Value(bool),
+        combined_len: usize,
     };
 
-    fn buildNodeRange(context: *MerkleNodeContext, start: usize, end: usize) void {
-        for (start..end) |i| {
+    fn nodeWorker(ctx: *NodeWorkerCtx) void {
+        // Allocate a per-thread scratch buffer once
+        var scratch = ctx.allocator.alloc(u8, ctx.combined_len) catch {
+            ctx.error_flag.store(true, .monotonic);
+            return;
+        };
+        defer ctx.allocator.free(scratch);
+
+        const total = ctx.next_level.len;
+        while (!ctx.error_flag.load(.monotonic)) {
+            const i = ctx.index.fetchAdd(1, .monotonic);
+            if (i >= total) break;
             const left_idx = i * 2;
             const right_idx = left_idx + 1;
-
-            if (right_idx < context.current_len) {
-                const left = context.current_level[left_idx];
-                const right = context.current_level[right_idx];
-                const combined = context.allocator.alloc(u8, left.len + right.len) catch |err| {
-                    context.mutex.lock();
-                    defer context.mutex.unlock();
-                    context.errors[i] = err;
-                    return;
-                };
-                defer context.allocator.free(combined);
-                @memcpy(combined[0..left.len], left);
-                @memcpy(combined[left.len..], right);
-                context.next_level[i] = context.tree.hash.hash(context.allocator, combined, i) catch |err| {
-                    context.mutex.lock();
-                    defer context.mutex.unlock();
-                    context.errors[i] = err;
+            if (right_idx < ctx.current_len) {
+                const left = ctx.current_level[left_idx];
+                const right = ctx.current_level[right_idx];
+                @memcpy(scratch[0..left.len], left);
+                @memcpy(scratch[left.len..][0..right.len], right);
+                ctx.next_level[i] = ctx.tree.hash.hash(ctx.allocator, scratch, i) catch {
+                    ctx.error_flag.store(true, .monotonic);
                     return;
                 };
             } else {
-                context.next_level[i] = context.allocator.dupe(u8, context.current_level[left_idx]) catch |err| {
-                    context.mutex.lock();
-                    defer context.mutex.unlock();
-                    context.errors[i] = err;
+                ctx.next_level[i] = ctx.allocator.dupe(u8, ctx.current_level[left_idx]) catch {
+                    ctx.error_flag.store(true, .monotonic);
                     return;
                 };
             }
@@ -114,51 +113,38 @@ pub const MerkleTree = struct {
                     }
                 }
             } else {
-                // Parallel node hashing
-                const errors = try allocator.alloc(?anyerror, next_len);
-                defer allocator.free(errors);
-                for (errors) |*err| err.* = null;
-
-                var context = MerkleNodeContext{
+                // Parallel node hashing with atomic index and thread-local scratch
+                const error_flag = std.atomic.Value(bool).init(false);
+                const idx = std.atomic.Value(usize).init(0);
+                const node_len = level[0].len; // hash output len
+                var ctx = NodeWorkerCtx{
                     .tree = self,
                     .current_level = level,
                     .next_level = next_level,
                     .current_len = current_len,
                     .allocator = allocator,
-                    .errors = errors,
-                    .mutex = std.Thread.Mutex{},
+                    .index = idx,
+                    .error_flag = error_flag,
+                    .combined_len = node_len * 2,
                 };
 
                 var threads = try allocator.alloc(std.Thread, num_threads);
                 defer allocator.free(threads);
-
-                const nodes_per_thread = next_len / num_threads;
-                const remainder = next_len % num_threads;
-
+                // Spawn workers
                 for (0..num_threads) |t| {
-                    const start = t * nodes_per_thread + @min(t, remainder);
-                    const end = start + nodes_per_thread + (if (t < remainder) @as(usize, 1) else 0);
-                    threads[t] = try std.Thread.spawn(.{}, buildNodeRange, .{ &context, start, end });
+                    threads[t] = try std.Thread.spawn(.{}, nodeWorker, .{ &ctx });
                 }
-
-                for (threads) |thread| {
-                    thread.join();
-                }
-
-                // Check for errors
-                for (errors, 0..) |err, i| {
-                    if (err) |e| {
-                        // Clean up next_level on error
-                        for (next_level) |node| {
-                            if (node.len > 0) allocator.free(node);
-                        }
-                        allocator.free(next_level);
-                        // Clean up current level
-                        for (level[0..current_len]) |node| allocator.free(node);
-                        allocator.free(level);
-                        std.debug.print("Error building node {d}: {}\n", .{ i, e });
-                        return e;
+                // Join
+                for (threads) |th| th.join();
+                if (ctx.error_flag.load(.monotonic)) {
+                    // Cleanup on error
+                    for (next_level) |node| {
+                        if (node.len > 0) allocator.free(node);
                     }
+                    allocator.free(next_level);
+                    for (level[0..current_len]) |node| allocator.free(node);
+                    allocator.free(level);
+                    return error.InternalError;
                 }
             }
 
