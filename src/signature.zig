@@ -63,41 +63,57 @@ pub const HashSignature = struct {
         }
     };
 
-    const LeafGenContext = struct {
-        hash_sig: *HashSignature,
-        secret_key: []const u8,
-        leaves: [][]const u8,
-        allocator: Allocator,
-        errors: []?anyerror,
+    const LeafJob = struct { start: usize, end: usize };
+
+    const LeafQueue = struct {
+        jobs: []LeafJob,
+        head: usize,
+        tail: usize,
         mutex: std.Thread.Mutex,
+
+        fn init(jobs: []LeafJob) LeafQueue {
+            return .{ .jobs = jobs, .head = 0, .tail = jobs.len, .mutex = .{} };
+        }
+
+        fn pop(self: *LeafQueue) ?LeafJob {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            if (self.head >= self.tail) return null;
+            const job = self.jobs[self.head];
+            self.head += 1;
+            return job;
+        }
     };
 
-    fn generateLeafRange(context: *LeafGenContext, start: usize, end: usize) void {
-        for (start..end) |i| {
-            const secret_key_part = context.hash_sig.wots.generatePrivateKey(
-                context.allocator,
-                context.secret_key,
-                i * 1000,
-            ) catch |err| {
-                context.mutex.lock();
-                defer context.mutex.unlock();
-                context.errors[i] = err;
-                return;
-            };
-            defer {
-                for (secret_key_part) |k| context.allocator.free(k);
-                context.allocator.free(secret_key_part);
-            }
+    const WorkerCtx = struct {
+        hash_sig: *HashSignature,
+        allocator: Allocator,
+        secret_key: []const u8,
+        leaves: [][]const u8,
+        queue: *LeafQueue,
+        error_flag: *std.atomic.Value(bool),
+    };
 
-            context.leaves[i] = context.hash_sig.wots.generatePublicKey(
-                context.allocator,
-                secret_key_part,
-            ) catch |err| {
-                context.mutex.lock();
-                defer context.mutex.unlock();
-                context.errors[i] = err;
-                return;
-            };
+    fn worker(ctx: *WorkerCtx) void {
+        while (!ctx.error_flag.load(.monotonic)) {
+            const maybe_job = ctx.queue.pop();
+            if (maybe_job == null) break;
+            const job = maybe_job.?;
+            for (job.start..job.end) |i| {
+                const sk_part = ctx.hash_sig.wots.generatePrivateKey(ctx.allocator, ctx.secret_key, i * 1000) catch {
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+                defer {
+                    for (sk_part) |k| ctx.allocator.free(k);
+                    ctx.allocator.free(sk_part);
+                }
+
+                ctx.leaves[i] = ctx.hash_sig.wots.generatePublicKey(ctx.allocator, sk_part) catch {
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+            }
         }
     }
 
@@ -137,45 +153,47 @@ pub const HashSignature = struct {
                 leaves[i] = try self.wots.generatePublicKey(allocator, secret_key_part);
             }
         } else {
-            // Parallel leaf generation
-            const errors = try allocator.alloc(?anyerror, num_leaves);
-            defer allocator.free(errors);
-            for (errors) |*err| err.* = null;
+            // Parallel leaf generation using a global queue and workers
+            var error_flag = std.atomic.Value(bool).init(false);
 
-            var context = LeafGenContext{
-                .hash_sig = self,
-                .secret_key = secret_key,
-                .leaves = leaves,
-                .allocator = allocator,
-                .errors = errors,
-                .mutex = std.Thread.Mutex{},
-            };
+            // Determine job size so each job is ~5-20ms. Start with 128 and adjust if tiny inputs.
+            const base_job = 128;
+            const job_size = if (num_leaves / num_threads < base_job) @max(32, num_leaves / (num_threads * 2)) else base_job;
+            const num_jobs = (num_leaves + job_size - 1) / job_size;
+
+            var jobs = try allocator.alloc(LeafJob, num_jobs);
+            defer allocator.free(jobs);
+            var j: usize = 0;
+            var i: usize = 0;
+            while (i < num_leaves) : (i += job_size) {
+                const end = @min(i + job_size, num_leaves);
+                jobs[j] = .{ .start = i, .end = end };
+                j += 1;
+            }
+
+            var queue = LeafQueue.init(jobs);
 
             var threads = try allocator.alloc(std.Thread, num_threads);
             defer allocator.free(threads);
 
-            const leaves_per_thread = num_leaves / num_threads;
-            const remainder = num_leaves % num_threads;
+            var ctxs = try allocator.alloc(WorkerCtx, num_threads);
+            defer allocator.free(ctxs);
 
-            // Spawn worker threads
             for (0..num_threads) |t| {
-                const start = t * leaves_per_thread + @min(t, remainder);
-                const end = start + leaves_per_thread + (if (t < remainder) @as(usize, 1) else 0);
-                threads[t] = try std.Thread.spawn(.{}, generateLeafRange, .{ &context, start, end });
+                ctxs[t] = .{
+                    .hash_sig = self,
+                    .allocator = allocator,
+                    .secret_key = secret_key,
+                    .leaves = leaves,
+                    .queue = &queue,
+                    .error_flag = &error_flag,
+                };
+                threads[t] = try std.Thread.spawn(.{}, worker, .{&ctxs[t]});
             }
 
-            // Wait for all threads to complete
-            for (threads) |thread| {
-                thread.join();
-            }
+            for (threads) |th| th.join();
 
-            // Check for errors
-            for (errors, 0..) |err, i| {
-                if (err) |e| {
-                    std.debug.print("Error generating leaf {d}: {}\n", .{ i, e });
-                    return e;
-                }
-            }
+            if (error_flag.load(.monotonic)) return error.InternalError;
         }
 
         const public_key = try self.tree.buildTree(allocator, leaves);
@@ -268,7 +286,7 @@ pub const HashSignature = struct {
         // Step 2: Use authentication path to compute the Merkle root
         var leaf_idx = signature.index;
 
-        for (signature.auth_path, 0..) |sibling, level| {
+        for (signature.auth_path) |sibling| {
             // Determine if current node is left or right child
             const is_left = (leaf_idx % 2 == 0);
 
@@ -285,13 +303,14 @@ pub const HashSignature = struct {
                 @memcpy(combined_nodes[sibling.len..], current_hash);
             }
 
-            // Hash to get parent node
-            const parent = try self.wots.hash.hash(allocator, combined_nodes, level);
+            // Hash to get parent node (use parent position as tweak to match tree build)
+            const parent_index = leaf_idx / 2;
+            const parent = try self.wots.hash.hash(allocator, combined_nodes, parent_index);
             allocator.free(current_hash);
             current_hash = parent;
 
             // Move to parent index
-            leaf_idx = leaf_idx / 2;
+            leaf_idx = parent_index;
         }
 
         // Step 3: Compare computed root with provided public_key
