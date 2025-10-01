@@ -4,12 +4,12 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** hash functions with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with parameters inspired by the [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) project.
+A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with parameters inspired by the [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) project. Poseidon2 here targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants), optimized for throughput.
 
 ## 🌟 Features
 
 - **Multiple Hash Functions**: Support for both Poseidon2 (ZK-optimized) and SHA3-256 (NIST standard)
-- **Poseidon2 Hash Function**: Efficient arithmetic hash optimized for zero-knowledge proof systems
+- **Poseidon2 Hash Function**: Efficient arithmetic hash (KoalaBear 31‑bit field, Montgomery form), compatible with plonky3 constants
 - **SHA3 Hash Function**: NIST-standardized cryptographic hash (SHA3-256)
 - **128-bit Security**: Focused on a single, well-tested security level
 - **Flexible Key Lifetimes**: Support from 2^10 to 2^32 signatures per keypair
@@ -17,7 +17,7 @@ A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA
 - **Binary Encoding**: Incomparable binary encoding scheme
 - **Pure Zig**: Minimal dependencies, fully type-safe
 - **Well-Tested**: Comprehensive unit and integration tests
-- **Parallel Key Generation**: Multi-threaded implementation (~3x speedup on 8-core M2)
+- **Parallel Key Generation**: Multi-threaded implementation with atomic work queues (~3x speedup on 8-core M2)
 
 ## 📋 Table of Contents
 
@@ -249,8 +249,11 @@ hash-zig/
 │   ├── root.zig              # Main module entry point
 │   ├── params.zig            # Configuration and parameters
 │   ├── poseidon2/
-│   │   ├── field.zig         # BN254 field arithmetic
-│   │   └── hash.zig          # Poseidon2 implementation
+│   │   ├── fields/
+│   │   │   ├── generic_montgomery.zig   # Generic 31-bit Montgomery arithmetic
+│   │   │   └── koalabear/montgomery.zig # KoalaBear field instance
+│   │   ├── instances/koalabear16.zig    # Width-16 Poseidon2 instance (plonky3 constants)
+│   │   └── poseidon2.zig                # Core Poseidon2 permutation (Montgomery)
 │   ├── sha3.zig              # SHA3 hash implementation
 │   ├── encoding.zig          # Incomparable encodings
 │   ├── tweakable_hash.zig    # Domain-separated hashing
@@ -266,17 +269,17 @@ hash-zig/
 
 ### Key Components
 
-- **Poseidon2**: Arithmetic hash over BN254 scalar field, optimized for ZK proofs
+- **Poseidon2**: Arithmetic hash over KoalaBear (31‑bit) with Montgomery reduction; constants match plonky3
 - **SHA3-256**: NIST-standardized Keccak-based hash for general-purpose cryptography
 - **Winternitz OTS**: One-time signature with 64 chains of length 8 (w=8)
 - **Merkle Tree**: Binary tree implementation for managing OTS public keys
 - **Binary Encoding**: Incomparable binary encoding for 128-bit security
-- **Parallel Key Generation**: Multi-threaded implementation for faster key generation
-  - Parallelizes WOTS leaf generation across available CPU cores
-  - Parallelizes WOTS chain hashing within each leaf
-  - Parallelizes Merkle tree level construction
-  - Automatic fallback to sequential mode for small workloads
-  - ~3x speedup on 8-core M2 Mac
+- **Parallel Key Generation**: Multi-threaded with atomic job queues
+  - Work-queue model for WOTS leaf generation (no per-thread fixed partitions)
+  - Per-thread scratch buffers in hot loops (zero per-node allocations)
+  - Parallel Merkle construction using the same atomic index pattern
+  - Adaptive job sizing and sequential fallback for small workloads
+  - ~3x speedup on 8-core M2 Mac (hardware-dependent)
 
 ## 📊 Performance
 
@@ -365,6 +368,8 @@ Key generation scales O(n) with number of signatures. Performance will vary base
    - **SHA3** for NIST compliance and interoperability
 3. Batch key generation offline when possible
 4. Always persist signature state to prevent index reuse
+5. For maximum throughput use ReleaseFast, LTO, and run on CPUs with many cores
+6. Benchmark large lifetimes (≥ 2^16) to leverage parallel scheduling best
 
 ## 🔒 Security Considerations
 
@@ -454,6 +459,8 @@ zig build test
 ```bash
 zig build lint
 ```
+
+Note: The linter (zlinter) is a dev-time tool for this repository. Consumers of `hash-zig` do not need to depend on zlinter unless they want to run our lint target in their own CI.
 
 ### Build Library
 
