@@ -36,11 +36,11 @@ jobs:
         id: current_benchmark
         run: |
           echo "Running performance benchmark for current version..."
-          if zig build benchmark -Doptimize=ReleaseFast; then
-            ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
+          if zig build simd-benchmark -Doptimize=ReleaseFast; then
+            ./zig-out/bin/hash-zig-simd-benchmark > current_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
-            echo "No 'benchmark' build step; compiling scripts/benchmark.zig directly"
-            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig -obenchmark_current
+            echo "No 'simd-benchmark' build step; compiling scripts/benchmark.zig directly"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark_current
             ./benchmark_current > current_results.txt 2>&1
           else
             echo "No benchmark target or script found; skipping current metrics"
@@ -98,11 +98,11 @@ jobs:
         id: base_benchmark
         run: |
           echo "Running performance benchmark for base version..."
-          if zig build benchmark -Doptimize=ReleaseFast; then
-            ./zig-out/bin/hash-zig-benchmark > base_results.txt 2>&1
+          if zig build simd-benchmark -Doptimize=ReleaseFast; then
+            ./zig-out/bin/hash-zig-simd-benchmark > base_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
-            echo "No 'benchmark' build step on base; compiling scripts/benchmark.zig directly"
-            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig -obenchmark_base
+            echo "No 'simd-benchmark' build step on base; compiling scripts/benchmark.zig directly"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark_base
             ./benchmark_base > base_results.txt 2>&1
           else
             echo "No benchmark target or script found on base; skipping base metrics"
