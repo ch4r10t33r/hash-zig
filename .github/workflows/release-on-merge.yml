@@ -1,0 +1,116 @@
+name: Release on Merge (Semantic Versioning)
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  semver-release:
+    name: Semantic Version Bump and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Determine previous tag
+        id: prev
+        run: |
+          set -euo pipefail
+          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+            PREV_TAG=$(git describe --tags --abbrev=0)
+          else
+            PREV_TAG="0.0.0"
+          fi
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREV_TAG"
+
+      - name: Compute next version (semantic)
+        id: next
+        run: |
+          set -euo pipefail
+          PREV_TAG="${{ steps.prev.outputs.prev_tag }}"
+          RANGE="${PREV_TAG}..HEAD"
+          if [ "$PREV_TAG" = "0.0.0" ]; then RANGE=""; fi
+
+          COMMITS=$(git log --format=%s ${RANGE})
+
+          LEVEL="patch"
+          if echo "$COMMITS" | grep -E "^feat!|BREAKING CHANGE" >/dev/null; then
+            LEVEL="major"
+          elif echo "$COMMITS" | grep -E "^feat\b" >/dev/null; then
+            LEVEL="minor"
+          elif echo "$COMMITS" | grep -E "^fix\b|^perf\b|^refactor\b|^chore\b|^build\b|^ci\b|^docs\b|^style\b|^test\b" >/dev/null; then
+            LEVEL="patch"
+          fi
+
+          # Allow manual override via commit footer 'release: major|minor|patch'
+          if echo "$COMMITS" | grep -E "release: (major|minor|patch)" >/dev/null; then
+            LEVEL=$(echo "$COMMITS" | grep -Eo "release: (major|minor|patch)" | tail -n1 | awk '{print $2}')
+          fi
+
+          MAJOR=$(echo "$PREV_TAG" | cut -d. -f1)
+          MINOR=$(echo "$PREV_TAG" | cut -d. -f2)
+          PATCH=$(echo "$PREV_TAG" | cut -d. -f3)
+
+          case "$LEVEL" in
+            major)
+              MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor)
+              MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch)
+              PATCH=$((PATCH+1)) ;;
+          esac
+
+          NEXT_TAG="${MAJOR}.${MINOR}.${PATCH}"
+          echo "level=$LEVEL" >> $GITHUB_OUTPUT
+          echo "next_tag=$NEXT_TAG" >> $GITHUB_OUTPUT
+          echo "Next version: $NEXT_TAG ($LEVEL)"
+
+      - name: Update build.zig.zon version
+        id: bump
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ steps.next.outputs.next_tag }}"
+          sed -E -i "s/(\\.version = \"[0-9]+\\.[0-9]+\\.[0-9]+\")/\.version = \"${NEXT_TAG}\"/" build.zig.zon
+          echo "Updated build.zig.zon to version ${NEXT_TAG}"
+          git diff -- build.zig.zon || true
+
+      - name: Commit and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ steps.next.outputs.next_tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build.zig.zon
+          git commit -m "chore(release): v${NEXT_TAG}" || echo "No changes to commit"
+          git tag -a "${NEXT_TAG}" -m "Release ${NEXT_TAG}" || echo "Tag exists"
+          git push --follow-tags origin HEAD
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.next.outputs.next_tag }}
+          name: hash-zig v${{ steps.next.outputs.next_tag }}
+          body: |
+            Automated release for hash-zig.
+            - Version: ${{ steps.next.outputs.next_tag }}
+            - Bump level: ${{ steps.next.outputs.level }}
+          draft: false
+          prerelease: false
+
+
