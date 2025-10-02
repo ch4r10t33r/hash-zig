@@ -36,79 +36,8 @@ jobs:
         id: current_benchmark
         run: |
           echo "Running performance benchmark for current version..."
-          
-          # Create a simple benchmark script
-          cat > benchmark_current.zig << 'EOF'
-          const std = @import("std");
-          const hash_zig = @import("hash-zig");
-          
-          pub fn main() !void {
-              var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-              defer _ = gpa.deinit();
-              const allocator = gpa.allocator();
-              
-              std.debug.print("Performance Benchmark - Current Version\n", .{});
-              std.debug.print("=====================================\n", .{});
-              
-              // Test different lifetimes
-              const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.KeyLifetime }{
-                  .{ .name = "2^10", .lifetime = .lifetime_2_10 },
-                  .{ .name = "2^16", .lifetime = .lifetime_2_16 },
-              };
-              
-              for (lifetimes) |config| {
-                  std.debug.print("\nTesting lifetime: {s}\n", .{config.name});
-                  std.debug.print("-------------------\n", .{});
-                  
-                  const params = hash_zig.Parameters.init(config.lifetime);
-                  var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
-                  defer sig_scheme.deinit();
-                  
-                  const seed: [32]u8 = .{42} ** 32;
-                  
-                  // Key generation benchmark
-                  const keygen_start = std.time.nanoTimestamp();
-                  var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
-                  const keygen_end = std.time.nanoTimestamp();
-                  defer keypair.deinit(allocator);
-                  
-                  const keygen_duration_ns = keygen_end - keygen_start;
-                  const keygen_duration_sec = @as(f64, @floatFromInt(keygen_duration_ns)) / 1_000_000_000.0;
-                  
-                  // Sign benchmark
-                  const message = "Performance test message";
-                  const sign_start = std.time.nanoTimestamp();
-                  var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
-                  const sign_end = std.time.nanoTimestamp();
-                  defer signature.deinit(allocator);
-                  
-                  const sign_duration_ns = sign_end - sign_start;
-                  const sign_duration_sec = @as(f64, @floatFromInt(sign_duration_ns)) / 1_000_000_000.0;
-                  
-                  // Verify benchmark
-                  const verify_start = std.time.nanoTimestamp();
-                  const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
-                  const verify_end = std.time.nanoTimestamp();
-                  
-                  const verify_duration_ns = verify_end - verify_start;
-                  const verify_duration_sec = @as(f64, @floatFromInt(verify_duration_ns)) / 1_000_000_000.0;
-                  
-                  std.debug.print("Key Generation: {d:.3}s\n", .{keygen_duration_sec});
-                  std.debug.print("Sign: {d:.3}ms\n", .{sign_duration_sec * 1000});
-                  std.debug.print("Verify: {d:.3}ms\n", .{verify_duration_sec * 1000});
-                  std.debug.print("Valid: {}\n", .{is_valid});
-                  
-                  // Output results in a format that can be captured
-                  std.debug.print("BENCHMARK_RESULT: {s}:keygen:{d:.6}\n", .{ config.name, keygen_duration_sec });
-                  std.debug.print("BENCHMARK_RESULT: {s}:sign:{d:.6}\n", .{ config.name, sign_duration_sec });
-                  std.debug.print("BENCHMARK_RESULT: {s}:verify:{d:.6}\n", .{ config.name, verify_duration_sec });
-              }
-          }
-          EOF
-          
-          # Compile and run benchmark
-          zig build-exe benchmark_current.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig
-          ./benchmark_current > current_results.txt 2>&1
+          zig build benchmark -Doptimize=ReleaseFast
+          ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
           
           # Extract key metrics
           KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" current_results.txt | cut -d: -f3)
@@ -161,79 +90,8 @@ jobs:
         id: base_benchmark
         run: |
           echo "Running performance benchmark for base version..."
-          
-          # Create the same benchmark script
-          cat > benchmark_base.zig << 'EOF'
-          const std = @import("std");
-          const hash_zig = @import("hash-zig");
-          
-          pub fn main() !void {
-              var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-              defer _ = gpa.deinit();
-              const allocator = gpa.allocator();
-              
-              std.debug.print("Performance Benchmark - Base Version\n", .{});
-              std.debug.print("==================================\n", .{});
-              
-              // Test different lifetimes
-              const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.KeyLifetime }{
-                  .{ .name = "2^10", .lifetime = .lifetime_2_10 },
-                  .{ .name = "2^16", .lifetime = .lifetime_2_16 },
-              };
-              
-              for (lifetimes) |config| {
-                  std.debug.print("\nTesting lifetime: {s}\n", .{config.name});
-                  std.debug.print("-------------------\n", .{});
-                  
-                  const params = hash_zig.Parameters.init(config.lifetime);
-                  var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
-                  defer sig_scheme.deinit();
-                  
-                  const seed: [32]u8 = .{42} ** 32;
-                  
-                  // Key generation benchmark
-                  const keygen_start = std.time.nanoTimestamp();
-                  var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
-                  const keygen_end = std.time.nanoTimestamp();
-                  defer keypair.deinit(allocator);
-                  
-                  const keygen_duration_ns = keygen_end - keygen_start;
-                  const keygen_duration_sec = @as(f64, @floatFromInt(keygen_duration_ns)) / 1_000_000_000.0;
-                  
-                  // Sign benchmark
-                  const message = "Performance test message";
-                  const sign_start = std.time.nanoTimestamp();
-                  var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
-                  const sign_end = std.time.nanoTimestamp();
-                  defer signature.deinit(allocator);
-                  
-                  const sign_duration_ns = sign_end - sign_start;
-                  const sign_duration_sec = @as(f64, @floatFromInt(sign_duration_ns)) / 1_000_000_000.0;
-                  
-                  // Verify benchmark
-                  const verify_start = std.time.nanoTimestamp();
-                  const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
-                  const verify_end = std.time.nanoTimestamp();
-                  
-                  const verify_duration_ns = verify_end - verify_start;
-                  const verify_duration_sec = @as(f64, @floatFromInt(verify_duration_ns)) / 1_000_000_000.0;
-                  
-                  std.debug.print("Key Generation: {d:.3}s\n", .{keygen_duration_sec});
-                  std.debug.print("Sign: {d:.3}ms\n", .{sign_duration_sec * 1000});
-                  std.debug.print("Verify: {d:.3}ms\n", .{verify_duration_sec * 1000});
-                  std.debug.print("Valid: {}\n", .{is_valid});
-                  
-                  // Output results in a format that can be captured
-                  std.debug.print("BENCHMARK_RESULT: {s}:keygen:{d:.6}\n", .{ config.name, keygen_duration_sec });
-                  std.debug.print("BENCHMARK_RESULT: {s}:sign:{d:.6}\n", .{ config.name, sign_duration_sec });
-                  std.debug.print("BENCHMARK_RESULT: {s}:verify:{d:.6}\n", .{ config.name, verify_duration_sec });
-              }
-          }
-          EOF
-          
-          # Compile and run benchmark
-          zig build-exe benchmark_base.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig
-          ./benchmark_base > base_results.txt 2>&1
+          zig build benchmark -Doptimize=ReleaseFast
+          ./zig-out/bin/hash-zig-benchmark > base_results.txt 2>&1
           
           # Extract key metrics
           KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" base_results.txt | cut -d: -f3)
