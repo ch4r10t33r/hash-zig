@@ -39,7 +39,8 @@ pub fn main() !void {
         const keygen_duration_sec = @as(f64, @floatFromInt(keygen_duration_ns)) / 1_000_000_000.0;
 
         // Calculate performance metrics
-        const num_signatures = @as(usize, 1) << @intCast(@intFromEnum(config.lifetime));
+        const tree_height: u32 = config.lifetime.treeHeight();
+        const num_signatures = @as(usize, 1) << @intCast(tree_height);
         const signatures_per_sec = @as(f64, @floatFromInt(num_signatures)) / keygen_duration_sec;
         const time_per_signature_ms = (keygen_duration_sec * 1000.0) / @as(f64, @floatFromInt(num_signatures));
 
@@ -68,7 +69,7 @@ pub fn main() !void {
         // Display detailed key generation results
         std.debug.print("\n📊 KEY GENERATION RESULTS:\n", .{});
         std.debug.print("  Duration: {d:.3}s {s}\n", .{ keygen_duration_sec, performance_status });
-        std.debug.print("  Signatures: {d} (2^{d})\n", .{ num_signatures, @intFromEnum(config.lifetime) });
+        std.debug.print("  Signatures: {d} (2^{d})\n", .{ num_signatures, tree_height });
         std.debug.print("  Throughput: {d:.1} signatures/sec\n", .{signatures_per_sec});
         std.debug.print("  Time per signature: {d:.3}ms\n", .{time_per_signature_ms});
         std.debug.print("  Expected: ~{d:.1}s (ratio: {d:.2f}x)\n", .{ config.expected_time_sec, performance_ratio });
