@@ -18,7 +18,7 @@ pub const koala_bear_simd = struct {
     // Field constants
     const modulus: u32 = 0x7f000001; // 2^31 - 2^24 + 1
     const mont_r: u64 = 1 << 32;
-    const r_square_mod_modulus: u64 = @intCast((@as(u128, mont_r) * @as(u128, mont_r)) % @as(u128, modulus));
+    const r_square_mod_modulus: u64 = 0x3f800001; // R^2 mod p for p = 0x7f000001
     const modulus_prime: u32 = 0x81000001; // -modulus^-1 mod 2^32
 
     // SIMD-optimized Montgomery reduction
