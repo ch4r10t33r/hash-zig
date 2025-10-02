@@ -1,0 +1,215 @@
+name: Performance Benchmark
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  workflow_dispatch:
+
+jobs:
+  performance-benchmark:
+    name: Performance Benchmark
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout current PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      
+      - name: Verify Zig installation
+        run: zig version
+      
+      - name: Build current version
+        run: |
+          zig build -Doptimize=ReleaseFast
+          echo "Current version built successfully"
+      
+      - name: Benchmark current version
+        id: current_benchmark
+        run: |
+          echo "Running performance benchmark for current version..."
+          if zig build benchmark -Doptimize=ReleaseFast; then
+            ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
+          elif [ -f scripts/benchmark.zig ]; then
+            echo "No 'benchmark' build step; compiling scripts/benchmark.zig directly"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig -obenchmark_current
+            ./benchmark_current > current_results.txt 2>&1
+          else
+            echo "No benchmark target or script found; skipping current metrics"
+            : > current_results.txt
+          fi
+          
+          # Extract key metrics
+          KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" current_results.txt | cut -d: -f3)
+          KEYGEN_2_16=$(grep "BENCHMARK_RESULT: 2^16:keygen:" current_results.txt | cut -d: -f3)
+          SIGN_2_10=$(grep "BENCHMARK_RESULT: 2^10:sign:" current_results.txt | cut -d: -f3)
+          SIGN_2_16=$(grep "BENCHMARK_RESULT: 2^16:sign:" current_results.txt | cut -d: -f3)
+          VERIFY_2_10=$(grep "BENCHMARK_RESULT: 2^10:verify:" current_results.txt | cut -d: -f3)
+          VERIFY_2_16=$(grep "BENCHMARK_RESULT: 2^16:verify:" current_results.txt | cut -d: -f3)
+          THROUGHPUT_2_10=$(grep "BENCHMARK_RESULT: 2^10:throughput:" current_results.txt | cut -d: -f3)
+          THROUGHPUT_2_16=$(grep "BENCHMARK_RESULT: 2^16:throughput:" current_results.txt | cut -d: -f3)
+          PERF_RATIO_2_10=$(grep "BENCHMARK_RESULT: 2^10:performance_ratio:" current_results.txt | cut -d: -f3)
+          PERF_RATIO_2_16=$(grep "BENCHMARK_RESULT: 2^16:performance_ratio:" current_results.txt | cut -d: -f3)
+          
+          echo "keygen_2_10=$KEYGEN_2_10" >> $GITHUB_OUTPUT
+          echo "keygen_2_16=$KEYGEN_2_16" >> $GITHUB_OUTPUT
+          echo "sign_2_10=$SIGN_2_10" >> $GITHUB_OUTPUT
+          echo "sign_2_16=$SIGN_2_16" >> $GITHUB_OUTPUT
+          echo "verify_2_10=$VERIFY_2_10" >> $GITHUB_OUTPUT
+          echo "verify_2_16=$VERIFY_2_16" >> $GITHUB_OUTPUT
+          echo "throughput_2_10=$THROUGHPUT_2_10" >> $GITHUB_OUTPUT
+          echo "throughput_2_16=$THROUGHPUT_2_16" >> $GITHUB_OUTPUT
+          echo "perf_ratio_2_10=$PERF_RATIO_2_10" >> $GITHUB_OUTPUT
+          echo "perf_ratio_2_16=$PERF_RATIO_2_16" >> $GITHUB_OUTPUT
+          
+          # Display results
+          cat current_results.txt
+      
+      - name: Get base commit
+        id: base_commit
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA=$(git rev-parse HEAD~1)
+          fi
+          echo "base_sha=$BASE_SHA" >> $GITHUB_OUTPUT
+          echo "Base commit: $BASE_SHA"
+      
+      - name: Checkout base version
+        run: |
+          git checkout ${{ steps.base_commit.outputs.base_sha }}
+          echo "Checked out base version"
+      
+      - name: Build base version
+        run: |
+          zig build -Doptimize=ReleaseFast
+          echo "Base version built successfully"
+      
+      - name: Benchmark base version
+        id: base_benchmark
+        run: |
+          echo "Running performance benchmark for base version..."
+          if zig build benchmark -Doptimize=ReleaseFast; then
+            ./zig-out/bin/hash-zig-benchmark > base_results.txt 2>&1
+          elif [ -f scripts/benchmark.zig ]; then
+            echo "No 'benchmark' build step on base; compiling scripts/benchmark.zig directly"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig -obenchmark_base
+            ./benchmark_base > base_results.txt 2>&1
+          else
+            echo "No benchmark target or script found on base; skipping base metrics"
+            : > base_results.txt
+          fi
+          
+          # Extract key metrics
+          KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" base_results.txt | cut -d: -f3)
+          KEYGEN_2_16=$(grep "BENCHMARK_RESULT: 2^16:keygen:" base_results.txt | cut -d: -f3)
+          SIGN_2_10=$(grep "BENCHMARK_RESULT: 2^10:sign:" base_results.txt | cut -d: -f3)
+          SIGN_2_16=$(grep "BENCHMARK_RESULT: 2^16:sign:" base_results.txt | cut -d: -f3)
+          VERIFY_2_10=$(grep "BENCHMARK_RESULT: 2^10:verify:" base_results.txt | cut -d: -f3)
+          VERIFY_2_16=$(grep "BENCHMARK_RESULT: 2^16:verify:" base_results.txt | cut -d: -f3)
+          THROUGHPUT_2_10=$(grep "BENCHMARK_RESULT: 2^10:throughput:" base_results.txt | cut -d: -f3)
+          THROUGHPUT_2_16=$(grep "BENCHMARK_RESULT: 2^16:throughput:" base_results.txt | cut -d: -f3)
+          PERF_RATIO_2_10=$(grep "BENCHMARK_RESULT: 2^10:performance_ratio:" base_results.txt | cut -d: -f3)
+          PERF_RATIO_2_16=$(grep "BENCHMARK_RESULT: 2^16:performance_ratio:" base_results.txt | cut -d: -f3)
+          
+          echo "keygen_2_10=$KEYGEN_2_10" >> $GITHUB_OUTPUT
+          echo "keygen_2_16=$KEYGEN_2_16" >> $GITHUB_OUTPUT
+          echo "sign_2_10=$SIGN_2_10" >> $GITHUB_OUTPUT
+          echo "sign_2_16=$SIGN_2_16" >> $GITHUB_OUTPUT
+          echo "verify_2_10=$VERIFY_2_10" >> $GITHUB_OUTPUT
+          echo "verify_2_16=$VERIFY_2_16" >> $GITHUB_OUTPUT
+          echo "throughput_2_10=$THROUGHPUT_2_10" >> $GITHUB_OUTPUT
+          echo "throughput_2_16=$THROUGHPUT_2_16" >> $GITHUB_OUTPUT
+          echo "perf_ratio_2_10=$PERF_RATIO_2_10" >> $GITHUB_OUTPUT
+          echo "perf_ratio_2_16=$PERF_RATIO_2_16" >> $GITHUB_OUTPUT
+          
+          # Display results
+          cat base_results.txt
+      
+      - name: Calculate performance improvements
+        id: performance_analysis
+        run: |
+          echo "Calculating performance improvements..."
+          
+          # Function to calculate percentage improvement
+          calc_improvement() {
+            local current=$1
+            local base=$2
+            local metric=$3
+            
+            if [ -n "$current" ] && [ -n "$base" ] && [ "$base" != "0" ]; then
+              improvement=$(echo "scale=2; (($base - $current) / $base) * 100" | bc -l)
+              echo "✅ $metric: $improvement% improvement (${base}s → ${current}s)"
+            else
+              echo "❌ $metric: Unable to calculate (current=$current, base=$base)"
+            fi
+          }
+          
+          echo "## 🚀 Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Key Generation Performance (Focus: 2^10)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Lifetime | Base Version | Current Version | Improvement | Throughput (sig/s) |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|-----------------|-------------|-------------------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Calculate improvements
+          if [ -n "${{ steps.current_benchmark.outputs.keygen_2_10 }}" ] && [ -n "${{ steps.base_benchmark.outputs.keygen_2_10 }}" ]; then
+            improvement_2_10=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.keygen_2_10 }} - ${{ steps.current_benchmark.outputs.keygen_2_10 }}) / ${{ steps.base_benchmark.outputs.keygen_2_10 }}) * 100" | bc -l)
+            throughput_2_10="${{ steps.current_benchmark.outputs.throughput_2_10 }}"
+            echo "| 2^10 | ${{ steps.base_benchmark.outputs.keygen_2_10 }}s | ${{ steps.current_benchmark.outputs.keygen_2_10 }}s | ${improvement_2_10}% | ${throughput_2_10} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -n "${{ steps.current_benchmark.outputs.keygen_2_16 }}" ] && [ -n "${{ steps.base_benchmark.outputs.keygen_2_16 }}" ]; then
+            improvement_2_16=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.keygen_2_16 }} - ${{ steps.current_benchmark.outputs.keygen_2_16 }}) / ${{ steps.base_benchmark.outputs.keygen_2_16 }}) * 100" | bc -l)
+            throughput_2_16="${{ steps.current_benchmark.outputs.throughput_2_16 }}"
+            echo "| 2^16 | ${{ steps.base_benchmark.outputs.keygen_2_16 }}s | ${{ steps.current_benchmark.outputs.keygen_2_16 }}s | ${improvement_2_16}% | ${throughput_2_16} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Sign/Verify Performance" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Operation | Lifetime | Base Version | Current Version | Improvement |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|----------|--------------|-----------------|-------------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ steps.current_benchmark.outputs.sign_2_10 }}" ] && [ -n "${{ steps.base_benchmark.outputs.sign_2_10 }}" ]; then
+            sign_improvement_2_10=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.sign_2_10 }} - ${{ steps.current_benchmark.outputs.sign_2_10 }}) / ${{ steps.base_benchmark.outputs.sign_2_10 }}) * 100" | bc -l)
+            echo "| Sign | 2^10 | ${{ steps.base_benchmark.outputs.sign_2_10 }}s | ${{ steps.current_benchmark.outputs.sign_2_10 }}s | ${sign_improvement_2_10}% |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -n "${{ steps.current_benchmark.outputs.verify_2_10 }}" ] && [ -n "${{ steps.base_benchmark.outputs.verify_2_10 }}" ]; then
+            verify_improvement_2_10=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.verify_2_10 }} - ${{ steps.current_benchmark.outputs.verify_2_10 }}) / ${{ steps.base_benchmark.outputs.verify_2_10 }}) * 100" | bc -l)
+            echo "| Verify | 2^10 | ${{ steps.base_benchmark.outputs.verify_2_10 }}s | ${{ steps.current_benchmark.outputs.verify_2_10 }}s | ${verify_improvement_2_10}% |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This benchmark compares the current PR against the base version to measure performance improvements." >> $GITHUB_STEP_SUMMARY
+          echo "Positive percentages indicate performance improvements (faster execution)." >> $GITHUB_STEP_SUMMARY
+          
+          # Console output
+          echo "Performance Analysis Complete!"
+          echo "=============================="
+          calc_improvement "${{ steps.current_benchmark.outputs.keygen_2_10 }}" "${{ steps.base_benchmark.outputs.keygen_2_10 }}" "Key Generation (2^10)"
+          calc_improvement "${{ steps.current_benchmark.outputs.keygen_2_16 }}" "${{ steps.base_benchmark.outputs.keygen_2_16 }}" "Key Generation (2^16)"
+          calc_improvement "${{ steps.current_benchmark.outputs.sign_2_10 }}" "${{ steps.base_benchmark.outputs.sign_2_10 }}" "Sign (2^10)"
+          calc_improvement "${{ steps.current_benchmark.outputs.verify_2_10 }}" "${{ steps.base_benchmark.outputs.verify_2_10 }}" "Verify (2^10)"
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            current_results.txt
+            base_results.txt
+          retention-days: 30

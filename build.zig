@@ -83,6 +83,24 @@ pub fn build(b: *std.Build) void {
     const profile_step = b.step("profile", "Run profiling analysis");
     profile_step.dependOn(&run_profiling.step);
 
+    // Benchmark executable
+    const benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    benchmark_module.addImport("hash-zig", hash_zig_module);
+
+    const benchmark = b.addExecutable(.{
+        .name = "hash-zig-benchmark",
+        .root_module = benchmark_module,
+    });
+    b.installArtifact(benchmark);
+
+    const run_benchmark = b.addRunArtifact(benchmark);
+    const benchmark_step = b.step("benchmark", "Run performance benchmark");
+    benchmark_step.dependOn(&run_benchmark.step);
+
     // Optimized benchmark executable (commented out for now)
     // const optimized_benchmark_module = b.createModule(.{
     //     .root_source_file = b.path("examples/optimized_benchmark.zig"),
