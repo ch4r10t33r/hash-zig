@@ -57,7 +57,7 @@ pub const OptimizedWinternitzOTS = struct {
 
         // Pre-allocate all public parts in a single allocation
         var public_parts = try arena.alloc([]u8, private_key.len);
-        
+
         // Initialize to empty slices
         for (public_parts) |*part| {
             part.* = &[_]u8{};
@@ -66,7 +66,7 @@ pub const OptimizedWinternitzOTS = struct {
         // Generate chains in parallel with work-stealing
         const num_threads = std.Thread.getCpuCount() catch 4;
         const num_chains = private_key.len;
-        
+
         if (num_chains < 64 or num_threads <= 1) {
             // Sequential for small workloads
             for (0..num_chains) |i| {
@@ -80,10 +80,10 @@ pub const OptimizedWinternitzOTS = struct {
         // Concatenate all public parts
         const total_len = num_chains * hash_output_len;
         const result = try arena.alloc(u8, total_len);
-        
+
         var offset: usize = 0;
         for (public_parts) |part| {
-            @memcpy(result[offset..offset + part.len], part);
+            @memcpy(result[offset .. offset + part.len], part);
             offset += part.len;
         }
 
@@ -93,7 +93,7 @@ pub const OptimizedWinternitzOTS = struct {
     /// Generate a single hash chain with minimal allocations
     fn generateChain(self: *OptimizedWinternitzOTS, arena: Allocator, start_value: []u8, chain_len: u32, chain_index: usize) ![]u8 {
         var current = try arena.dupe(u8, start_value);
-        
+
         for (0..chain_len) |_| {
             const next = try self.hash.hash(arena, current, chain_index);
             arena.free(current);
@@ -103,24 +103,23 @@ pub const OptimizedWinternitzOTS = struct {
         return current;
     }
 
+    const WorkerCtx = struct {
+        wots: *OptimizedWinternitzOTS,
+        public_parts: [][]u8,
+        private_key: [][]u8,
+        chain_len: u32,
+        work_queue: *std.atomic.Value(usize),
+        error_flag: *std.atomic.Value(bool),
+    };
+
     /// Parallel chain generation with work-stealing
     fn generateChainsParallel(self: *OptimizedWinternitzOTS, public_parts: [][]u8, private_key: [][]u8, chain_len: u32, num_threads: usize) !void {
-        const num_chains = private_key.len;
+        _ = private_key.len;
         const work_queue = std.atomic.Value(usize).init(0);
         const error_flag = std.atomic.Value(bool).init(false);
-        
+
         var threads = try std.heap.page_allocator.alloc(std.Thread, num_threads);
         defer std.heap.page_allocator.free(threads);
-
-        const WorkerCtx = struct {
-            wots: *OptimizedWinternitzOTS,
-            public_parts: [][]u8,
-            private_key: [][]u8,
-            chain_len: u32,
-            work_queue: *std.atomic.Value(usize),
-            error_flag: *std.atomic.Value(bool),
-            arena: ArenaAllocator,
-        };
 
         var ctxs = try std.heap.page_allocator.alloc(WorkerCtx, num_threads);
         defer std.heap.page_allocator.free(ctxs);
@@ -135,12 +134,12 @@ pub const OptimizedWinternitzOTS = struct {
                 .error_flag = &error_flag,
                 .arena = ArenaAllocator.init(256 * 1024), // 256KB per thread
             };
-            
+
             threads[t] = try std.Thread.spawn(.{}, worker, .{&ctxs[t]});
         }
 
         for (threads) |th| th.join();
-        
+
         // Clean up thread arenas
         for (ctxs) |*ctx| ctx.arena.deinit();
 
@@ -149,11 +148,11 @@ pub const OptimizedWinternitzOTS = struct {
 
     fn worker(ctx: *WorkerCtx) void {
         const arena = ctx.arena.allocator();
-        
+
         while (!ctx.error_flag.load(.monotonic)) {
             const work_index = ctx.work_queue.fetchAdd(1, .monotonic);
             if (work_index >= ctx.public_parts.len) break;
-            
+
             ctx.public_parts[work_index] = ctx.wots.generateChain(arena, ctx.private_key[work_index], ctx.chain_len, work_index) catch {
                 ctx.error_flag.store(true, .monotonic);
                 return;
@@ -164,7 +163,7 @@ pub const OptimizedWinternitzOTS = struct {
     /// Sign a message with optimized memory usage
     pub fn sign(self: *OptimizedWinternitzOTS, message: []const u8, private_key: [][]u8) ![][]u8 {
         const arena = self.arena.allocator();
-        
+
         // Hash the message
         const msg_hash = try self.hash.hash(arena, message, 0);
         defer arena.free(msg_hash);
@@ -179,7 +178,7 @@ pub const OptimizedWinternitzOTS = struct {
         const len = (8 * hash_output_len + @ctz(winternitz_w) - 1) / @ctz(winternitz_w);
 
         var signature = try arena.alloc([]u8, len);
-        
+
         // Generate signature chains in parallel
         const num_threads = std.Thread.getCpuCount() catch 4;
         if (len < 32 or num_threads <= 1) {
@@ -198,7 +197,7 @@ pub const OptimizedWinternitzOTS = struct {
 
     fn generateChainSteps(self: *OptimizedWinternitzOTS, arena: Allocator, start_value: []u8, steps: u32, chain_index: usize) ![]u8 {
         var current = try arena.dupe(u8, start_value);
-        
+
         for (0..steps) |_| {
             const next = try self.hash.hash(arena, current, chain_index);
             arena.free(current);
@@ -211,11 +210,11 @@ pub const OptimizedWinternitzOTS = struct {
     fn generateSignatureParallel(self: *OptimizedWinternitzOTS, signature: [][]u8, private_key: [][]u8, encoded: []u32, num_threads: usize) !void {
         const work_queue = std.atomic.Value(usize).init(0);
         const error_flag = std.atomic.Value(bool).init(false);
-        
+
         var threads = try std.heap.page_allocator.alloc(std.Thread, num_threads);
         defer std.heap.page_allocator.free(threads);
 
-        const WorkerCtx = struct {
+        const SignatureWorkerCtx = struct {
             wots: *OptimizedWinternitzOTS,
             signature: [][]u8,
             private_key: [][]u8,
@@ -225,7 +224,7 @@ pub const OptimizedWinternitzOTS = struct {
             arena: ArenaAllocator,
         };
 
-        var ctxs = try std.heap.page_allocator.alloc(WorkerCtx, num_threads);
+        var ctxs = try std.heap.page_allocator.alloc(SignatureWorkerCtx, num_threads);
         defer std.heap.page_allocator.free(ctxs);
 
         for (0..num_threads) |t| {
@@ -238,12 +237,12 @@ pub const OptimizedWinternitzOTS = struct {
                 .error_flag = &error_flag,
                 .arena = ArenaAllocator.init(128 * 1024), // 128KB per thread
             };
-            
+
             threads[t] = try std.Thread.spawn(.{}, signatureWorker, .{&ctxs[t]});
         }
 
         for (threads) |th| th.join();
-        
+
         // Clean up thread arenas
         for (ctxs) |*ctx| ctx.arena.deinit();
 
@@ -252,11 +251,11 @@ pub const OptimizedWinternitzOTS = struct {
 
     fn signatureWorker(ctx: *WorkerCtx) void {
         const arena = ctx.arena.allocator();
-        
+
         while (!ctx.error_flag.load(.monotonic)) {
             const work_index = ctx.work_queue.fetchAdd(1, .monotonic);
             if (work_index >= ctx.signature.len) break;
-            
+
             const steps = if (work_index < ctx.encoded.len) ctx.encoded[work_index] else 0;
             ctx.signature[work_index] = ctx.wots.generateChainSteps(arena, ctx.private_key[work_index], steps, work_index) catch {
                 ctx.error_flag.store(true, .monotonic);
@@ -268,17 +267,17 @@ pub const OptimizedWinternitzOTS = struct {
 
 test "optimized winternitz basic functionality" {
     const allocator = std.testing.allocator;
-    const params = Parameters.init(.lifetime_2_10);
-    
-    var wots = try OptimizedWinternitzOTS.init(allocator, params);
+    const test_params = Parameters.init(.lifetime_2_10);
+
+    var wots = try OptimizedWinternitzOTS.init(allocator, test_params);
     defer wots.deinit();
-    
+
     const seed = "test seed for winternitz";
     const private_key = try wots.generatePrivateKey(seed, 0);
-    
+
     const public_key = try wots.generatePublicKey(private_key);
     try std.testing.expect(public_key.len > 0);
-    
+
     const message = "test message";
     const signature = try wots.sign(message, private_key);
     try std.testing.expect(signature.len == private_key.len);

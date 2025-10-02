@@ -18,7 +18,7 @@ pub const ArenaAllocator = struct {
     block_size: usize,
 
     pub fn init(block_size: usize) ArenaAllocator {
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        const gpa = std.heap.GeneralPurposeAllocator(.{}){};
         return .{
             .gpa = gpa,
             .current_block = null,
