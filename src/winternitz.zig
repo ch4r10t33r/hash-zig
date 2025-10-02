@@ -58,37 +58,26 @@ pub const WinternitzOTS = struct {
 
     fn generateChainRange(context: *ChainGenContext, start: usize, end: usize) void {
         for (start..end) |i| {
-            // Use batched Poseidon2 if available for better performance
-            if (context.wots.hash.hash_impl == .poseidon2) {
-                context.public_parts[i] = context.wots.hash.hash_impl.poseidon2.generateChain(context.allocator, context.private_key[i], context.chain_len, i) catch |err| {
-                    context.mutex.lock();
-                    defer context.mutex.unlock();
-                    context.errors[i] = err;
-                    return;
-                };
-            } else {
-                // Fallback to sequential for other hash functions
-                var current = context.allocator.dupe(u8, context.private_key[i]) catch |err| {
-                    context.mutex.lock();
-                    defer context.mutex.unlock();
-                    context.errors[i] = err;
-                    return;
-                };
+            var current = context.allocator.dupe(u8, context.private_key[i]) catch |err| {
+                context.mutex.lock();
+                defer context.mutex.unlock();
+                context.errors[i] = err;
+                return;
+            };
 
-                for (0..context.chain_len) |_| {
-                    const next = context.wots.hash.hash(context.allocator, current, i) catch |err| {
-                        context.allocator.free(current);
-                        context.mutex.lock();
-                        defer context.mutex.unlock();
-                        context.errors[i] = err;
-                        return;
-                    };
+            for (0..context.chain_len) |_| {
+                const next = context.wots.hash.hash(context.allocator, current, i) catch |err| {
                     context.allocator.free(current);
-                    current = next;
-                }
-
-                context.public_parts[i] = current;
+                    context.mutex.lock();
+                    defer context.mutex.unlock();
+                    context.errors[i] = err;
+                    return;
+                };
+                context.allocator.free(current);
+                current = next;
             }
+
+            context.public_parts[i] = current;
         }
     }
 
@@ -114,25 +103,17 @@ pub const WinternitzOTS = struct {
         const num_threads = @min(num_cpus, num_chains);
 
         if (num_threads <= 1 or num_chains < 16) {
-            // Sequential fallback for small workloads - use batched Poseidon2 if available
-            if (self.hash.hash_impl == .poseidon2) {
-                // Use optimized chain generation for Poseidon2
-                for (private_key, 0..) |pk, i| {
-                    public_parts[i] = try self.hash.hash_impl.poseidon2.generateChain(allocator, pk, chain_len, i);
-                }
-            } else {
-                // Fallback to sequential for other hash functions
-                for (private_key, 0..) |pk, i| {
-                    var current = try allocator.dupe(u8, pk);
+            // Sequential fallback for small workloads
+            for (private_key, 0..) |pk, i| {
+                var current = try allocator.dupe(u8, pk);
 
-                    for (0..chain_len) |_| {
-                        const next = try self.hash.hash(allocator, current, i);
-                        allocator.free(current);
-                        current = next;
-                    }
-
-                    public_parts[i] = current;
+                for (0..chain_len) |_| {
+                    const next = try self.hash.hash(allocator, current, i);
+                    allocator.free(current);
+                    current = next;
                 }
+
+                public_parts[i] = current;
             }
         } else {
             // Parallel chain generation
