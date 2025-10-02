@@ -94,12 +94,12 @@ pub const OptimizedHashSignature = struct {
 
     fn worker(ctx: *WorkerCtx) void {
         const arena = ctx.thread_arena.allocator();
-        
+
         while (!ctx.error_flag.load(.monotonic)) {
             const maybe_job = ctx.queue.pop();
             if (maybe_job == null) break;
             const job = maybe_job.?;
-            
+
             for (job.start..job.end) |i| {
                 const sk_part = ctx.hash_sig.wots.generatePrivateKey(arena, ctx.secret_key, i * 1000) catch {
                     ctx.error_flag.store(true, .monotonic);
@@ -137,7 +137,7 @@ pub const OptimizedHashSignature = struct {
 
         // Use more aggressive parallelization thresholds
         const parallel_threshold: usize = if (num_leaves >= 1 << 20) 1024 else if (num_leaves >= 1 << 16) 512 else 128;
-        
+
         if (num_threads <= 1 or num_leaves < parallel_threshold) {
             // Sequential for small workloads
             for (0..num_leaves) |i| {
@@ -178,7 +178,7 @@ pub const OptimizedHashSignature = struct {
 
         var jobs = try std.heap.page_allocator.alloc(LeafJob, num_jobs);
         defer std.heap.page_allocator.free(jobs);
-        
+
         var job_idx: usize = 0;
         var i: usize = 0;
         while (i < leaves.len) : (i += job_size) {
@@ -217,7 +217,7 @@ pub const OptimizedHashSignature = struct {
     /// Optimized signing with cached leaves
     pub fn sign(self: *OptimizedHashSignature, message: []const u8, secret_key: []const u8, index: u64) !Signature {
         const arena = self.arena.allocator();
-        
+
         // Generate the OTS private key deterministically for this index
         const private_key = try self.wots.generatePrivateKey(arena, secret_key, index * 1000);
 
@@ -240,7 +240,7 @@ pub const OptimizedHashSignature = struct {
     /// Optimized verification
     pub fn verify(self: *OptimizedHashSignature, message: []const u8, signature: Signature, public_key: []const u8) !bool {
         const arena = self.arena.allocator();
-        
+
         // Step 1: Compute the OTS leaf public key from the signature
         const msg_hash = try self.wots.hash.hash(arena, message, 0);
         defer arena.free(msg_hash);
@@ -272,7 +272,7 @@ pub const OptimizedHashSignature = struct {
         for (0..len) |i| {
             const steps = if (i < encoded.len) encoded[i] else 0;
             const remaining_steps = self.wots.getChainLength() - steps;
-            
+
             var current = try arena.dupe(u8, ots_signature[i]);
             for (0..remaining_steps) |_| {
                 const next = try self.wots.hash.hash(arena, current, i);
@@ -285,10 +285,10 @@ pub const OptimizedHashSignature = struct {
         // Concatenate all parts
         const total_len = len * hash_output_len;
         const result = try arena.alloc(u8, total_len);
-        
+
         var offset: usize = 0;
         for (public_parts) |part| {
-            @memcpy(result[offset..offset + part.len], part);
+            @memcpy(result[offset .. offset + part.len], part);
             offset += part.len;
         }
 
@@ -298,19 +298,19 @@ pub const OptimizedHashSignature = struct {
 
 test "optimized hash signature basic functionality" {
     const allocator = std.testing.allocator;
-    const params = Parameters.init(.lifetime_2_10);
-    
-    var sig_scheme = try OptimizedHashSignature.init(allocator, params);
+    const test_params = Parameters.init(.lifetime_2_10);
+
+    var sig_scheme = try OptimizedHashSignature.init(allocator, test_params);
     defer sig_scheme.deinit();
-    
+
     const seed: [32]u8 = .{42} ** 32;
     const keypair = try sig_scheme.generateKeyPair(&seed);
     defer keypair.deinit(&sig_scheme.arena);
-    
+
     const message = "test message";
     const signature = try sig_scheme.sign(message, keypair.secret_key, 0);
     defer signature.deinit(&sig_scheme.arena);
-    
+
     const is_valid = try sig_scheme.verify(message, signature, keypair.public_key);
     try std.testing.expect(is_valid);
 }

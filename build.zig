@@ -101,6 +101,59 @@ pub fn build(b: *std.Build) void {
     const benchmark_step = b.step("benchmark", "Run performance benchmark");
     benchmark_step.dependOn(&run_benchmark.step);
 
+    // Add SIMD modules
+    const simd_winternitz_module = b.addModule("simd_winternitz", .{
+        .root_source_file = b.path("src/simd_winternitz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const simd_poseidon2_module = b.addModule("simd_poseidon2", .{
+        .root_source_file = b.path("src/poseidon2/simd_poseidon2.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const simd_montgomery_module = b.addModule("simd_montgomery", .{
+        .root_source_file = b.path("src/poseidon2/fields/koalabear/simd_montgomery.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const simd_signature_module = b.addModule("simd_signature", .{
+        .root_source_file = b.path("src/simd_signature.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Set up module dependencies
+    simd_signature_module.addImport("simd_winternitz", simd_winternitz_module);
+    simd_signature_module.addImport("simd_poseidon2", simd_poseidon2_module);
+    simd_signature_module.addImport("params", hash_zig_module);
+
+    simd_winternitz_module.addImport("simd_montgomery", simd_montgomery_module);
+    simd_winternitz_module.addImport("simd_poseidon2", simd_poseidon2_module);
+
+    simd_poseidon2_module.addImport("simd_montgomery", simd_montgomery_module);
+
+    // SIMD benchmark executable
+    const simd_benchmark = b.addExecutable(.{
+        .name = "hash-zig-simd-benchmark",
+        .root_source_file = b.path("examples/simd_benchmark.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    simd_benchmark.root_module.addImport("hash-zig", hash_zig_module);
+    simd_benchmark.root_module.addImport("simd_signature", simd_signature_module);
+    simd_benchmark.root_module.addImport("simd_winternitz", simd_winternitz_module);
+    simd_benchmark.root_module.addImport("simd_poseidon2", simd_poseidon2_module);
+    simd_benchmark.root_module.addImport("simd_montgomery", simd_montgomery_module);
+    b.installArtifact(simd_benchmark);
+
+    const run_simd_benchmark = b.addRunArtifact(simd_benchmark);
+    const simd_benchmark_step = b.step("simd-benchmark", "Run SIMD performance benchmark");
+    simd_benchmark_step.dependOn(&run_simd_benchmark.step);
+
     // Optimized benchmark executable (commented out for now)
     // const optimized_benchmark_module = b.createModule(.{
     //     .root_source_file = b.path("examples/optimized_benchmark.zig"),
@@ -124,16 +177,12 @@ pub fn build(b: *std.Build) void {
     // const optimized_benchmark_step = b.step("optimized-benchmark", "Run optimized performance benchmark");
     // optimized_benchmark_step.dependOn(&run_optimized_benchmark.step);
 
-    // Documentation (separate from main library build)
-    const docs_obj = b.addObject(.{
-        .name = "hash-zig-docs",
-        .root_module = hash_zig_module,
-    });
+    // Documentation
+    const docs_step = b.step("docs", "Generate documentation");
     const install_docs = b.addInstallDirectory(.{
-        .source_dir = docs_obj.getEmittedDocs(),
+        .source_dir = lib.getEmittedDocs(),
         .install_dir = .prefix,
         .install_subdir = "docs",
     });
-    const docs_step = b.step("docs", "Generate documentation");
     docs_step.dependOn(&install_docs.step);
 }

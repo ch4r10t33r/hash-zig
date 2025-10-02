@@ -4,8 +4,8 @@ const optimized_signature = @import("optimized_signature");
 const params = hash_zig.params;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer gpa.deinit();
     const allocator = gpa.allocator();
 
     std.debug.print("Optimized Hash-Zig Performance Benchmark\n", .{});

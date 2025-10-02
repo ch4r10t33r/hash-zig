@@ -27,20 +27,30 @@ jobs:
       - name: Verify Zig installation
         run: zig version
       
+      - name: Setup Zig cache directory
+        run: |
+          mkdir -p ~/.cache/zig
+          chmod 755 ~/.cache/zig
+          echo "Zig cache directory created and permissions set"
+      
       - name: Build current version
         run: |
+          echo "Building current version..."
           zig build -Doptimize=ReleaseFast
           echo "Current version built successfully"
+          ls -la zig-out/bin/ || echo "No binary output directory found"
       
       - name: Benchmark current version
         id: current_benchmark
         run: |
           echo "Running performance benchmark for current version..."
-          if zig build benchmark -Doptimize=ReleaseFast; then
+          if zig build simd-benchmark -Doptimize=ReleaseFast; then
+            ./zig-out/bin/hash-zig-simd-benchmark > current_results.txt 2>&1
+          elif zig build benchmark -Doptimize=ReleaseFast; then
             ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
-            echo "No 'benchmark' build step; compiling scripts/benchmark.zig directly"
-            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig -obenchmark_current
+            echo "No benchmark build step; compiling scripts/benchmark.zig directly"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark_current
             ./benchmark_current > current_results.txt 2>&1
           else
             echo "No benchmark target or script found; skipping current metrics"
@@ -89,20 +99,30 @@ jobs:
           git checkout ${{ steps.base_commit.outputs.base_sha }}
           echo "Checked out base version"
       
+      - name: Setup Zig cache directory (base)
+        run: |
+          mkdir -p ~/.cache/zig
+          chmod 755 ~/.cache/zig
+          echo "Zig cache directory created and permissions set for base version"
+      
       - name: Build base version
         run: |
+          echo "Building base version..."
           zig build -Doptimize=ReleaseFast
           echo "Base version built successfully"
+          ls -la zig-out/bin/ || echo "No binary output directory found"
       
       - name: Benchmark base version
         id: base_benchmark
         run: |
           echo "Running performance benchmark for base version..."
-          if zig build benchmark -Doptimize=ReleaseFast; then
+          if zig build simd-benchmark -Doptimize=ReleaseFast; then
+            ./zig-out/bin/hash-zig-simd-benchmark > base_results.txt 2>&1
+          elif zig build benchmark -Doptimize=ReleaseFast; then
             ./zig-out/bin/hash-zig-benchmark > base_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
-            echo "No 'benchmark' build step on base; compiling scripts/benchmark.zig directly"
-            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig -obenchmark_base
+            echo "No benchmark build step on base; compiling scripts/benchmark.zig directly"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark_base
             ./benchmark_base > base_results.txt 2>&1
           else
             echo "No benchmark target or script found on base; skipping base metrics"
