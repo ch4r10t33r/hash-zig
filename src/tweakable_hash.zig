@@ -51,7 +51,9 @@ pub const TweakableHash = struct {
         defer allocator.free(tweaked_data);
 
         std.mem.writeInt(u64, tweaked_data[0..8], tweak, .big);
-        @memcpy(tweaked_data[8..], data);
+        for (data, 0..) |byte, i| {
+            tweaked_data[8 + i] = byte;
+        }
 
         return switch (self.hash_impl) {
             .poseidon2 => |*p| try p.hashBytes(allocator, tweaked_data),
