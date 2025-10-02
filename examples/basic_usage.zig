@@ -5,8 +5,8 @@ const hash_sig = @import("hash-zig");
 
 pub fn main() !void {
     // zlinter-disable-next-line no_deprecated - Standard allocator pattern for examples
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.DebugAllocator.init(.{});
+    defer gpa.deinit();
     const allocator = gpa.allocator();
 
     std.debug.print("Hash-Sig Example\n", .{});
