@@ -72,7 +72,7 @@ pub fn main() !void {
         std.debug.print("  Signatures: {d} (2^{d})\n", .{ num_signatures, tree_height });
         std.debug.print("  Throughput: {d:.1} signatures/sec\n", .{signatures_per_sec});
         std.debug.print("  Time per signature: {d:.3}ms\n", .{time_per_signature_ms});
-        std.debug.print("  Expected: ~{d:.1}s (ratio: {d:.2f}x)\n", .{ config.expected_time_sec, performance_ratio });
+        std.debug.print("  Expected: ~{d:.1}s (ratio: {d:.2}x)\n", .{ config.expected_time_sec, performance_ratio });
 
         // Display sign/verify results
         std.debug.print("\n🔐 SIGN/VERIFY RESULTS:\n", .{});
@@ -86,7 +86,7 @@ pub fn main() !void {
         std.debug.print("BENCHMARK_RESULT: {s}:sign:{d:.6}\n", .{ config.name, sign_duration_sec });
         std.debug.print("BENCHMARK_RESULT: {s}:verify:{d:.6}\n", .{ config.name, verify_duration_sec });
         std.debug.print("BENCHMARK_RESULT: {s}:throughput:{d:.1}\n", .{ config.name, signatures_per_sec });
-        std.debug.print("BENCHMARK_RESULT: {s}:performance_ratio:{d:.2f}\n", .{ config.name, performance_ratio });
+        std.debug.print("BENCHMARK_RESULT: {s}:performance_ratio:{d:.2}\n", .{ config.name, performance_ratio });
     }
 
     std.debug.print("\nBenchmark completed successfully!\n", .{});
