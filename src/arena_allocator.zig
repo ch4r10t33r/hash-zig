@@ -13,14 +13,13 @@ pub const ArenaAllocator = struct {
     const DEFAULT_BLOCK_SIZE = 1024 * 1024; // 1MB blocks
     const alignment = 8;
 
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.page_allocator,
     current_block: ?*Block,
     block_size: usize,
 
     pub fn init(block_size: usize) ArenaAllocator {
-        const gpa = std.heap.GeneralPurposeAllocator(.{}){};
         return .{
-            .gpa = gpa,
+            .gpa = std.heap.page_allocator,
             .current_block = null,
             .block_size = block_size,
         };
@@ -30,11 +29,10 @@ pub const ArenaAllocator = struct {
         var block = self.current_block;
         while (block) |b| {
             const next = b.next;
-            self.gpa.allocator().free(b.data);
-            self.gpa.allocator().destroy(b);
+            self.gpa.free(b.data);
+            self.gpa.destroy(b);
             block = next;
         }
-        _ = self.gpa.deinit();
     }
 
     pub fn allocator(self: *ArenaAllocator) std.mem.Allocator {
@@ -90,10 +88,10 @@ pub const ArenaAllocator = struct {
 
         // Need a new block
         const block_size = @max(self.block_size, aligned_len);
-        const block_data = self.gpa.allocator().alloc(u8, block_size) catch return null;
+        const block_data = self.gpa.alloc(u8, block_size) catch return null;
 
-        const block = self.gpa.allocator().create(Block) catch {
-            self.gpa.allocator().free(block_data);
+        const block = self.gpa.create(Block) catch {
+            self.gpa.free(block_data);
             return null;
         };
 

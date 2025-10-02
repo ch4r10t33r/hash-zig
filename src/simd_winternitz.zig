@@ -6,8 +6,8 @@ const simd_poseidon = @import("simd_poseidon2");
 // Uses vectorized field operations and batch processing for better performance
 
 pub const simd_winternitz_ots = struct {
-    const Field = simd_field.KoalaBearSIMD;
-    const Poseidon2 = simd_poseidon.SimdPoseidon2;
+    const Field = simd_field.koala_bear_simd;
+    const Poseidon2 = simd_poseidon.simd_poseidon2;
 
     const chain_length = 8; // Chain length
     const num_chains = 64; // Number of chains
@@ -15,8 +15,8 @@ pub const simd_winternitz_ots = struct {
     const field_elements_per_hash = 8; // 32 bytes / 4 bytes per element
 
     // Chain state type
-    pub const chain_state = @Vector(field_elements_per_hash, u32);
-    pub const chain_array = [num_chains]chain_state;
+    pub const ChainState = @Vector(field_elements_per_hash, u32);
+    pub const chain_array = [num_chains]ChainState;
 
     // Private key type
     pub const PrivateKey = struct {
@@ -70,7 +70,7 @@ pub const simd_winternitz_ots = struct {
         for (0..num_chains) |i| {
             const hash_result = Poseidon2.hash(&chain_seeds[i]);
             const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-            // Convert first 8 elements to chain_state vector
+            // Convert first 8 elements to ChainState vector
             chains[i] = @Vector(field_elements_per_hash, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
         }
 
@@ -84,7 +84,7 @@ pub const simd_winternitz_ots = struct {
         // Process chains in batches of 4 for SIMD optimization
         var i: usize = 0;
         while (i + 4 <= num_chains) {
-            var batch_states: [4]chain_state = undefined;
+            var batch_states: [4]ChainState = undefined;
 
             // Load 4 chain states
             for (0..4) |j| {
@@ -114,7 +114,7 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate a single chain with SIMD operations
-    pub fn generateChain(state: *chain_state, length: u32) void {
+    pub fn generateChain(state: *ChainState, length: u32) void {
         for (0..length) |_| {
             // Convert vector to array for fieldElementsToBytes
             const state_array: [16]u32 = .{
@@ -133,7 +133,7 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate multiple chains in batch using SIMD
-    pub fn generateChainsBatch(states: *[4]chain_state, length: u32) void {
+    pub fn generateChainsBatch(states: *[4]ChainState, length: u32) void {
         for (0..length) |_| {
             // Process all 4 states in parallel
             for (0..4) |i| {
@@ -163,7 +163,7 @@ pub const simd_winternitz_ots = struct {
         // Generate signature chains in parallel
         var i: usize = 0;
         while (i + 4 <= num_chains) {
-            var batch_states: [4]chain_state = undefined;
+            var batch_states: [4]ChainState = undefined;
             var batch_lengths: [4]u32 = undefined;
 
             // Calculate chain lengths for this batch
@@ -202,7 +202,7 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate signature chains in batch using SIMD
-    pub fn generateSignatureChainsBatch(states: *[4]chain_state, lengths: [4]u32) void {
+    pub fn generateSignatureChainsBatch(states: *[4]ChainState, lengths: [4]u32) void {
         // Find maximum length
         const max_length = @max(lengths[0], @max(lengths[1], @max(lengths[2], lengths[3])));
 
@@ -287,11 +287,11 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Memory-efficient chain generation for large batches
-    pub fn generateChainsEfficient(states: []chain_state, length: u32) void {
+    pub fn generateChainsEfficient(states: []ChainState, length: u32) void {
         // Process in SIMD-friendly chunks
         var i: usize = 0;
         while (i + 4 <= states.len) {
-            var batch_states: @Vector(4, chain_state) = undefined;
+            var batch_states: @Vector(4, ChainState) = undefined;
 
             // Load 4 states
             for (0..4) |j| {
@@ -333,7 +333,7 @@ test "SIMD chain_lengthinternitz performance" {
     // Test scalar chain generation
     const start_scalar = std.time.nanoTimestamp();
     for (0..iterations) |_| {
-        var state = winternitz.chain_state{ 1, 2, 3, 4, 5, 6, 7, 8 };
+        var state = winternitz.ChainState{ 1, 2, 3, 4, 5, 6, 7, 8 };
         winternitz.generateChain(&state, 8);
     }
     const scalar_time = std.time.nanoTimestamp() - start_scalar;
@@ -341,11 +341,11 @@ test "SIMD chain_lengthinternitz performance" {
     // Test vectorized chain generation
     const start_vector = std.time.nanoTimestamp();
     for (0..iterations / 4) |_| {
-        var states: @Vector(4, winternitz.chain_state) = .{
-            winternitz.chain_state{ 1, 2, 3, 4, 5, 6, 7, 8 },
-            winternitz.chain_state{ 9, 10, 11, 12, 13, 14, 15, 16 },
-            winternitz.chain_state{ 17, 18, 19, 20, 21, 22, 23, 24 },
-            winternitz.chain_state{ 25, 26, 27, 28, 29, 30, 31, 32 },
+        var states: @Vector(4, winternitz.ChainState) = .{
+            winternitz.ChainState{ 1, 2, 3, 4, 5, 6, 7, 8 },
+            winternitz.ChainState{ 9, 10, 11, 12, 13, 14, 15, 16 },
+            winternitz.ChainState{ 17, 18, 19, 20, 21, 22, 23, 24 },
+            winternitz.ChainState{ 25, 26, 27, 28, 29, 30, 31, 32 },
         };
         winternitz.generateChainsBatch(&states, 8);
     }

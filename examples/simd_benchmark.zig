@@ -6,8 +6,8 @@ const hash_zig = @import("hash-zig");
 // Compares SIMD-optimized implementation against baseline
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer gpa.deinit();
     const allocator = gpa.allocator();
 
     std.debug.print("SIMD Performance Benchmark\n", .{});
@@ -144,20 +144,20 @@ fn testSimdFieldOperations() void {
     // Test scalar operations
     const start_scalar = std.time.nanoTimestamp();
     for (0..iterations) |_| {
-        const a = simd_field.KoalaBearSIMD.MontFieldElem{ .value = 12345 };
-        const b = simd_field.KoalaBearSIMD.MontFieldElem{ .value = 67890 };
-        var result: simd_field.KoalaBearSIMD.MontFieldElem = undefined;
-        simd_field.KoalaBearSIMD.mul(&result, a, b);
+        const a = simd_field.koala_bear_simd.MontFieldElem{ .value = 12345 };
+        const b = simd_field.koala_bear_simd.MontFieldElem{ .value = 67890 };
+        var result: simd_field.koala_bear_simd.MontFieldElem = undefined;
+        simd_field.koala_bear_simd.mul(&result, a, b);
     }
     const scalar_time = std.time.nanoTimestamp() - start_scalar;
 
     // Test vectorized operations
     const start_vector = std.time.nanoTimestamp();
     for (0..iterations / 4) |_| {
-        const a_vec = simd_field.KoalaBearSIMD.Vec4{ 12345, 12346, 12347, 12348 };
-        const b_vec = simd_field.KoalaBearSIMD.Vec4{ 67890, 67891, 67892, 67893 };
-        var result_vec: simd_field.KoalaBearSIMD.Vec4 = undefined;
-        simd_field.KoalaBearSIMD.mulVec4(&result_vec, a_vec, b_vec);
+        const a_vec = simd_field.koala_bear_simd.Vec4{ 12345, 12346, 12347, 12348 };
+        const b_vec = simd_field.koala_bear_simd.Vec4{ 67890, 67891, 67892, 67893 };
+        var result_vec: simd_field.koala_bear_simd.Vec4 = undefined;
+        simd_field.koala_bear_simd.mulVec4(&result_vec, a_vec, b_vec);
     }
     const vector_time = std.time.nanoTimestamp() - start_vector;
 
@@ -180,21 +180,21 @@ fn testSimdWinternitzOperations() void {
     // Test scalar chain generation
     const start_scalar = std.time.nanoTimestamp();
     for (0..iterations) |_| {
-        var state = simd_winternitz.SimdWinternitzOTS.ChainState{ 1, 2, 3, 4, 5, 6, 7, 8 };
-        simd_winternitz.SimdWinternitzOTS.generateChain(&state, 8);
+        var state = simd_winternitz.simd_winternitz_ots.ChainState{ 1, 2, 3, 4, 5, 6, 7, 8 };
+        simd_winternitz.simd_winternitz_ots.generateChain(&state, 8);
     }
     const scalar_time = std.time.nanoTimestamp() - start_scalar;
 
     // Test vectorized chain generation
     const start_vector = std.time.nanoTimestamp();
     for (0..iterations / 4) |_| {
-        var states: [4]simd_winternitz.SimdWinternitzOTS.ChainState = .{
-            simd_winternitz.SimdWinternitzOTS.ChainState{ 1, 2, 3, 4, 5, 6, 7, 8 },
-            simd_winternitz.SimdWinternitzOTS.ChainState{ 9, 10, 11, 12, 13, 14, 15, 16 },
-            simd_winternitz.SimdWinternitzOTS.ChainState{ 17, 18, 19, 20, 21, 22, 23, 24 },
-            simd_winternitz.SimdWinternitzOTS.ChainState{ 25, 26, 27, 28, 29, 30, 31, 32 },
+        var states: [4]simd_winternitz.simd_winternitz_ots.ChainState = .{
+            simd_winternitz.simd_winternitz_ots.ChainState{ 1, 2, 3, 4, 5, 6, 7, 8 },
+            simd_winternitz.simd_winternitz_ots.ChainState{ 9, 10, 11, 12, 13, 14, 15, 16 },
+            simd_winternitz.simd_winternitz_ots.ChainState{ 17, 18, 19, 20, 21, 22, 23, 24 },
+            simd_winternitz.simd_winternitz_ots.ChainState{ 25, 26, 27, 28, 29, 30, 31, 32 },
         };
-        simd_winternitz.SimdWinternitzOTS.generateChainsBatch(&states, 8);
+        simd_winternitz.simd_winternitz_ots.generateChainsBatch(&states, 8);
     }
     const vector_time = std.time.nanoTimestamp() - start_vector;
 
@@ -217,21 +217,21 @@ fn testSimdPoseidon2Operations() void {
     // Test scalar permutation
     const start_scalar = std.time.nanoTimestamp();
     for (0..iterations) |_| {
-        var state = simd_poseidon.SimdPoseidon2.State{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-        simd_poseidon.SimdPoseidon2.permutation(&state);
+        var state = simd_poseidon.simd_poseidon2.state{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+        simd_poseidon.simd_poseidon2.permutation(&state);
     }
     const scalar_time = std.time.nanoTimestamp() - start_scalar;
 
     // Test vectorized permutation
     const start_vector = std.time.nanoTimestamp();
     for (0..iterations / 4) |_| {
-        var states: [4]simd_poseidon.SimdPoseidon2.Vec4 = .{
-            simd_poseidon.SimdPoseidon2.Vec4{ 1, 2, 3, 4 },
-            simd_poseidon.SimdPoseidon2.Vec4{ 5, 6, 7, 8 },
-            simd_poseidon.SimdPoseidon2.Vec4{ 9, 10, 11, 12 },
-            simd_poseidon.SimdPoseidon2.Vec4{ 13, 14, 15, 16 },
+        var states: [4]simd_poseidon.simd_poseidon2.Vec4 = .{
+            simd_poseidon.simd_poseidon2.Vec4{ 1, 2, 3, 4 },
+            simd_poseidon.simd_poseidon2.Vec4{ 5, 6, 7, 8 },
+            simd_poseidon.simd_poseidon2.Vec4{ 9, 10, 11, 12 },
+            simd_poseidon.simd_poseidon2.Vec4{ 13, 14, 15, 16 },
         };
-        simd_poseidon.SimdPoseidon2.permutationVec4(&states);
+        simd_poseidon.simd_poseidon2.permutationVec4(&states);
     }
     const vector_time = std.time.nanoTimestamp() - start_vector;
 

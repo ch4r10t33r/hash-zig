@@ -2,8 +2,8 @@ const std = @import("std");
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer gpa.deinit();
     const allocator = gpa.allocator();
 
     std.debug.print("Hash-Zig Performance Benchmark\n", .{});

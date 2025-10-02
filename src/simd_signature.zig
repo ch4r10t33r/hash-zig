@@ -7,8 +7,8 @@ const params = @import("params");
 // Integrates SIMD Winternitz OTS and Poseidon2 for maximum performance
 
 pub const SimdHashSignature = struct {
-    const Winternitz = simd_winternitz.SimdWinternitzOTS;
-    const Poseidon2 = simd_poseidon.SimdPoseidon2;
+    const Winternitz = simd_winternitz.simd_winternitz_ots;
+    const Poseidon2 = simd_poseidon.simd_poseidon2;
 
     // Configuration
     params: params.Parameters,

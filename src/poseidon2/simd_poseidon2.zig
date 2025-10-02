@@ -11,7 +11,7 @@ pub const simd_poseidon2 = struct {
     const sbox_degree = 3;
 
     // Field type
-    pub const Field = simd_field.KoalaBearSIMD;
+    pub const Field = simd_field.koala_bear_simd;
     pub const FieldElem = Field.FieldElem;
     pub const MontFieldElem = Field.MontFieldElem;
     pub const Vec4 = Field.Vec4;
