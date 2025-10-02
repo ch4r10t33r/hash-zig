@@ -140,18 +140,13 @@ jobs:
         run: |
           echo "Calculating performance improvements..."
           
-          # Function to calculate percentage improvement
-          calc_improvement() {
-            local current=$1
-            local base=$2
-            local metric=$3
-            
-            if [ -n "$current" ] && [ -n "$base" ] && [ "$base" != "0" ]; then
-              improvement=$(echo "scale=2; (($base - $current) / $base) * 100" | bc -l)
-              echo "✅ $metric: $improvement% improvement (${base}s → ${current}s)"
-            else
-              echo "❌ $metric: Unable to calculate (current=$current, base=$base)"
-            fi
+          is_num() {
+            echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)?$'
+          }
+          
+          pct_improve() {
+            # args: base current
+            awk 'BEGIN { if ($1 == "" || $2 == "" || $1+0 == 0) { print "N/A"; exit } printf("%.1f", (($1 - $2) / $1) * 100) }' "$1" "$2"
           }
           
           echo "## 🚀 Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
@@ -161,18 +156,25 @@ jobs:
           echo "| Lifetime | Base Version | Current Version | Improvement | Throughput (sig/s) |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|--------------|-----------------|-------------|-------------------|" >> $GITHUB_STEP_SUMMARY
           
-          # Calculate improvements
-          if [ -n "${{ steps.current_benchmark.outputs.keygen_2_10 }}" ] && [ -n "${{ steps.base_benchmark.outputs.keygen_2_10 }}" ]; then
-            improvement_2_10=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.keygen_2_10 }} - ${{ steps.current_benchmark.outputs.keygen_2_10 }}) / ${{ steps.base_benchmark.outputs.keygen_2_10 }}) * 100" | bc -l)
-            throughput_2_10="${{ steps.current_benchmark.outputs.throughput_2_10 }}"
-            echo "| 2^10 | ${{ steps.base_benchmark.outputs.keygen_2_10 }}s | ${{ steps.current_benchmark.outputs.keygen_2_10 }}s | ${improvement_2_10}% | ${throughput_2_10} |" >> $GITHUB_STEP_SUMMARY
+          base_k10="${{ steps.base_benchmark.outputs.keygen_2_10 }}"
+          curr_k10="${{ steps.current_benchmark.outputs.keygen_2_10 }}"
+          thr_k10="${{ steps.current_benchmark.outputs.throughput_2_10 }}"
+          if is_num "$base_k10" && is_num "$curr_k10" && [ "$(echo "$base_k10 > 0" | bc)" -eq 1 ]; then
+            imp_k10=$(pct_improve "$base_k10" "$curr_k10")
+          else
+            imp_k10="N/A"
           fi
-          
-          if [ -n "${{ steps.current_benchmark.outputs.keygen_2_16 }}" ] && [ -n "${{ steps.base_benchmark.outputs.keygen_2_16 }}" ]; then
-            improvement_2_16=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.keygen_2_16 }} - ${{ steps.current_benchmark.outputs.keygen_2_16 }}) / ${{ steps.base_benchmark.outputs.keygen_2_16 }}) * 100" | bc -l)
-            throughput_2_16="${{ steps.current_benchmark.outputs.throughput_2_16 }}"
-            echo "| 2^16 | ${{ steps.base_benchmark.outputs.keygen_2_16 }}s | ${{ steps.current_benchmark.outputs.keygen_2_16 }}s | ${improvement_2_16}% | ${throughput_2_16} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2^10 | ${base_k10:-N/A}s | ${curr_k10:-N/A}s | ${imp_k10}% | ${thr_k10:-N/A} |" >> $GITHUB_STEP_SUMMARY
+
+          base_k16="${{ steps.base_benchmark.outputs.keygen_2_16 }}"
+          curr_k16="${{ steps.current_benchmark.outputs.keygen_2_16 }}"
+          thr_k16="${{ steps.current_benchmark.outputs.throughput_2_16 }}"
+          if is_num "$base_k16" && is_num "$curr_k16" && [ "$(echo "$base_k16 > 0" | bc)" -eq 1 ]; then
+            imp_k16=$(pct_improve "$base_k16" "$curr_k16")
+          else
+            imp_k16="N/A"
           fi
+          echo "| 2^16 | ${base_k16:-N/A}s | ${curr_k16:-N/A}s | ${imp_k16}% | ${thr_k16:-N/A} |" >> $GITHUB_STEP_SUMMARY
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Sign/Verify Performance" >> $GITHUB_STEP_SUMMARY
@@ -180,15 +182,21 @@ jobs:
           echo "| Operation | Lifetime | Base Version | Current Version | Improvement |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|----------|--------------|-----------------|-------------|" >> $GITHUB_STEP_SUMMARY
           
-          if [ -n "${{ steps.current_benchmark.outputs.sign_2_10 }}" ] && [ -n "${{ steps.base_benchmark.outputs.sign_2_10 }}" ]; then
-            sign_improvement_2_10=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.sign_2_10 }} - ${{ steps.current_benchmark.outputs.sign_2_10 }}) / ${{ steps.base_benchmark.outputs.sign_2_10 }}) * 100" | bc -l)
-            echo "| Sign | 2^10 | ${{ steps.base_benchmark.outputs.sign_2_10 }}s | ${{ steps.current_benchmark.outputs.sign_2_10 }}s | ${sign_improvement_2_10}% |" >> $GITHUB_STEP_SUMMARY
+          base_s10="${{ steps.base_benchmark.outputs.sign_2_10 }}"; curr_s10="${{ steps.current_benchmark.outputs.sign_2_10 }}"
+          if is_num "$base_s10" && is_num "$curr_s10" && [ "$(echo "$base_s10 > 0" | bc)" -eq 1 ]; then
+            imp_s10=$(pct_improve "$base_s10" "$curr_s10")
+          else
+            imp_s10="N/A"
           fi
-          
-          if [ -n "${{ steps.current_benchmark.outputs.verify_2_10 }}" ] && [ -n "${{ steps.base_benchmark.outputs.verify_2_10 }}" ]; then
-            verify_improvement_2_10=$(echo "scale=1; ((${{ steps.base_benchmark.outputs.verify_2_10 }} - ${{ steps.current_benchmark.outputs.verify_2_10 }}) / ${{ steps.base_benchmark.outputs.verify_2_10 }}) * 100" | bc -l)
-            echo "| Verify | 2^10 | ${{ steps.base_benchmark.outputs.verify_2_10 }}s | ${{ steps.current_benchmark.outputs.verify_2_10 }}s | ${verify_improvement_2_10}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Sign | 2^10 | ${base_s10:-N/A}s | ${curr_s10:-N/A}s | ${imp_s10}% |" >> $GITHUB_STEP_SUMMARY
+
+          base_v10="${{ steps.base_benchmark.outputs.verify_2_10 }}"; curr_v10="${{ steps.current_benchmark.outputs.verify_2_10 }}"
+          if is_num "$base_v10" && is_num "$curr_v10" && [ "$(echo "$base_v10 > 0" | bc)" -eq 1 ]; then
+            imp_v10=$(pct_improve "$base_v10" "$curr_v10")
+          else
+            imp_v10="N/A"
           fi
+          echo "| Verify | 2^10 | ${base_v10:-N/A}s | ${curr_v10:-N/A}s | ${imp_v10}% |" >> $GITHUB_STEP_SUMMARY
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Summary" >> $GITHUB_STEP_SUMMARY
@@ -199,10 +207,10 @@ jobs:
           # Console output
           echo "Performance Analysis Complete!"
           echo "=============================="
-          calc_improvement "${{ steps.current_benchmark.outputs.keygen_2_10 }}" "${{ steps.base_benchmark.outputs.keygen_2_10 }}" "Key Generation (2^10)"
-          calc_improvement "${{ steps.current_benchmark.outputs.keygen_2_16 }}" "${{ steps.base_benchmark.outputs.keygen_2_16 }}" "Key Generation (2^16)"
-          calc_improvement "${{ steps.current_benchmark.outputs.sign_2_10 }}" "${{ steps.base_benchmark.outputs.sign_2_10 }}" "Sign (2^10)"
-          calc_improvement "${{ steps.current_benchmark.outputs.verify_2_10 }}" "${{ steps.base_benchmark.outputs.verify_2_10 }}" "Verify (2^10)"
+          echo "2^10 Keygen: base=${base_k10:-N/A}s current=${curr_k10:-N/A}s improvement=${imp_k10}%"
+          echo "2^16 Keygen: base=${base_k16:-N/A}s current=${curr_k16:-N/A}s improvement=${imp_k16}%"
+          echo "Sign 2^10: base=${base_s10:-N/A}s current=${curr_s10:-N/A}s improvement=${imp_s10}%"
+          echo "Verify 2^10: base=${base_v10:-N/A}s current=${curr_v10:-N/A}s improvement=${imp_v10}%"
       
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
