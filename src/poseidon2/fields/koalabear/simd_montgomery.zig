@@ -18,12 +18,14 @@ pub const koala_bear_simd = struct {
     // Field constants
     const modulus: u32 = 0x7f000001; // 2^31 - 2^24 + 1
     const mont_r: u64 = 1 << 32;
-    const r_square_mod_modulus: u64 = @intCast((@as(u128, mont_r) * @as(u128, mont_r)) % modulus);
-    const modulus_prime: u32 = 0x7f000001; // -modulus^-1 mod 2^32
+    const r_square_mod_modulus: u64 = @intCast((@as(u128, mont_r) * @as(u128, mont_r)) % @as(u128, modulus));
+    const modulus_prime: u32 = 0x81000001; // -modulus^-1 mod 2^32
 
     // SIMD-optimized Montgomery reduction
     pub fn montReduceSIMD(mont_value: u64) FieldElem {
-        const tmp = mont_value + (((mont_value & 0xFFFFFFFF) * modulus_prime) & 0xFFFFFFFF) * modulus;
+        const low = mont_value & 0xFFFFFFFF;
+        const q = (low *% modulus_prime) & 0xFFFFFFFF;
+        const tmp = mont_value +% (@as(u64, q) *% @as(u64, modulus));
         const t = tmp >> 32;
         if (t >= modulus) {
             return @intCast(t - modulus);
@@ -87,37 +89,37 @@ pub const koala_bear_simd = struct {
 
     // Vectorized addition with modular reduction
     pub fn addVec4(out: *Vec4, a: Vec4, b: Vec4) void {
-        const sum = a + b;
+        const sum = a +% b;
         const mask = @Vector(4, u32){ modulus, modulus, modulus, modulus };
         const needs_reduction = sum >= mask;
 
         // Apply reduction element-wise
         for (0..4) |i| {
-            out[i] = if (needs_reduction[i]) sum[i] - modulus else sum[i];
+            out[i] = if (needs_reduction[i]) sum[i] -% modulus else sum[i];
         }
     }
 
     // Vectorized addition for 8 elements
     pub fn addVec8(out: *Vec8, a: Vec8, b: Vec8) void {
-        const sum = a + b;
+        const sum = a +% b;
         const mask = @Vector(8, u32){ modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus };
         const needs_reduction = sum >= mask;
 
         // Apply reduction element-wise
         for (0..8) |i| {
-            out[i] = if (needs_reduction[i]) sum[i] - modulus else sum[i];
+            out[i] = if (needs_reduction[i]) sum[i] -% modulus else sum[i];
         }
     }
 
     // Vectorized addition for 16 elements
     pub fn addVec16(out: *Vec16, a: Vec16, b: Vec16) void {
-        const sum = a + b;
+        const sum = a +% b;
         const mask = @Vector(16, u32){ modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus, modulus };
         const needs_reduction = sum >= mask;
 
         // Apply reduction element-wise
         for (0..16) |i| {
-            out[i] = if (needs_reduction[i]) sum[i] - modulus else sum[i];
+            out[i] = if (needs_reduction[i]) sum[i] -% modulus else sum[i];
         }
     }
 
@@ -237,11 +239,12 @@ pub const koala_bear_simd = struct {
     }
 
     pub fn add(out: *MontFieldElem, a: MontFieldElem, b: MontFieldElem) void {
-        var tmp = a.value + b.value;
+        const tmp = a.value +% b.value;
         if (tmp >= modulus) {
-            tmp -= modulus;
+            out.* = .{ .value = tmp -% modulus };
+        } else {
+            out.* = .{ .value = tmp };
         }
-        out.* = .{ .value = tmp };
     }
 
     pub fn square(out: *MontFieldElem, a: MontFieldElem) void {
