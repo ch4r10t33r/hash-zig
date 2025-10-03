@@ -14,9 +14,24 @@ pub fn main() !void {
     std.debug.print("==========================\n", .{});
     std.debug.print("Testing SIMD-optimized hash-based signatures\n\n", .{});
 
-    // Fixed seed for all operations
-    const seed: [32]u8 = .{42} ** 32;
-    std.debug.print("Using fixed seed: {any}\n\n", .{seed});
+    // Seed: read from SEED_HEX env var if provided, else default to 0x2a repeated
+    const seed_env = std.process.getEnvVarOwned(std.heap.page_allocator, "SEED_HEX") catch null;
+    defer if (seed_env) |s| std.heap.page_allocator.free(s);
+
+    var seed: [32]u8 = .{42} ** 32;
+    if (seed_env) |hex| {
+        // Parse up to 64 hex chars into 32 bytes
+        const n = @min(hex.len, 64);
+        var i: usize = 0;
+        while (i < n) : (i += 2) {
+            const high_nibble = std.fmt.charToDigit(hex[i], 16) catch 0;
+            const low_nibble = if (i + 1 < n) std.fmt.charToDigit(hex[i + 1], 16) catch 0 else 0;
+            seed[i / 2] = @as(u8, @intCast((high_nibble << 4) | low_nibble));
+        }
+    }
+    std.debug.print("Using seed (hex): ", .{});
+    for (seed) |b| std.debug.print("{x:0>2}", .{b});
+    std.debug.print("\n\n", .{});
 
     // Test lifetime_2_10
     std.debug.print("Testing lifetime: 2^10 (1,024 signatures)\n", .{});
@@ -28,7 +43,7 @@ pub fn main() !void {
     const keygen_start_10 = std.time.nanoTimestamp();
     var keypair_10 = try sig_scheme_10.generateKeyPair(allocator, &seed);
     const keygen_end_10 = std.time.nanoTimestamp();
-    defer keypair_10.deinit();
+    defer keypair_10.deinit(allocator);
 
     const keygen_duration_10 = @as(f64, @floatFromInt(keygen_end_10 - keygen_start_10)) / 1_000_000_000.0;
 
@@ -58,6 +73,18 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
+    // CI-parseable key lines
+    std.debug.print("BENCHMARK_KEY: 2^10:secret:", .{});
+    for (keypair_10.secret_key.chains) |chain| {
+        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
+    }
+    std.debug.print("\n", .{});
+    std.debug.print("BENCHMARK_KEY: 2^10:public:", .{});
+    for (keypair_10.public_key.chains) |chain| {
+        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
+    }
+    std.debug.print("\n", .{});
+
     // Test lifetime_2_16
     std.debug.print("\nTesting lifetime: 2^16 (65,536 signatures)\n", .{});
     std.debug.print("==========================================\n", .{});
@@ -68,7 +95,7 @@ pub fn main() !void {
     const keygen_start_16 = std.time.nanoTimestamp();
     var keypair_16 = try sig_scheme_16.generateKeyPair(allocator, &seed);
     const keygen_end_16 = std.time.nanoTimestamp();
-    defer keypair_16.deinit();
+    defer keypair_16.deinit(allocator);
 
     const keygen_duration_16 = @as(f64, @floatFromInt(keygen_end_16 - keygen_start_16)) / 1_000_000_000.0;
 
@@ -95,6 +122,18 @@ pub fn main() !void {
         for (0..8) |i| {
             std.debug.print("{x:0>8}", .{chain[i]});
         }
+    }
+    std.debug.print("\n", .{});
+
+    // CI-parseable key lines
+    std.debug.print("BENCHMARK_KEY: 2^16:secret:", .{});
+    for (keypair_16.secret_key.chains) |chain| {
+        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
+    }
+    std.debug.print("\n", .{});
+    std.debug.print("BENCHMARK_KEY: 2^16:public:", .{});
+    for (keypair_16.public_key.chains) |chain| {
+        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
     }
     std.debug.print("\n", .{});
 

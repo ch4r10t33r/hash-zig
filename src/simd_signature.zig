@@ -41,9 +41,9 @@ pub const SimdHashSignature = struct {
         secret_key: Winternitz.PrivateKey,
         public_key: Winternitz.PublicKey,
 
-        pub fn deinit(self: *KeyPair) void {
-            self.secret_key.deinit();
-            self.public_key.deinit();
+        pub fn deinit(self: *KeyPair, allocator: std.mem.Allocator) void {
+            self.secret_key.deinit(allocator);
+            self.public_key.deinit(allocator);
         }
     };
 
@@ -59,14 +59,23 @@ pub const SimdHashSignature = struct {
     };
 
     // Generate key pair with SIMD optimizations
-    pub fn generateKeyPair(self: *SimdHashSignature, _: std.mem.Allocator, seed: []const u8) !KeyPair {
-        // Generate Winternitz private key
-        const secret_key = try Winternitz.generatePrivateKey(seed);
+    pub fn generateKeyPair(self: *SimdHashSignature, allocator: std.mem.Allocator, seed: []const u8) !KeyPair {
+        if (seed.len != 32) return error.InvalidSeedLength;
 
-        // Generate Winternitz public key with SIMD
-        const public_key = try Winternitz.generatePublicKey(secret_key);
+        // Scale the number of chains based on the lifetime
+        // For demonstration purposes, we'll scale the chains based on tree height
+        // In a real implementation, this would be more sophisticated
+        const base_chains = 64;
+        const scale_factor = @as(u32, 1) << @intCast(@max(0, @as(i32, @intCast(self.tree_height)) - 10));
+        const scaled_chains = base_chains * scale_factor;
 
-        _ = self; // Suppress unused parameter warning
+        // Create modified parameters with scaled chain count
+        var scaled_params = self.params;
+        scaled_params.num_chains = scaled_chains;
+
+        const secret_key = try Winternitz.generatePrivateKey(allocator, scaled_params, seed);
+        const public_key = try Winternitz.generatePublicKey(allocator, secret_key);
+
         return KeyPair{
             .secret_key = secret_key,
             .public_key = public_key,
@@ -152,7 +161,7 @@ pub const SimdHashSignature = struct {
     // Sign message with SIMD optimizations
     pub fn sign(self: *SimdHashSignature, allocator: std.mem.Allocator, message: []const u8, keypair: KeyPair, _: u32) !Signature {
         // Generate Winternitz signature
-        const winternitz_sig = try Winternitz.sign(message, keypair.secret_key);
+        const winternitz_sig = try Winternitz.sign(allocator, message, keypair.secret_key);
 
         // Generate Merkle path (simplified for this example)
         const merkle_path = try allocator.alloc(u32, self.tree_height * 8);
