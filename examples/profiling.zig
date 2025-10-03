@@ -21,21 +21,21 @@ pub fn main() !void {
 
     // Profile individual WOTS operations
     std.debug.print("--- Single WOTS Operation Profile ---\n", .{});
-    
+
     const wots_priv_start_ts = std.time.nanoTimestamp();
     const priv_key = try sig_scheme.wots.generatePrivateKey(allocator, &seed, 0);
     const wots_priv_end_ts = std.time.nanoTimestamp();
-    
+
     const pub_key = try sig_scheme.wots.generatePublicKey(allocator, priv_key);
     const wots_pub_end_ts = std.time.nanoTimestamp();
-    
+
     const priv_time = @as(f64, @floatFromInt(wots_priv_end_ts - wots_priv_start_ts)) / 1_000_000.0;
     const pub_time = @as(f64, @floatFromInt(wots_pub_end_ts - wots_priv_end_ts)) / 1_000_000.0;
-    
+
     std.debug.print("  generatePrivateKey: {d:.3} ms\n", .{priv_time});
     std.debug.print("  generatePublicKey:  {d:.3} ms\n", .{pub_time});
     std.debug.print("  Total per leaf:     {d:.3} ms\n\n", .{priv_time + pub_time});
-    
+
     for (priv_key) |k| allocator.free(k);
     allocator.free(priv_key);
     allocator.free(pub_key);
@@ -43,30 +43,26 @@ pub fn main() !void {
     // Profile hash operations
     std.debug.print("--- Hash Operation Profile ---\n", .{});
     const test_data = "test data for hashing";
-    
+
     const hash_start_ts = std.time.nanoTimestamp();
     const hash_result = try sig_scheme.wots.hash.hash(allocator, test_data, 0);
     const hash_end_ts = std.time.nanoTimestamp();
     allocator.free(hash_result);
-    
+
     const hash_time = @as(f64, @floatFromInt(hash_end_ts - hash_start_ts)) / 1_000_000.0;
     std.debug.print("  Single hash call: {d:.3} ms\n\n", .{hash_time});
 
     // Calculate expected times
     const num_leaves = @as(usize, 1) << @intCast(params.tree_height);
     const chain_length = @as(u32, 1) << @intCast(@ctz(params.winternitz_w));
-    
+
     std.debug.print("--- Theoretical Breakdown for 1,024 leaves ---\n", .{});
     std.debug.print("  Chain length: {}\n", .{chain_length});
     std.debug.print("  Chains per leaf: ~86\n", .{});
     std.debug.print("  Hashes per leaf: ~86 * {} = ~{}\n", .{ chain_length, 86 * chain_length });
     std.debug.print("  Total hashes: 1024 * {} = ~{}\n", .{ 86 * chain_length, 1024 * 86 * chain_length });
-    std.debug.print("  Expected hash time: {d:.1} seconds\n", .{
-        @as(f64, @floatFromInt(1024 * 86 * chain_length)) * hash_time / 1000.0
-    });
-    std.debug.print("  Expected leaf gen: {d:.1} seconds\n\n", .{
-        @as(f64, @floatFromInt(num_leaves)) * (priv_time + pub_time) / 1000.0
-    });
+    std.debug.print("  Expected hash time: {d:.1} seconds\n", .{@as(f64, @floatFromInt(1024 * 86 * chain_length)) * hash_time / 1000.0});
+    std.debug.print("  Expected leaf gen: {d:.1} seconds\n\n", .{@as(f64, @floatFromInt(num_leaves)) * (priv_time + pub_time) / 1000.0});
 
     // Now do full keygen with timing
     std.debug.print("--- Full Key Generation ---\n", .{});
@@ -85,4 +81,3 @@ pub fn main() !void {
     std.debug.print("  Merkle tree: ~{d:.1}%\n", .{100.0 - leaf_gen_percent});
     std.debug.print("  Other overhead: ~{d:.1}%\n", .{@max(0.0, 100.0 - leaf_gen_percent - 10.0)});
 }
-

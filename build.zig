@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
 
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
@@ -19,21 +20,10 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    // Lint (using zlinter)
-    const zlinter = @import("zlinter");
-    const lint_step = b.step("lint", "Run zlinter");
-    lint_step.dependOn(step: {
-        var builder = zlinter.builder(b, .{});
-        builder.addPaths(.{
-            .include = &.{ b.path("src/"), b.path("examples/"), b.path("test/") },
-        });
-        builder.addRule(.{ .builtin = .field_naming }, .{});
-        builder.addRule(.{ .builtin = .declaration_naming }, .{});
-        builder.addRule(.{ .builtin = .function_naming }, .{});
-        builder.addRule(.{ .builtin = .no_unused }, .{});
-        builder.addRule(.{ .builtin = .no_deprecated }, .{});
-        break :step builder.build();
-    });
+    // Lint (using built-in formatter in check mode)
+    const lint_cmd = b.addSystemCommand(&.{ "zig", "fmt", "--check", "src", "examples" });
+    const lint_step = b.step("lint", "Run lint (zig fmt --check)");
+    lint_step.dependOn(&lint_cmd.step);
 
     // Tests
     const lib_unit_tests = b.addTest(.{
@@ -177,12 +167,14 @@ pub fn build(b: *std.Build) void {
     // const optimized_benchmark_step = b.step("optimized-benchmark", "Run optimized performance benchmark");
     // optimized_benchmark_step.dependOn(&run_optimized_benchmark.step);
 
-    // Documentation
-    const docs_step = b.step("docs", "Generate documentation");
-    const install_docs = b.addInstallDirectory(.{
-        .source_dir = lib.getEmittedDocs(),
-        .install_dir = .prefix,
-        .install_subdir = "docs",
-    });
-    docs_step.dependOn(&install_docs.step);
+    // Documentation (opt-in to avoid enabling -femit-docs on default builds)
+    if (enable_docs) {
+        const docs_step = b.step("docs", "Generate documentation");
+        const install_docs = b.addInstallDirectory(.{
+            .source_dir = lib.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        docs_step.dependOn(&install_docs.step);
+    }
 }

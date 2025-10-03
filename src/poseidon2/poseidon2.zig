@@ -40,7 +40,7 @@ pub fn Poseidon2(
             permutation(&state);
             var result: [output_len]F.FieldElem = undefined;
             inline for (0..output_len) |i| {
-                // Add input[i] to montgomery form state[i] 
+                // Add input[i] to montgomery form state[i]
                 var input_mont: F.MontFieldElem = undefined;
                 F.toMontgomery(&input_mont, input[i]);
                 F.add(&state[i], state[i], input_mont);
