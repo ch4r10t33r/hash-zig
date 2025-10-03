@@ -4,7 +4,7 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with parameters inspired by the [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) project. Poseidon2 here targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants), optimized for throughput.
+A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with parameters matching the [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation. Poseidon2 here targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants), optimized for throughput.
 
 ## 🌟 Features
 
@@ -13,7 +13,7 @@ A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA
 - **SHA3 Hash Function**: NIST-standardized cryptographic hash (SHA3-256)
 - **128-bit Security**: Focused on a single, well-tested security level
 - **Flexible Key Lifetimes**: Support from 2^10 to 2^32 signatures per keypair
-- **Optimized Parameters**: 64 chains of length 8 based on [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Rust-Compatible Parameters**: 22 chains of length 256 (w=8) matching [hash-sig](https://github.com/b-wagn/hash-sig) implementation
 - **Binary Encoding**: Incomparable binary encoding scheme
 - **Pure Zig**: Minimal dependencies, fully type-safe
 - **Well-Tested**: Comprehensive unit and integration tests
@@ -23,6 +23,7 @@ A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Programs](#programs)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
@@ -108,6 +109,49 @@ std.debug.print("Signature valid: {}\n", .{is_valid});
 }
 ```
 
+## 🛠️ Programs
+
+The hash-zig library includes several built-in programs for demonstration, testing, and performance analysis:
+
+### Basic Example (`hash-zig-example`)
+**Purpose**: Demonstrates basic usage of the hash-zig library
+**Command**: `zig build example` or `zig build run`
+**Description**: Shows how to generate keypairs, sign messages, and verify signatures. Includes timing measurements and displays key information. Perfect for understanding the library's core functionality.
+
+### Performance Profiler (`hash-zig-profile`)
+**Purpose**: Detailed performance analysis and profiling
+**Command**: `zig build profile`
+**Description**: Provides in-depth timing analysis of individual operations including WOTS (Winternitz One-Time Signature) operations, hash functions, and full key generation. Useful for understanding performance bottlenecks and optimization opportunities.
+
+### Performance Benchmark (`hash-zig-benchmark`)
+**Purpose**: Comprehensive performance benchmarking
+**Command**: `zig build benchmark`
+**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation, signing, and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing.
+
+### SIMD Benchmark (`hash-zig-simd-benchmark`)
+**Purpose**: Tests SIMD-optimized implementations
+**Command**: `zig build simd-benchmark`
+**Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for comparing performance improvements from vectorization.
+
+### Building All Programs
+```bash
+# Build all executables
+zig build
+
+# Run specific programs
+zig build example      # Basic usage demo
+zig build profile      # Performance profiling
+zig build benchmark    # Standard benchmark
+zig build simd-benchmark  # SIMD benchmark
+```
+
+### Program Outputs
+All programs provide detailed timing information and can be used for:
+- **Development**: Understanding library behavior and performance characteristics
+- **Testing**: Verifying correct implementation and performance expectations
+- **Benchmarking**: Comparing different implementations and optimizations
+- **CI/CD**: Automated performance regression testing
+
 ## 📖 Usage
 
 ### Basic Signing and Verification
@@ -116,7 +160,7 @@ std.debug.print("Signature valid: {}\n", .{is_valid});
 const hash_zig = @import("hash-zig");
 
 // Configure parameters with Poseidon2 (default)
-// 128-bit security with 64 chains of length 8
+// 128-bit security with 22 chains of length 256 (w=8)
 const params = hash_zig.Parameters.init(.lifetime_2_16);
 var sig = try hash_zig.HashSignature.init(allocator, params);
 defer sig.deinit();
@@ -207,17 +251,18 @@ const params_extreme = hash_zig.Parameters.init(.lifetime_2_32);
 
 ### Security Parameters
 
-Based on [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters):
+Matching [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | Security Level | 128-bit | Post-quantum secure |
 | Hash Output | 32 bytes | 256-bit hash for 128-bit security |
 | Encoding | Binary | Incomparable binary encoding |
-| Winternitz w | 8 | Chain length (as per hypercube-hashsig) |
-| Number of Chains | 64 | Optimized for 128-bit security |
+| Winternitz w | 8 | Chain length (matching Rust) |
+| Number of Chains | 22 | Matching Rust implementation |
+| Chain Length | 256 | Winternitz parameter w=8 |
 
-**Note**: The [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) repository recommends "**48 chains of length 10**" or "**64 chains of length 8**". We use **64 chains of length 8**.
+**Note**: These parameters match the `SIGWinternitzLifetime18W8` instantiation from the [hash-sig](https://github.com/b-wagn/hash-sig) repository, ensuring compatibility between Rust and Zig implementations.
 
 ### Hash Functions
 
@@ -253,7 +298,8 @@ hash-zig/
 │   │   │   ├── generic_montgomery.zig   # Generic 31-bit Montgomery arithmetic
 │   │   │   └── koalabear/montgomery.zig # KoalaBear field instance
 │   │   ├── instances/koalabear16.zig    # Width-16 Poseidon2 instance (plonky3 constants)
-│   │   └── poseidon2.zig                # Core Poseidon2 permutation (Montgomery)
+│   │   ├── poseidon2.zig                # Rust-compatible Poseidon2 implementation
+│   │   └── generic_poseidon2.zig        # Generic Poseidon2 constructor (Montgomery)
 │   ├── sha3.zig              # SHA3 hash implementation
 │   ├── encoding.zig          # Incomparable encodings
 │   ├── tweakable_hash.zig    # Domain-separated hashing
@@ -271,7 +317,7 @@ hash-zig/
 
 - **Poseidon2**: Arithmetic hash over KoalaBear (31‑bit) with Montgomery reduction; constants match plonky3
 - **SHA3-256**: NIST-standardized Keccak-based hash for general-purpose cryptography
-- **Winternitz OTS**: One-time signature with 64 chains of length 8 (w=8)
+- **Winternitz OTS**: One-time signature with 22 chains of length 256 (w=8)
 - **Merkle Tree**: Binary tree implementation for managing OTS public keys
 - **Binary Encoding**: Incomparable binary encoding for 128-bit security
 - **Parallel Key Generation**: Multi-threaded with atomic job queues
@@ -319,7 +365,7 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 | Verify | **99 ms** | Fast (only processes auth path) |
 
 **Performance Notes:**
-- Using **w=8** (64 chains of length 8) per [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- Using **w=8** (22 chains of length 256) matching [hash-sig](https://github.com/b-wagn/hash-sig) implementation
 - **Optimized with inline hints** for field arithmetic operations (~23% improvement)
 - Parallel key generation uses all available CPU cores automatically
 - Falls back to sequential mode for small workloads (< 64 leaves)

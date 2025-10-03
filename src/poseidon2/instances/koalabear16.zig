@@ -1,5 +1,5 @@
 const std = @import("std");
-const poseidon2 = @import("../poseidon2.zig");
+const poseidon2 = @import("../generic_poseidon2.zig");
 const koalabear = @import("../fields/koalabear/montgomery.zig").montgomery_field;
 
 const width = 16;
