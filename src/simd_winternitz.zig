@@ -9,9 +9,10 @@ pub const simd_winternitz_ots = struct {
     const Field = simd_field.koala_bear_simd;
     const Poseidon2 = simd_poseidon.simd_poseidon2;
 
-    const chain_length = 8; // Chain length
+    const chain_length = 256; // Chain length (2^8 = 256)
     const hash_output_len = 32; // 256 bits = 32 bytes
     const field_elements_per_hash = 8; // 32 bytes / 4 bytes per element
+    const poseidon_width = 5; // Poseidon2 width
 
     // Chain state type
     pub const ChainState = @Vector(field_elements_per_hash, u32);
@@ -72,8 +73,17 @@ pub const simd_winternitz_ots = struct {
         for (0..num_chains) |i| {
             const hash_result = Poseidon2.hash(&chain_seeds[i]);
             const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-            // Convert first 8 elements to ChainState vector
-            chains[i] = @Vector(field_elements_per_hash, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+
+            // Create ChainState vector, padding with zeros if needed
+            var chain_state: ChainState = undefined;
+            for (0..field_elements_per_hash) |j| {
+                if (j < poseidon_width) {
+                    chain_state[j] = full_elements[j];
+                } else {
+                    chain_state[j] = 0; // Pad with zeros
+                }
+            }
+            chains[i] = chain_state;
         }
 
         return PrivateKey{ .chains = chains };
@@ -121,9 +131,8 @@ pub const simd_winternitz_ots = struct {
     pub fn generateChain(state: *ChainState, length: u32) void {
         for (0..length) |_| {
             // Convert vector to array for fieldElementsToBytes
-            const state_array: [16]u32 = .{
-                state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7],
-                0, 0, 0, 0, 0, 0, 0, 0, // Pad with zeros to make it 16 elements
+            const state_array: [5]u32 = .{
+                state[0], state[1], state[2], state[3], state[4],
             };
             const state_bytes = Poseidon2.fieldElementsToBytes(state_array);
 
@@ -132,7 +141,17 @@ pub const simd_winternitz_ots = struct {
 
             // Update state with hash result
             const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-            state.* = @Vector(8, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+
+            // Create ChainState vector, padding with zeros if needed
+            var new_state: ChainState = undefined;
+            for (0..field_elements_per_hash) |j| {
+                if (j < poseidon_width) {
+                    new_state[j] = full_elements[j];
+                } else {
+                    new_state[j] = 0; // Pad with zeros
+                }
+            }
+            state.* = new_state;
         }
     }
 
@@ -142,16 +161,23 @@ pub const simd_winternitz_ots = struct {
             // Process all 4 states in parallel
             for (0..4) |i| {
                 // Convert vector to array for fieldElementsToBytes
-                const state_array: [16]u32 = .{
-                    states[i][0], states[i][1], states[i][2], states[i][3],
-                    states[i][4], states[i][5], states[i][6], states[i][7],
-                    0,            0,            0,            0,
-                    0, 0, 0, 0, // Pad with zeros to make it 16 elements
+                const state_array: [5]u32 = .{
+                    states[i][0], states[i][1], states[i][2], states[i][3], states[i][4],
                 };
                 const state_bytes = Poseidon2.fieldElementsToBytes(state_array);
                 const hash_result = Poseidon2.hash(&state_bytes);
                 const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-                states[i] = @Vector(8, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+
+                // Create ChainState vector, padding with zeros if needed
+                var new_state: ChainState = undefined;
+                for (0..field_elements_per_hash) |j| {
+                    if (j < poseidon_width) {
+                        new_state[j] = full_elements[j];
+                    } else {
+                        new_state[j] = 0; // Pad with zeros
+                    }
+                }
+                states[i] = new_state;
             }
         }
     }

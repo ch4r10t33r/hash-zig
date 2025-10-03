@@ -130,10 +130,6 @@ pub const OptimizedSignatureV2 = struct {
         while (level_size > 1) {
             const next_level_size = (level_size + 1) / 2;
             var next_level = try allocator.alloc([]u8, next_level_size);
-            defer {
-                for (next_level) |node| allocator.free(node);
-                allocator.free(next_level);
-            }
 
             for (0..next_level_size) |i| {
                 const left_idx = i * 2;

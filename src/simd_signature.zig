@@ -62,16 +62,9 @@ pub const SimdHashSignature = struct {
     pub fn generateKeyPair(self: *SimdHashSignature, allocator: std.mem.Allocator, seed: []const u8) !KeyPair {
         if (seed.len != 32) return error.InvalidSeedLength;
 
-        // Scale the number of chains based on the lifetime
-        // For demonstration purposes, we'll scale the chains based on tree height
-        // In a real implementation, this would be more sophisticated
-        const base_chains = 64;
-        const scale_factor = @as(u32, 1) << @intCast(@max(0, @as(i32, @intCast(self.tree_height)) - 10));
-        const scaled_chains = base_chains * scale_factor;
-
-        // Create modified parameters with scaled chain count
-        var scaled_params = self.params;
-        scaled_params.num_chains = scaled_chains;
+        // Use the standard parameters without scaling
+        // This ensures consistency with the reference implementation
+        const scaled_params = self.params;
 
         const secret_key = try Winternitz.generatePrivateKey(allocator, scaled_params, seed);
         const public_key = try Winternitz.generatePublicKey(allocator, secret_key);

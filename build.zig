@@ -144,6 +144,22 @@ pub fn build(b: *std.Build) void {
     const simd_benchmark_step = b.step("simd-benchmark", "Run SIMD performance benchmark");
     simd_benchmark_step.dependOn(&run_simd_benchmark.step);
 
+    // Implementation comparison executable
+    const comparison = b.addExecutable(.{
+        .name = "hash-zig-compare",
+        .root_source_file = b.path("examples/compare_implementations.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    comparison.root_module.addImport("hash-zig", hash_zig_module);
+    comparison.root_module.addImport("simd_signature", simd_signature_module);
+    b.installArtifact(comparison);
+
+    const run_comparison = b.addRunArtifact(comparison);
+    const comparison_step = b.step("compare", "Compare Optimized V2 vs SIMD implementations");
+    comparison_step.dependOn(&run_comparison.step);
+
+
     // Optimized benchmark executable (commented out for now)
     // const optimized_benchmark_module = b.createModule(.{
     //     .root_source_file = b.path("examples/optimized_benchmark.zig"),

@@ -33,59 +33,63 @@ pub fn main() !void {
     for (seed) |b| std.debug.print("{x:0>2}", .{b});
     std.debug.print("\n\n", .{});
 
-    // Test lifetime_2_10
-    std.debug.print("Testing lifetime: 2^10 (1,024 signatures)\n", .{});
-    std.debug.print("==========================================\n", .{});
+    // Test multiple lifetimes with the same seed for consistent comparison
+    const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.params.KeyLifetime, expected_sigs: u32 }{
+        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_sigs = 1024 },
+        .{ .name = "2^16", .lifetime = .lifetime_2_16, .expected_sigs = 65536 },
+    };
 
-    var sig_scheme_10 = try simd_signature.SimdHashSignature.init(allocator, hash_zig.params.Parameters.init(.lifetime_2_10));
-    defer sig_scheme_10.deinit();
+    var results: [lifetimes.len]struct { duration: f64, secret_key_size: usize, public_key_size: usize } = undefined;
 
-    const keygen_start_10 = std.time.nanoTimestamp();
-    var keypair_10 = try sig_scheme_10.generateKeyPair(allocator, &seed);
-    const keygen_end_10 = std.time.nanoTimestamp();
-    defer keypair_10.deinit(allocator);
+    for (lifetimes, 0..) |config, i| {
+        std.debug.print("Testing lifetime: {s} ({d} signatures)\n", .{ config.name, config.expected_sigs });
+        std.debug.print("==========================================\n", .{});
 
-    const keygen_duration_10 = @as(f64, @floatFromInt(keygen_end_10 - keygen_start_10)) / 1_000_000_000.0;
+        var sig_scheme = try simd_signature.SimdHashSignature.init(allocator, hash_zig.params.Parameters.init(config.lifetime));
+        defer sig_scheme.deinit();
 
-    // Print keypair information for 2^10
-    std.debug.print("Keypair 2^10:\n", .{});
-    const secret_key_size_10 = keypair_10.secret_key.chains.len * @sizeOf(@TypeOf(keypair_10.secret_key.chains[0]));
-    const public_key_size_10 = keypair_10.public_key.chains.len * @sizeOf(@TypeOf(keypair_10.public_key.chains[0]));
-    std.debug.print("  Secret key length: {d} bytes\n", .{secret_key_size_10});
-    std.debug.print("  Public key length: {d} bytes\n", .{public_key_size_10});
-    std.debug.print("  Key generation time: {d:.3}s\n", .{keygen_duration_10});
+        const keygen_start = std.time.nanoTimestamp();
+        var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+        const keygen_end = std.time.nanoTimestamp();
+        defer keypair.deinit(allocator);
 
-    // Test lifetime_2_16
-    std.debug.print("\nTesting lifetime: 2^16 (65,536 signatures)\n", .{});
-    std.debug.print("==========================================\n", .{});
+        const keygen_duration = @as(f64, @floatFromInt(keygen_end - keygen_start)) / 1_000_000_000.0;
 
-    var sig_scheme_16 = try simd_signature.SimdHashSignature.init(allocator, hash_zig.params.Parameters.init(.lifetime_2_16));
-    defer sig_scheme_16.deinit();
+        // Calculate key sizes
+        const secret_key_size = keypair.secret_key.chains.len * @sizeOf(@TypeOf(keypair.secret_key.chains[0]));
+        const public_key_size = keypair.public_key.chains.len * @sizeOf(@TypeOf(keypair.public_key.chains[0]));
 
-    const keygen_start_16 = std.time.nanoTimestamp();
-    var keypair_16 = try sig_scheme_16.generateKeyPair(allocator, &seed);
-    const keygen_end_16 = std.time.nanoTimestamp();
-    defer keypair_16.deinit(allocator);
+        // Store results
+        results[i] = .{
+            .duration = keygen_duration,
+            .secret_key_size = secret_key_size,
+            .public_key_size = public_key_size,
+        };
 
-    const keygen_duration_16 = @as(f64, @floatFromInt(keygen_end_16 - keygen_start_16)) / 1_000_000_000.0;
-
-    // Print keypair information for 2^16
-    std.debug.print("Keypair 2^16:\n", .{});
-    const secret_key_size_16 = keypair_16.secret_key.chains.len * @sizeOf(@TypeOf(keypair_16.secret_key.chains[0]));
-    const public_key_size_16 = keypair_16.public_key.chains.len * @sizeOf(@TypeOf(keypair_16.public_key.chains[0]));
-    std.debug.print("  Secret key length: {d} bytes\n", .{secret_key_size_16});
-    std.debug.print("  Public key length: {d} bytes\n", .{public_key_size_16});
-    std.debug.print("  Key generation time: {d:.3}s\n", .{keygen_duration_16});
+        // Print keypair information
+        std.debug.print("Keypair {s}:\n", .{config.name});
+        std.debug.print("  Secret key length: {d} bytes\n", .{secret_key_size});
+        std.debug.print("  Public key length: {d} bytes\n", .{public_key_size});
+        std.debug.print("  Key generation time: {d:.3}s\n", .{keygen_duration});
+        std.debug.print("\n", .{});
+    }
 
     // Summary
     std.debug.print("\n📊 SUMMARY:\n", .{});
-    std.debug.print("2^10 key generation: {d:.3}s\n", .{keygen_duration_10});
-    std.debug.print("2^16 key generation: {d:.3}s\n", .{keygen_duration_16});
-    std.debug.print("Performance ratio: {d:.2}x\n", .{keygen_duration_16 / keygen_duration_10});
+    for (lifetimes, results) |config, result| {
+        std.debug.print("{s} key generation: {d:.3}s\n", .{ config.name, result.duration });
+    }
+
+    if (results.len >= 2) {
+        const performance_ratio = results[1].duration / results[0].duration;
+        std.debug.print("Performance ratio: {d:.2}x\n", .{performance_ratio});
+    }
 
     // Output for CI
-    std.debug.print("\nBENCHMARK_RESULT: 2^10:keygen:{d:.6}\n", .{keygen_duration_10});
-    std.debug.print("BENCHMARK_RESULT: 2^16:keygen:{d:.6}\n", .{keygen_duration_16});
+    std.debug.print("\n", .{});
+    for (lifetimes, results) |config, result| {
+        std.debug.print("BENCHMARK_RESULT: {s}:keygen:{d:.6}\n", .{ config.name, result.duration });
+    }
 
     std.debug.print("\n✅ SIMD Benchmark completed successfully!\n", .{});
 }
