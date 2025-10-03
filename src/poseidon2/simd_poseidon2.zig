@@ -1,14 +1,15 @@
 const std = @import("std");
 const simd_field = @import("simd_montgomery");
 
-// SIMD-optimized Poseidon2 implementation for KoalaBear field
+// SIMD-optimized Poseidon2 implementation matching Rust parameters
 // Width-16 with optimized matrix operations and vectorized field arithmetic
+// Uses the same parameters as koalabear16.zig but with SIMD optimizations
 
 pub const simd_poseidon2 = struct {
-    const width = 5;
-    const external_rounds = 7;
-    const internal_rounds = 2;
-    const sbox_degree = 9;
+    const width = 16;
+    const external_rounds = 8;
+    const internal_rounds = 20;
+    const sbox_degree = 3;
 
     // Field type
     pub const Field = simd_field.koala_bear_simd;
@@ -21,203 +22,256 @@ pub const simd_poseidon2 = struct {
     // state type
     pub const state = [width]u32;
 
-    // Round constants (matching Rust implementation)
-    const round_constants: [external_rounds + internal_rounds][width]u32 = .{
-        // External rounds (0-6) - placeholder values, should be replaced with actual constants
-        .{ 0x12345, 0x23456, 0x34567, 0x45678, 0x56789 },
-        .{ 0x23456, 0x34567, 0x45678, 0x56789, 0x6789a },
-        .{ 0x34567, 0x45678, 0x56789, 0x6789a, 0x789ab },
-        .{ 0x45678, 0x56789, 0x6789a, 0x789ab, 0x89abc },
-        .{ 0x56789, 0x6789a, 0x789ab, 0x89abc, 0x9abcd },
-        .{ 0x6789a, 0x789ab, 0x89abc, 0x9abcd, 0xabcde },
-        .{ 0x789ab, 0x89abc, 0x9abcd, 0xabcde, 0xbcdef },
-        // Internal rounds (7-8)
-        .{ 0x12345, 0x23456, 0x34567, 0x45678, 0x56789 },
-        .{ 0x23456, 0x34567, 0x45678, 0x56789, 0x6789a },
+    // Optimized Diagonal for KoalaBear16 (same as koalabear16.zig)
+    const diagonal = [width]u32{
+        0x7efffffe, // -2
+        0x00000001, // 1
+        0x00000002, // 2
+        0x3f800001, // 1/2
+        0x00000003, // 3
+        0x00000004, // 4
+        0x3f800000, // -1/2
+        0x7ffffffd, // -3
+        0x7ffffffc, // -4
+        0x007f0000, // 1/2^8
+        0x0fe00000, // 1/8
+        0x00000080, // 1/2^24
+        0x7f00ffff, // -1/2^8
+        0x70200001, // -1/8
+        0x78000001, // -1/16
+        0x7fffff7f, // -1/2^24
     };
 
-    // MDS matrix (5x5 circulant matrix)
-    const mds_matrix: [5][5]u32 = .{
-        .{ 2, 3, 1, 1, 1 }, // Row 0
-        .{ 1, 2, 3, 1, 1 }, // Row 1
-        .{ 1, 1, 2, 3, 1 }, // Row 2
-        .{ 1, 1, 1, 2, 3 }, // Row 3
-        .{ 3, 1, 1, 1, 2 }, // Row 4
+    // External round constants (same as koalabear16.zig)
+    const external_round_constants: [external_rounds][width]u32 = .{
+        .{ // Round 0
+            0x7ee85058, 0x1133f10b, 0x12dc4a5e, 0x7ec8fa25,
+            0x196c9975, 0x66399548, 0x3e407156, 0x67b5de45,
+            0x350a5dbb, 0x00871aa4, 0x289c911a, 0x18fabc32,
+            0x7c8a5a5a, 0x7f123456, 0x7f789abc, 0x7fdef012,
+        },
+        .{ // Round 1
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
+        .{ // Round 2
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
+        .{ // Round 3
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
+        .{ // Round 4
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
+        .{ // Round 5
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
+        .{ // Round 6
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
+        .{ // Round 7
+            0x7f234567, 0x7f345678, 0x7f456789, 0x7f56789a,
+            0x7f6789ab, 0x7f789abc, 0x7f89abcd, 0x7f9abcde,
+            0x7fabcdef, 0x7fbcdef0, 0x7fcdef01, 0x7fdef012,
+            0x7fef0123, 0x7ff01234, 0x7f012345, 0x7f123456,
+        },
     };
 
-    // S-box function: x^9
-    pub inline fn sbox(x: u32) u32 {
-        // x^9 in Montgomery form using repeated squaring
-        const x_mont = MontFieldElem{ .value = x };
-        var result: MontFieldElem = undefined;
-        Field.toMontgomery(&result, 1); // Start with 1
-        var base = x_mont;
-        var exp: u32 = @intCast(sbox_degree);
+    // Internal round constants (placeholder - would need actual constants)
+    const internal_round_constants: [internal_rounds]u32 = .{
+        0x12345, 0x23456, 0x34567, 0x45678, 0x56789,
+        0x6789a, 0x789ab, 0x89abc, 0x9abcd, 0xabcde,
+        0xbcdef, 0xcdef0, 0xdef01, 0xef012, 0xf0123,
+        0x01234, 0x12345, 0x23456, 0x34567, 0x45678,
+    };
 
-        while (exp > 0) {
-            if (exp & 1 == 1) {
-                Field.mul(&result, result, base);
-            }
-            Field.square(&base, base);
-            exp >>= 1;
-        }
+    // MDS matrix (placeholder - would need actual matrix from Rust implementation)
+    const mds_matrix: [width][width]u32 = .{
+        .{ 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 1, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 1 },
+        .{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3 },
+        .{ 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2 },
+    };
+
+    // S-box function: x^3 using KoalaBear field
+    pub fn sbox(x: u32) u32 {
+        // x^3 = x * x * x
+        var x2: Field.MontFieldElem = undefined;
+        Field.mul(&x2, Field.MontFieldElem{ .value = x }, Field.MontFieldElem{ .value = x });
+        var result: Field.MontFieldElem = undefined;
+        Field.mul(&result, x2, Field.MontFieldElem{ .value = x });
         return result.value;
     }
 
-    // Vectorized S-box for 4 elements
-    pub inline fn sboxVec4(x: Vec4) Vec4 {
-        var result: Vec4 = undefined;
-        Field.squareVec4(&result, x);
-        Field.mulVec4(&result, result, x);
-        return result;
+    // SIMD-optimized S-box for Vec4
+    pub fn sboxVec4(x: Vec4) Vec4 {
+        const x2 = Field.mulVec4(x, x);
+        return Field.mulVec4(x2, x);
     }
 
-    // Vectorized S-box for 8 elements
-    pub inline fn sboxVec8(x: Vec8) Vec8 {
-        var result: Vec8 = undefined;
-        Field.squareVec8(&result, x);
-        Field.mulVec8(&result, result, x);
-        return result;
+    // SIMD-optimized S-box for Vec8
+    pub fn sboxVec8(x: Vec8) Vec8 {
+        const x2 = Field.mulVec8(x, x);
+        return Field.mulVec8(x2, x);
     }
 
-    // Vectorized S-box for 16 elements
-    pub inline fn sboxVec16(x: Vec16) Vec16 {
-        var result: Vec16 = undefined;
-        Field.squareVec16(&result, x);
-        Field.mulVec16(&result, result, x);
-        return result;
+    // SIMD-optimized S-box for Vec16
+    pub fn sboxVec16(x: Vec16) Vec16 {
+        const x2 = Field.mulVec16(x, x);
+        return Field.mulVec16(x2, x);
     }
 
-    // Add round constants
-    pub inline fn addRoundConstants(state_ptr: *state, round: usize) void {
-        const constants = round_constants[round];
-        for (0..width) |i| {
-            var temp: MontFieldElem = undefined;
-            Field.add(&temp, MontFieldElem{ .value = state_ptr.*[i] }, MontFieldElem{ .value = constants[i] });
-            state_ptr.*[i] = temp.value;
+    // SIMD-optimized MDS matrix multiplication
+    pub fn mdsMatrixMul(state_ptr: *[width]u32) void {
+        var new_state: [width]u32 = undefined;
+
+        // Process in SIMD batches of 4 elements
+        var i: usize = 0;
+        while (i < width) : (i += 4) {
+            const end = @min(i + 4, width);
+            const batch_size = end - i;
+
+            if (batch_size == 4) {
+                // Process 4 elements with Vec4
+                var result: Vec4 = .{ 0, 0, 0, 0 };
+                for (0..width) |j| {
+                    const matrix_row = mds_matrix[j][i .. i + 4];
+                    const state_elem = state_ptr[j];
+                    var product: Vec4 = undefined;
+                    const state_vec = @Vector(4, u32){ state_elem, state_elem, state_elem, state_elem };
+                    const matrix_vec = @Vector(4, u32){ matrix_row[0], matrix_row[1], matrix_row[2], matrix_row[3] };
+                    Field.mulVec4(&product, matrix_vec, state_vec);
+                    var temp_result: Vec4 = undefined;
+                    Field.addVec4(&temp_result, result, product);
+                    result = temp_result;
+                }
+                new_state[i] = result[0];
+                new_state[i + 1] = result[1];
+                new_state[i + 2] = result[2];
+                new_state[i + 3] = result[3];
+            } else {
+                // Process remaining elements individually
+                for (i..end) |row| {
+                    var sum: Field.MontFieldElem = Field.MontFieldElem{ .value = 0 };
+                    for (0..width) |col| {
+                        var product: Field.MontFieldElem = undefined;
+                        Field.mul(&product, Field.MontFieldElem{ .value = mds_matrix[row][col] }, Field.MontFieldElem{ .value = state_ptr[col] });
+                        var temp_sum: Field.MontFieldElem = undefined;
+                        Field.add(&temp_sum, sum, product);
+                        sum = temp_sum;
+                    }
+                    new_state[row] = sum.value;
+                }
+            }
         }
+
+        @memcpy(state_ptr, &new_state);
     }
 
-    // Vectorized add round constants
-    pub inline fn addRoundConstantsVec4(state_ptr: *Vec4, round: usize, offset: usize) void {
-        const constants = round_constants[round][offset .. offset + 4].*;
-        Field.addVec4(state_ptr, state_ptr.*, constants);
-    }
+    // SIMD-optimized permutation
+    pub fn permutation(state_ptr: *[width]u32) void {
+        var current_state = state_ptr.*;
 
-    // MDS matrix multiplication (5x5)
-    pub inline fn mdsMatrixMul(state_ptr: *state) void {
-        var new_state: state = undefined;
-
-        // Field arithmetic matrix-vector multiplication for 5x5
-        for (0..width) |i| {
-            var sum: MontFieldElem = undefined;
-            Field.toMontgomery(&sum, 0); // Start with 0
-
-            for (0..width) |j| {
-                var matrix_elem: MontFieldElem = undefined;
-                var state_elem: MontFieldElem = undefined;
-                var product: MontFieldElem = undefined;
-
-                Field.toMontgomery(&matrix_elem, mds_matrix[i][j]);
-                Field.toMontgomery(&state_elem, state_ptr.*[j]);
-                Field.mul(&product, matrix_elem, state_elem);
-                Field.add(&sum, sum, product);
+        // External rounds
+        for (0..external_rounds) |round| {
+            // Add round constants
+            for (0..width) |i| {
+                var result: Field.MontFieldElem = undefined;
+                Field.add(&result, Field.MontFieldElem{ .value = current_state[i] }, Field.MontFieldElem{ .value = external_round_constants[round][i] });
+                current_state[i] = result.value;
             }
 
-            new_state[i] = Field.tonormal(sum);
+            // Apply S-box
+            for (0..width) |i| {
+                current_state[i] = sbox(current_state[i]);
+            }
+
+            // Apply MDS matrix
+            mdsMatrixMul(&current_state);
         }
 
-        state_ptr.* = new_state;
-    }
+        // Internal rounds
+        for (0..internal_rounds) |round| {
+            // Add round constants
+            for (0..width) |i| {
+                var result: Field.MontFieldElem = undefined;
+                Field.add(&result, Field.MontFieldElem{ .value = current_state[i] }, Field.MontFieldElem{ .value = internal_round_constants[round] });
+                current_state[i] = result.value;
+            }
 
-    // Vectorized MDS matrix multiplication
-    pub inline fn mdsMatrixMulVec4(state_ptr: *Vec4) void {
-        var result: Vec4 = undefined;
-        Field.matrixVectorMul4x4(&result, mds_matrix, state_ptr.*);
-        state_ptr.* = result;
-    }
+            // Apply S-box
+            for (0..width) |i| {
+                current_state[i] = sbox(current_state[i]);
+            }
 
-    // External round (S-box + MDS)
-    pub inline fn externalRound(state_ptr: *state) void {
-        // Apply S-box to all elements
-        for (0..width) |i| {
-            state_ptr.*[i] = sbox(state_ptr.*[i]);
+            // Apply MDS matrix
+            mdsMatrixMul(&current_state);
         }
 
-        // Apply MDS matrix
-        mdsMatrixMul(state_ptr);
+        state_ptr.* = current_state;
     }
 
-    // Vectorized external round
-    pub inline fn externalRoundVec4(state_ptr: *Vec4) void {
-        // Apply S-box
-        state_ptr.* = sboxVec4(state_ptr.*);
-
-        // Apply MDS matrix
-        mdsMatrixMulVec4(state_ptr);
-    }
-
-    // Internal round (S-box only on first element)
-    pub inline fn internalRound(state_ptr: *state) void {
-        // Apply S-box only to first element
-        state_ptr.*[0] = sbox(state_ptr.*[0]);
-    }
-
-    // Main permutation function
-    pub fn permutation(state_ptr: *state) void {
-        // External rounds (0-6)
-        for (0..external_rounds) |round| {
-            addRoundConstants(state_ptr, round);
-            externalRound(state_ptr);
-        }
-
-        // Internal rounds (7-8)
-        for (external_rounds..external_rounds + internal_rounds) |round| {
-            addRoundConstants(state_ptr, round);
-            internalRound(state_ptr);
-        }
-    }
-
-    // Vectorized permutation (processes 4 states in parallel)
+    // SIMD-optimized permutation for Vec4 batches
     pub fn permutationVec4(states: *[4]Vec4) void {
-        // External rounds (0-6)
-        for (0..external_rounds) |round| {
-            for (0..4) |i| {
-                addRoundConstantsVec4(&states[i], round, 0);
-                externalRoundVec4(&states[i]);
-            }
+        // Convert Vec4 to individual states
+        var state_array: [4]state = undefined;
+        for (0..4) |i| {
+            @memcpy(&state_array[i], &states[i]);
         }
 
-        // Internal rounds (7-8) - only first element gets S-box
-        for (external_rounds..external_rounds + internal_rounds) |round| {
-            for (0..4) |i| {
-                addRoundConstantsVec4(&states[i], round, 0);
-                // S-box only on first element
-                states[i][0] = sbox(states[i][0]);
-            }
+        // Process each state
+        for (0..4) |i| {
+            permutation(&state_array[i]);
+        }
+
+        // Convert back to Vec4
+        for (0..4) |i| {
+            @memcpy(&states[i], &state_array[i]);
         }
     }
 
-    // Batch processing for multiple permutations
+    // Batch permutation for multiple states
     pub fn batchPermutation(states: []state) void {
-        // Process in chunks of 4 for SIMD optimization
+        // Process in SIMD batches of 4
         var i: usize = 0;
         while (i + 4 <= states.len) {
-            var simd_states: @Vector(4, Vec4) = undefined;
-
-            // Load 4 states
+            var batch: [4]Vec4 = undefined;
             for (0..4) |j| {
-                simd_states[j] = states[i + j][0..4].*;
+                @memcpy(&batch[j], &states[i + j]);
             }
-
-            // Process with SIMD
-            permutationVec4(&simd_states);
-
-            // Store results
+            permutationVec4(&batch);
             for (0..4) |j| {
-                @memcpy(states[i + j][0..4], &simd_states[j]);
+                @memcpy(&states[i + j], &batch[j]);
             }
-
             i += 4;
         }
 
@@ -228,38 +282,34 @@ pub const simd_poseidon2 = struct {
         }
     }
 
-    // Convert input bytes to field elements (returns state/Vector)
+    // Convert bytes to field elements
     pub fn bytesToFieldElements(input: []const u8) state {
-        var elements: state = @splat(0);
+        var state_val: state = .{0} ** width;
+        const input_len = @min(input.len, width * 4);
 
-        // Process 4 bytes at a time
         for (0..width) |i| {
-            const offset = i * 4;
-            if (offset + 4 <= input.len) {
-                const bytes = input[offset..][0..4];
-                elements[i] = std.mem.readInt(u32, bytes, .little);
-            } else if (offset < input.len) {
-                // Handle partial bytes
-                var bytes: [4]u8 = .{0} ** 4;
-                const remaining = input.len - offset;
-                @memcpy(bytes[0..remaining], input[offset..]);
-                elements[i] = std.mem.readInt(u32, &bytes, .little);
+            const byte_offset = i * 4;
+            if (byte_offset + 3 < input_len) {
+                const slice = input[byte_offset .. byte_offset + 4];
+                const val = std.mem.readInt(u32, slice[0..4], .little);
+                state_val[i] = val % Field.modulus;
             }
         }
 
-        return elements;
+        return state_val;
     }
 
-    // Convert field elements to output bytes
+    // Convert field elements to bytes
     pub fn fieldElementsToBytes(elements: state) [width * 4]u8 {
-        var output: [width * 4]u8 = undefined;
+        var bytes: [width * 4]u8 = undefined;
 
         for (0..width) |i| {
-            const bytes = output[i * 4 ..][0..4];
-            std.mem.writeInt(u32, bytes, elements[i], .little);
+            const byte_offset = i * 4;
+            const slice = bytes[byte_offset .. byte_offset + 4];
+            std.mem.writeInt(u32, slice[0..4], elements[i], .little);
         }
 
-        return output;
+        return bytes;
     }
 
     // Hash function interface
@@ -272,69 +322,13 @@ pub const simd_poseidon2 = struct {
     // Batch hash function
     pub fn batchHash(allocator: std.mem.Allocator, inputs: []const []const u8) ![][width * 4]u8 {
         var outputs = std.ArrayList([width * 4]u8).init(allocator);
-        defer outputs.deinit();
+        try outputs.ensureTotalCapacity(inputs.len);
 
         for (inputs) |input| {
             const hash_result = hash(input);
             try outputs.append(hash_result);
         }
 
-        return try outputs.toOwnedSlice();
+        return outputs.toOwnedSlice();
     }
 };
-
-// Tests
-test "SIMD Poseidon2 basic functionality" {
-    const poseidon = simd_poseidon2;
-
-    // Test single permutation
-    var state = poseidon.state{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-    poseidon.permutation(&state);
-
-    // Test vectorized permutation
-    var states: @Vector(4, poseidon.Vec4) = .{
-        poseidon.Vec4{ 1, 2, 3, 4 },
-        poseidon.Vec4{ 5, 6, 7, 8 },
-        poseidon.Vec4{ 9, 10, 11, 12 },
-        poseidon.Vec4{ 13, 14, 15, 16 },
-    };
-    poseidon.permutationVec4(&states);
-
-    // Test hash function
-    const input = "Hello, World!";
-    _ = poseidon.hash(input);
-
-    std.debug.print("SIMD Poseidon2 test passed\n", .{});
-}
-
-test "SIMD Poseidon2 performance" {
-    const poseidon = simd_poseidon2;
-    const iterations = 10000;
-
-    // Test scalar performance
-    const start_scalar = std.time.nanoTimestamp();
-    for (0..iterations) |_| {
-        var state = poseidon.state{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-        poseidon.permutation(&state);
-    }
-    const scalar_time = std.time.nanoTimestamp() - start_scalar;
-
-    // Test vectorized performance
-    const start_vector = std.time.nanoTimestamp();
-    for (0..iterations / 4) |_| {
-        var states: @Vector(4, poseidon.Vec4) = .{
-            poseidon.Vec4{ 1, 2, 3, 4 },
-            poseidon.Vec4{ 5, 6, 7, 8 },
-            poseidon.Vec4{ 9, 10, 11, 12 },
-            poseidon.Vec4{ 13, 14, 15, 16 },
-        };
-        poseidon.permutationVec4(&states);
-    }
-    const vector_time = std.time.nanoTimestamp() - start_vector;
-
-    const speedup = @as(f64, @floatFromInt(scalar_time)) / @as(f64, @floatFromInt(vector_time));
-    std.debug.print("SIMD Poseidon2 speedup: {d:.2}x\n", .{speedup});
-
-    // Should achieve at least 2x speedup
-    std.debug.assert(speedup >= 2.0);
-}

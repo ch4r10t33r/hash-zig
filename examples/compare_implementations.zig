@@ -65,8 +65,8 @@ pub fn main() !void {
     const simd_duration = @as(f64, @floatFromInt(simd_end - simd_start)) / 1_000_000_000.0;
 
     std.debug.print("  Key generation time: {d:.3}s\n", .{simd_duration});
-    std.debug.print("  Public key length: {d} bytes\n", .{simd_keypair.public_key.chains.len * @sizeOf(@TypeOf(simd_keypair.public_key.chains[0]))});
-    std.debug.print("  Secret key length: {d} bytes\n", .{simd_keypair.secret_key.chains.len * @sizeOf(@TypeOf(simd_keypair.secret_key.chains[0]))});
+    std.debug.print("  Public key length: {d} bytes\n", .{simd_keypair.public_key.len});
+    std.debug.print("  Secret key length: {d} bytes\n", .{simd_keypair.secret_key.len});
 
     // Implementation Comparison Analysis
     std.debug.print("\nImplementation Comparison Analysis\n", .{});
@@ -96,8 +96,36 @@ pub fn main() !void {
     std.debug.print("    Public key: {d} bytes (Merkle root)\n", .{opt_keypair.public_key.len});
     std.debug.print("    Secret key: {d} bytes (all private keys)\n", .{opt_keypair.secret_key.len});
     std.debug.print("  SIMD:\n", .{});
-    std.debug.print("    Public key: {d} chains × {d} bytes = {d} bytes\n", .{ simd_keypair.public_key.chains.len, @sizeOf(@TypeOf(simd_keypair.public_key.chains[0])), simd_keypair.public_key.chains.len * @sizeOf(@TypeOf(simd_keypair.public_key.chains[0])) });
-    std.debug.print("    Secret key: {d} chains × {d} bytes = {d} bytes\n", .{ simd_keypair.secret_key.chains.len, @sizeOf(@TypeOf(simd_keypair.secret_key.chains[0])), simd_keypair.secret_key.chains.len * @sizeOf(@TypeOf(simd_keypair.secret_key.chains[0])) });
+    std.debug.print("    Public key: {d} bytes (Merkle root)\n", .{simd_keypair.public_key.len});
+    std.debug.print("    Secret key: {d} bytes (all private keys)\n", .{simd_keypair.secret_key.len});
+
+    // Public Key Consistency Test
+    std.debug.print("\nPublic Key Consistency Test\n", .{});
+    std.debug.print("===========================\n", .{});
+
+    // Both implementations now use the same Merkle tree structure
+    const keys_match = std.mem.eql(u8, opt_keypair.public_key, simd_keypair.public_key);
+    
+    if (keys_match) {
+        std.debug.print("✅ Public keys MATCH - Both implementations generate identical Merkle roots!\n", .{});
+        std.debug.print("  This confirms that both implementations use identical parameters and algorithms.\n", .{});
+    } else {
+        std.debug.print("❌ Public keys DIFFER - Implementations generate different Merkle roots!\n", .{});
+        std.debug.print("  This indicates a potential issue with parameter consistency or implementation differences.\n", .{});
+        
+        // Show first few bytes for debugging
+        std.debug.print("  Optimized V2 root (first 16 bytes): ", .{});
+        for (opt_keypair.public_key[0..@min(16, opt_keypair.public_key.len)]) |b| {
+            std.debug.print("{x:0>2}", .{b});
+        }
+        std.debug.print("\n", .{});
+        
+        std.debug.print("  SIMD root (first 16 bytes): ", .{});
+        for (simd_keypair.public_key[0..@min(16, simd_keypair.public_key.len)]) |b| {
+            std.debug.print("{x:0>2}", .{b});
+        }
+        std.debug.print("\n", .{});
+    }
 
     // Summary
     std.debug.print("\n📊 SUMMARY:\n", .{});
@@ -105,44 +133,7 @@ pub fn main() !void {
     std.debug.print("SIMD implementation: ✅ WORKING\n", .{});
     std.debug.print("Both implementations use identical parameters and generate valid keys\n", .{});
     std.debug.print("Performance difference: {d:.2}x ({s} is faster)\n", .{ speedup, faster_impl });
+    std.debug.print("Public key consistency: {s}\n", .{ if (keys_match) "✅ MATCH" else "❌ DIFFER" });
 
     std.debug.print("\n✅ Comparison completed!\n", .{});
-}
-
-// Compare public keys from different implementations
-fn comparePublicKeys(opt_key: []const u8, simd_key: simd_signature.SimdHashSignature.KeyPair) bool {
-    // Convert SIMD key to bytes for comparison
-    const simd_bytes = simdKeyToBytes(simd_key);
-
-    if (opt_key.len != simd_bytes.len) {
-        std.debug.print("Key length mismatch: opt={d}, simd={d}\n", .{ opt_key.len, simd_bytes.len });
-        return false;
-    }
-
-    return std.mem.eql(u8, opt_key, simd_bytes);
-}
-
-// Convert SIMD key structure to byte array for comparison
-fn simdKeyToBytes(simd_keypair: simd_signature.SimdHashSignature.KeyPair) []const u8 {
-    // SIMD key is stored as chains of vectors, we need to flatten it
-    const simd_key = simd_keypair.public_key;
-    const chain_size = @sizeOf(@TypeOf(simd_key.chains[0]));
-    const total_size = simd_key.chains.len * chain_size;
-
-    // Create a temporary buffer to hold the flattened key
-    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var bytes = allocator.alloc(u8, total_size) catch return &[_]u8{};
-    defer allocator.free(bytes);
-
-    var offset: usize = 0;
-    for (simd_key.chains) |chain| {
-        const chain_bytes = std.mem.asBytes(&chain);
-        @memcpy(bytes[offset .. offset + chain_size], chain_bytes);
-        offset += chain_size;
-    }
-
-    return bytes;
 }
