@@ -55,36 +55,6 @@ pub fn main() !void {
     std.debug.print("  Public key length: {d} bytes\n", .{public_key_size_10});
     std.debug.print("  Key generation time: {d:.3}s\n", .{keygen_duration_10});
 
-    // Display secret key as hex
-    std.debug.print("  Secret key (hex): ", .{});
-    for (keypair_10.secret_key.chains) |chain| {
-        for (0..8) |i| {
-            std.debug.print("{x:0>8}", .{chain[i]});
-        }
-    }
-    std.debug.print("\n", .{});
-
-    // Display public key as hex
-    std.debug.print("  Public key (hex): ", .{});
-    for (keypair_10.public_key.chains) |chain| {
-        for (0..8) |i| {
-            std.debug.print("{x:0>8}", .{chain[i]});
-        }
-    }
-    std.debug.print("\n", .{});
-
-    // CI-parseable key lines
-    std.debug.print("BENCHMARK_KEY: 2^10:secret:", .{});
-    for (keypair_10.secret_key.chains) |chain| {
-        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
-    }
-    std.debug.print("\n", .{});
-    std.debug.print("BENCHMARK_KEY: 2^10:public:", .{});
-    for (keypair_10.public_key.chains) |chain| {
-        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
-    }
-    std.debug.print("\n", .{});
-
     // Test lifetime_2_16
     std.debug.print("\nTesting lifetime: 2^16 (65,536 signatures)\n", .{});
     std.debug.print("==========================================\n", .{});
@@ -106,36 +76,6 @@ pub fn main() !void {
     std.debug.print("  Secret key length: {d} bytes\n", .{secret_key_size_16});
     std.debug.print("  Public key length: {d} bytes\n", .{public_key_size_16});
     std.debug.print("  Key generation time: {d:.3}s\n", .{keygen_duration_16});
-
-    // Display secret key as hex
-    std.debug.print("  Secret key (hex): ", .{});
-    for (keypair_16.secret_key.chains) |chain| {
-        for (0..8) |i| {
-            std.debug.print("{x:0>8}", .{chain[i]});
-        }
-    }
-    std.debug.print("\n", .{});
-
-    // Display public key as hex
-    std.debug.print("  Public key (hex): ", .{});
-    for (keypair_16.public_key.chains) |chain| {
-        for (0..8) |i| {
-            std.debug.print("{x:0>8}", .{chain[i]});
-        }
-    }
-    std.debug.print("\n", .{});
-
-    // CI-parseable key lines
-    std.debug.print("BENCHMARK_KEY: 2^16:secret:", .{});
-    for (keypair_16.secret_key.chains) |chain| {
-        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
-    }
-    std.debug.print("\n", .{});
-    std.debug.print("BENCHMARK_KEY: 2^16:public:", .{});
-    for (keypair_16.public_key.chains) |chain| {
-        for (0..8) |i| std.debug.print("{x:0>8}", .{chain[i]});
-    }
-    std.debug.print("\n", .{});
 
     // Summary
     std.debug.print("\n📊 SUMMARY:\n", .{});
