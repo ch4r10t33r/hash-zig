@@ -1,5 +1,5 @@
 //! Parameters and type definitions for hash-zig
-//! Based on hypercube hash-sig parameters: https://github.com/b-wagn/hypercube-hashsig-parameters
+//! Parameters matching hash-sig Rust implementation: https://github.com/b-wagn/hash-sig
 
 pub const SecurityLevel = enum {
     level_128, // Only 128-bit security supported
@@ -51,12 +51,11 @@ pub const Parameters = struct {
     key_lifetime: KeyLifetime,
 
     /// Initialize with Poseidon2 hash function (default)
-    /// Parameters based on hypercube-hashsig-parameters:
-    /// - 64 chains of length 8 (w=8) for 128-bit security
-    ///   OR 48 chains of length 10 (w=10)
+    /// Parameters to match Rust hash-sig implementation:
+    /// - 22 chains of length 256 (w=8) for 128-bit security
     /// - Binary encoding
     /// - 32-byte hash output
-    /// Using 64 chains of length 8 as recommended
+    /// - Poseidon2 with width=5, ext_rounds=7, int_rounds=2, sbox=9
     pub fn init(key_lifetime: KeyLifetime) Parameters {
         const tree_height = key_lifetime.treeHeight();
 
@@ -65,15 +64,15 @@ pub const Parameters = struct {
             .hash_function = .poseidon2,
             .encoding_type = .binary,
             .tree_height = tree_height,
-            .winternitz_w = 8, // Chain length (8 as per hypercube-hashsig-parameters)
-            .num_chains = 64, // Number of chains
+            .winternitz_w = 8, // Chain length (8 to match Rust)
+            .num_chains = 22, // Number of chains (22 to match Rust)
             .hash_output_len = 32, // 256-bit output for 128-bit security
             .key_lifetime = key_lifetime,
         };
     }
 
     /// Initialize with SHA3 hash function
-    /// Uses same parameters as Poseidon2 variant (64 chains of length 8)
+    /// Uses different parameters optimized for SHA3 (64 chains of length 8)
     pub fn initWithSha3(key_lifetime: KeyLifetime) Parameters {
         const tree_height = key_lifetime.treeHeight();
 
@@ -82,7 +81,7 @@ pub const Parameters = struct {
             .hash_function = .sha3,
             .encoding_type = .binary,
             .tree_height = tree_height,
-            .winternitz_w = 8, // Chain length (8 as per hypercube-hashsig-parameters)
+            .winternitz_w = 8, // Chain length (8 matching Rust implementation)
             .num_chains = 64,
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,

@@ -8,12 +8,16 @@
 pub const params = @import("params.zig");
 pub const poseidon2_hash = @import("poseidon2_hash.zig");
 pub const poseidon2_core = @import("poseidon2/root.zig");
+pub const poseidon2 = @import("poseidon2/poseidon2.zig");
 pub const sha3 = @import("sha3.zig");
 pub const encoding = @import("encoding.zig");
 pub const tweakable_hash = @import("tweakable_hash.zig");
 pub const winternitz = @import("winternitz.zig");
 pub const merkle = @import("merkle.zig");
 pub const signature = @import("signature.zig");
+pub const optimized_hash_v2 = @import("optimized_hash_v2.zig");
+pub const optimized_winternitz_v2 = @import("optimized_winternitz_v2.zig");
+pub const optimized_signature_v2 = @import("optimized_signature_v2.zig");
 
 // Convenience exports
 pub const SecurityLevel = params.SecurityLevel;

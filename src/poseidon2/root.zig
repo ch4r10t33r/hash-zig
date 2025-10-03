@@ -2,7 +2,7 @@
 // Adapted to support KoalaBear field for compatibility with plonky3
 
 pub const generic_montgomery = @import("fields/generic_montgomery.zig");
-pub const poseidon2 = @import("poseidon2.zig");
+pub const poseidon2 = @import("generic_poseidon2.zig");
 
 // Field implementations
 pub const koalabear_montgomery = @import("fields/koalabear/montgomery.zig");
