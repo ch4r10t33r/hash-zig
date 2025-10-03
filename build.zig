@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
 
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
@@ -166,12 +167,14 @@ pub fn build(b: *std.Build) void {
     // const optimized_benchmark_step = b.step("optimized-benchmark", "Run optimized performance benchmark");
     // optimized_benchmark_step.dependOn(&run_optimized_benchmark.step);
 
-    // Documentation
-    const docs_step = b.step("docs", "Generate documentation");
-    const install_docs = b.addInstallDirectory(.{
-        .source_dir = lib.getEmittedDocs(),
-        .install_dir = .prefix,
-        .install_subdir = "docs",
-    });
-    docs_step.dependOn(&install_docs.step);
+    // Documentation (opt-in to avoid enabling -femit-docs on default builds)
+    if (enable_docs) {
+        const docs_step = b.step("docs", "Generate documentation");
+        const install_docs = b.addInstallDirectory(.{
+            .source_dir = lib.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        docs_step.dependOn(&install_docs.step);
+    }
 }

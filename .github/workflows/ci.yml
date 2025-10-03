@@ -72,4 +72,4 @@ jobs:
           version: 0.14.1
       
       - name: Build library
-        run: zig build-lib src/root.zig --name hash_zig
+        run: zig build
