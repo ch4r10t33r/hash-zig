@@ -132,7 +132,7 @@ pub const MerkleTree = struct {
                 defer allocator.free(threads);
                 // Spawn workers
                 for (0..num_threads) |t| {
-                    threads[t] = try std.Thread.spawn(.{}, nodeWorker, .{ &ctx });
+                    threads[t] = try std.Thread.spawn(.{}, nodeWorker, .{&ctx});
                 }
                 // Join
                 for (threads) |th| th.join();

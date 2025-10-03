@@ -13,4 +13,3 @@ pub const koalabear16 = @import("instances/koalabear16.zig");
 // Re-export the main types (snake_case per lint)
 pub const poseidon2_koalabear16 = koalabear16.poseidon2_type;
 pub const koalabear_field = koalabear_montgomery.montgomery_field;
-
