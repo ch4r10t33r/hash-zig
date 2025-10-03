@@ -2,7 +2,7 @@ const std = @import("std");
 const simd_field = @import("simd_montgomery");
 const simd_poseidon = @import("simd_poseidon2");
 
-// SIMD-optimized chain_lengthinternitz OTS implementation
+// SIMD-optimized Winternitz OTS implementation
 // Uses vectorized field operations and batch processing for better performance
 
 pub const simd_winternitz_ots = struct {
@@ -10,47 +10,49 @@ pub const simd_winternitz_ots = struct {
     const Poseidon2 = simd_poseidon.simd_poseidon2;
 
     const chain_length = 8; // Chain length
-    const num_chains = 64; // Number of chains
     const hash_output_len = 32; // 256 bits = 32 bytes
     const field_elements_per_hash = 8; // 32 bytes / 4 bytes per element
 
     // Chain state type
     pub const ChainState = @Vector(field_elements_per_hash, u32);
-    pub const chain_array = [num_chains]ChainState;
 
     // Private key type
     pub const PrivateKey = struct {
-        chains: chain_array,
+        chains: []ChainState,
 
-        pub fn deinit(self: *PrivateKey) void {
-            _ = self;
+        pub fn deinit(self: *PrivateKey, allocator: std.mem.Allocator) void {
+            allocator.free(self.chains);
         }
     };
 
     // Public key type
     pub const PublicKey = struct {
-        chains: chain_array,
+        chains: []ChainState,
 
-        pub fn deinit(self: *PublicKey) void {
-            _ = self;
+        pub fn deinit(self: *PublicKey, allocator: std.mem.Allocator) void {
+            allocator.free(self.chains);
         }
     };
 
     // Signature type
     pub const Signature = struct {
-        chains: chain_array,
+        chains: []ChainState,
 
-        pub fn deinit(self: *Signature) void {
-            _ = self;
+        pub fn deinit(self: *Signature, allocator: std.mem.Allocator) void {
+            allocator.free(self.chains);
         }
     };
 
     // Generate private key with SIMD operations
-    pub fn generatePrivateKey(seed: []const u8) !PrivateKey {
-        var chains: chain_array = undefined;
+    pub fn generatePrivateKey(allocator: std.mem.Allocator, signature_params: anytype, seed: []const u8) !PrivateKey {
+        const num_chains = signature_params.num_chains;
+        var chains = try allocator.alloc(ChainState, num_chains);
+        errdefer allocator.free(chains);
 
         // Generate seeds for all chains in parallel
-        var chain_seeds: [num_chains][32]u8 = undefined;
+        var chain_seeds = try allocator.alloc([32]u8, num_chains);
+        defer allocator.free(chain_seeds);
+
         for (0..num_chains) |i| {
             // Derive chain seed from master seed
             var seed_derivation: [32]u8 = undefined;
@@ -78,8 +80,10 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate public key with SIMD-optimized chain generation
-    pub fn generatePublicKey(private_key: PrivateKey) !PublicKey {
-        var public_chains: chain_array = undefined;
+    pub fn generatePublicKey(allocator: std.mem.Allocator, private_key: PrivateKey) !PublicKey {
+        const num_chains = private_key.chains.len;
+        var public_chains = try allocator.alloc(ChainState, num_chains);
+        errdefer allocator.free(public_chains);
 
         // Process chains in batches of 4 for SIMD optimization
         var i: usize = 0;
@@ -153,8 +157,10 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate signature with SIMD operations
-    pub fn sign(message: []const u8, private_key: PrivateKey) !Signature {
-        var signature_chains: chain_array = undefined;
+    pub fn sign(allocator: std.mem.Allocator, message: []const u8, private_key: PrivateKey) !Signature {
+        const num_chains = private_key.chains.len;
+        var signature_chains = try allocator.alloc(ChainState, num_chains);
+        errdefer allocator.free(signature_chains);
 
         // Hash the message
         const message_hash = Poseidon2.hash(message);
@@ -228,6 +234,9 @@ pub const simd_winternitz_ots = struct {
 
     // Verify signature with SIMD operations
     pub fn verify(message: []const u8, signature: Signature, public_key: PublicKey) !bool {
+        const num_chains = signature.chains.len;
+        if (num_chains != public_key.chains.len) return false;
+
         // Hash the message
         const message_hash = Poseidon2.hash(message);
         const hash_elements = Poseidon2.bytesToFieldElements(&message_hash);
@@ -261,12 +270,12 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Batch signature generation for multiple messages
-    pub fn batchSign(messages: []const []const u8, private_key: PrivateKey) ![]Signature {
-        var signatures = try std.ArrayList(Signature).initCapacity(std.heap.page_allocator, messages.len);
+    pub fn batchSign(allocator: std.mem.Allocator, messages: []const []const u8, private_key: PrivateKey) ![]Signature {
+        var signatures = try std.ArrayList(Signature).initCapacity(allocator, messages.len);
         defer signatures.deinit();
 
         for (messages) |message| {
-            const signature = try sign(message, private_key);
+            const signature = try sign(allocator, message, private_key);
             try signatures.append(signature);
         }
 
