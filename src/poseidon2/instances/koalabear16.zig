@@ -124,7 +124,7 @@ test "koalabear16 basic" {
 }
 
 fn testPermutation(state: [width]u32) [width]u32 {
-    const FieldMod = poseidon2_koalabear.Field;
+    const FieldMod = poseidon2_koalabear.field;
     var mont_state: [width]FieldMod.MontFieldElem = undefined;
     inline for (0..width) |j| {
         FieldMod.toMontgomery(&mont_state[j], state[j]);
