@@ -159,7 +159,6 @@ pub fn build(b: *std.Build) void {
     const comparison_step = b.step("compare", "Compare Optimized V2 vs SIMD implementations");
     comparison_step.dependOn(&run_comparison.step);
 
-
     // Optimized benchmark executable (commented out for now)
     // const optimized_benchmark_module = b.createModule(.{
     //     .root_source_file = b.path("examples/optimized_benchmark.zig"),

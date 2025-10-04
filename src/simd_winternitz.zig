@@ -14,7 +14,7 @@ pub const simd_winternitz_ots = struct {
     const chain_length = 256; // Chain length (2^8 = 256)
     const hash_output_len = 32; // 256 bits = 32 bytes
     const field_elements_per_hash = 8; // 32 bytes / 4 bytes per element
-    const poseidon_width = 5; // Poseidon2 width
+    const poseidon_width = 16; // Poseidon2 width (matches SIMD implementation)
 
     // Chain state type
     pub const ChainState = @Vector(field_elements_per_hash, u32);

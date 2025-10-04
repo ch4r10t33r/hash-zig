@@ -33,10 +33,9 @@ pub fn main() !void {
     for (seed) |b| std.debug.print("{x:0>2}", .{b});
     std.debug.print("\n\n", .{});
 
-    // Test multiple lifetimes with the same seed for consistent comparison
+    // Test only lifetime_2_10 for focused performance testing
     const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.params.KeyLifetime, expected_sigs: u32 }{
         .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_sigs = 1024 },
-        .{ .name = "2^16", .lifetime = .lifetime_2_16, .expected_sigs = 65536 },
     };
 
     var results: [lifetimes.len]struct { duration: f64, secret_key_size: usize, public_key_size: usize } = undefined;
@@ -45,7 +44,7 @@ pub fn main() !void {
         std.debug.print("Testing lifetime: {s} ({d} signatures)\n", .{ config.name, config.expected_sigs });
         std.debug.print("==========================================\n", .{});
 
-        var sig_scheme = try simd_signature.SimdHashSignature.init(allocator, hash_zig.params.Parameters.init(config.lifetime));
+        var sig_scheme = try simd_signature.SimdHashSignature.init(allocator, hash_zig.params.Parameters.initHypercube(config.lifetime));
         defer sig_scheme.deinit();
 
         const keygen_start = std.time.nanoTimestamp();
@@ -56,8 +55,8 @@ pub fn main() !void {
         const keygen_duration = @as(f64, @floatFromInt(keygen_end - keygen_start)) / 1_000_000_000.0;
 
         // Calculate key sizes
-        const secret_key_size = keypair.secret_key.chains.len * @sizeOf(@TypeOf(keypair.secret_key.chains[0]));
-        const public_key_size = keypair.public_key.chains.len * @sizeOf(@TypeOf(keypair.public_key.chains[0]));
+        const secret_key_size = keypair.secret_key.len;
+        const public_key_size = keypair.public_key.len;
 
         // Store results
         results[i] = .{

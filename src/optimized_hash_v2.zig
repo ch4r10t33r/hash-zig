@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const params = @import("params.zig");
-const rust_poseidon2 = @import("poseidon2/poseidon2.zig").Poseidon2;
+const koalabear16 = @import("poseidon2/instances/koalabear16.zig");
 const Parameters = params.Parameters;
 const Allocator = std.mem.Allocator;
 
@@ -33,8 +33,8 @@ pub const OptimizedHashV2 = struct {
         std.mem.writeInt(u64, tweaked_data[0..8], tweak, .big);
         @memcpy(tweaked_data[8..], data);
 
-        // Use Rust-compatible Poseidon2
-        const hash_result = rust_poseidon2.hash(tweaked_data);
+        // Use Rust-compatible KoalaBear16 Poseidon2 (width=16, ext_rounds=8, int_rounds=20, sbox=3)
+        const hash_result = koalabear16.hash(tweaked_data);
 
         // Return a copy
         const result = try allocator.dupe(u8, &hash_result);

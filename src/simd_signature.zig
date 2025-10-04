@@ -41,8 +41,8 @@ pub const SimdHashSignature = struct {
 
     // Key pair type (matching optimized v2 format)
     pub const KeyPair = struct {
-        public_key: []u8,  // Merkle root (32 bytes)
-        secret_key: []u8,  // Combined secret keys
+        public_key: []u8, // Merkle root (32 bytes)
+        secret_key: []u8, // Combined secret keys
 
         pub fn deinit(self: *KeyPair, allocator: std.mem.Allocator) void {
             allocator.free(self.public_key);
@@ -92,7 +92,7 @@ pub const SimdHashSignature = struct {
             // Convert SIMD keys to byte arrays to match optimized v2 format
             const sk_bytes = try convertPrivateKeyToBytes(allocator, sk);
             const pk_bytes = try convertPublicKeyToBytes(allocator, pk);
-            
+
             // Clean up SIMD keys
             sk.deinit(allocator);
             pk.deinit(allocator);
@@ -205,20 +205,18 @@ pub const SimdHashSignature = struct {
         const num_chains = pk.chains.len;
         const chain_size = @sizeOf(@TypeOf(pk.chains[0]));
         const total_size = num_chains * chain_size;
-        
+
         var bytes = try allocator.alloc(u8, total_size);
         var offset: usize = 0;
-        
+
         for (pk.chains) |chain| {
             const chain_bytes = std.mem.asBytes(&chain);
             @memcpy(bytes[offset .. offset + chain_size], chain_bytes);
             offset += chain_size;
         }
-        
+
         return bytes;
     }
-
-
 
     // Sign message with SIMD optimizations
     pub fn sign(self: *SimdHashSignature, allocator: std.mem.Allocator, message: []const u8, keypair: KeyPair, _: u32) !Signature {

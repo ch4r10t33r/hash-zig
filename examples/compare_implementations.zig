@@ -21,8 +21,9 @@ pub fn main() !void {
     for (seed) |b| std.debug.print("{x:0>2}", .{b});
     std.debug.print("\n\n", .{});
 
-    // Test parameters - using lifetime_2_10 for quick testing
-    const params = hash_zig.params.Parameters.init(.lifetime_2_10);
+    // Test parameters - using hypercube parameters (64 chains of length 8)
+    // Reference: https://github.com/b-wagn/hypercube-hashsig-parameters
+    const params = hash_zig.params.Parameters.initHypercube(.lifetime_2_10);
     const expected_sigs = 1024;
 
     std.debug.print("Test Configuration:\n", .{});
@@ -105,21 +106,21 @@ pub fn main() !void {
 
     // Both implementations now use the same Merkle tree structure
     const keys_match = std.mem.eql(u8, opt_keypair.public_key, simd_keypair.public_key);
-    
+
     if (keys_match) {
         std.debug.print("✅ Public keys MATCH - Both implementations generate identical Merkle roots!\n", .{});
         std.debug.print("  This confirms that both implementations use identical parameters and algorithms.\n", .{});
     } else {
         std.debug.print("❌ Public keys DIFFER - Implementations generate different Merkle roots!\n", .{});
         std.debug.print("  This indicates a potential issue with parameter consistency or implementation differences.\n", .{});
-        
+
         // Show first few bytes for debugging
         std.debug.print("  Optimized V2 root (first 16 bytes): ", .{});
         for (opt_keypair.public_key[0..@min(16, opt_keypair.public_key.len)]) |b| {
             std.debug.print("{x:0>2}", .{b});
         }
         std.debug.print("\n", .{});
-        
+
         std.debug.print("  SIMD root (first 16 bytes): ", .{});
         for (simd_keypair.public_key[0..@min(16, simd_keypair.public_key.len)]) |b| {
             std.debug.print("{x:0>2}", .{b});
@@ -133,7 +134,7 @@ pub fn main() !void {
     std.debug.print("SIMD implementation: ✅ WORKING\n", .{});
     std.debug.print("Both implementations use identical parameters and generate valid keys\n", .{});
     std.debug.print("Performance difference: {d:.2}x ({s} is faster)\n", .{ speedup, faster_impl });
-    std.debug.print("Public key consistency: {s}\n", .{ if (keys_match) "✅ MATCH" else "❌ DIFFER" });
+    std.debug.print("Public key consistency: {s}\n", .{if (keys_match) "✅ MATCH" else "❌ DIFFER"});
 
     std.debug.print("\n✅ Comparison completed!\n", .{});
 }

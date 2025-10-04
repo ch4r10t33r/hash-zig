@@ -88,6 +88,24 @@ pub const Parameters = struct {
         };
     }
 
+    /// Initialize with Poseidon2 hash function using hypercube parameters
+    /// Uses parameters from hypercube-hashsig-parameters: 64 chains of length 8
+    /// Reference: https://github.com/b-wagn/hypercube-hashsig-parameters
+    pub fn initHypercube(key_lifetime: KeyLifetime) Parameters {
+        const tree_height = key_lifetime.treeHeight();
+
+        return .{
+            .security_level = .level_128,
+            .hash_function = .poseidon2,
+            .encoding_type = .binary,
+            .tree_height = tree_height,
+            .winternitz_w = 3, // Chain length 8 (2^3 = 8 as specified in hypercube parameters)
+            .num_chains = 64,  // Number of chains (64 as specified in hypercube parameters)
+            .hash_output_len = 32,
+            .key_lifetime = key_lifetime,
+        };
+    }
+
     /// Convenience initializer with default medium lifetime
     pub fn initDefault() Parameters {
         return init(.lifetime_2_16);
