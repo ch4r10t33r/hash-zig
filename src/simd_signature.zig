@@ -1,6 +1,5 @@
 const std = @import("std");
 const simd_winternitz = @import("simd_winternitz");
-const simd_poseidon = @import("simd_poseidon2");
 const params = @import("params");
 
 // SIMD-optimized hash-based signature scheme
@@ -8,7 +7,7 @@ const params = @import("params");
 
 pub const SimdHashSignature = struct {
     const Winternitz = simd_winternitz.simd_winternitz_ots;
-    const Poseidon2 = simd_poseidon.simd_poseidon2;
+    const Hash = params.optimized_hash_v2.OptimizedHashV2;
 
     // Configuration
     params: params.Parameters,
@@ -20,7 +19,10 @@ pub const SimdHashSignature = struct {
     // SIMD batch processing
     batch_size: u32,
 
-    pub fn init(_: std.mem.Allocator, signature_params: params.Parameters) !SimdHashSignature {
+    // Hash function for Merkle tree
+    hash: Hash,
+
+    pub fn init(allocator: std.mem.Allocator, signature_params: params.Parameters) !SimdHashSignature {
         const tree_height = signature_params.tree_height;
         const num_leaves = @as(u32, 1) << @intCast(tree_height);
 
@@ -29,21 +31,22 @@ pub const SimdHashSignature = struct {
             .tree_height = tree_height,
             .num_leaves = num_leaves,
             .batch_size = 4, // Process 4 operations in parallel
+            .hash = try Hash.init(allocator, signature_params),
         };
     }
 
     pub fn deinit(self: *SimdHashSignature) void {
-        _ = self;
+        self.hash.deinit();
     }
 
-    // Key pair type
+    // Key pair type (matching optimized v2 format)
     pub const KeyPair = struct {
-        secret_key: Winternitz.PrivateKey,
-        public_key: Winternitz.PublicKey,
+        public_key: []u8, // Merkle root (32 bytes)
+        secret_key: []u8, // Combined secret keys
 
         pub fn deinit(self: *KeyPair, allocator: std.mem.Allocator) void {
-            self.secret_key.deinit(allocator);
-            self.public_key.deinit(allocator);
+            allocator.free(self.public_key);
+            allocator.free(self.secret_key);
         }
     };
 
@@ -58,104 +61,161 @@ pub const SimdHashSignature = struct {
         }
     };
 
-    // Generate key pair with SIMD optimizations
+    // Generate key pair with SIMD optimizations and Merkle tree structure
     pub fn generateKeyPair(self: *SimdHashSignature, allocator: std.mem.Allocator, seed: []const u8) !KeyPair {
         if (seed.len != 32) return error.InvalidSeedLength;
 
-        // Scale the number of chains based on the lifetime
-        // For demonstration purposes, we'll scale the chains based on tree height
-        // In a real implementation, this would be more sophisticated
-        const base_chains = 64;
-        const scale_factor = @as(u32, 1) << @intCast(@max(0, @as(i32, @intCast(self.tree_height)) - 10));
-        const scaled_chains = base_chains * scale_factor;
+        const tree_height = self.params.tree_height;
+        const num_leaves = @as(u32, 1) << @intCast(tree_height);
 
-        // Create modified parameters with scaled chain count
-        var scaled_params = self.params;
-        scaled_params.num_chains = scaled_chains;
+        var leaf_public_keys = try allocator.alloc([]u8, num_leaves);
+        defer {
+            for (leaf_public_keys) |pk| allocator.free(pk);
+            allocator.free(leaf_public_keys);
+        }
 
-        const secret_key = try Winternitz.generatePrivateKey(allocator, scaled_params, seed);
-        const public_key = try Winternitz.generatePublicKey(allocator, secret_key);
+        var leaf_secret_keys = try allocator.alloc([][]u8, num_leaves);
+        defer {
+            for (leaf_secret_keys) |sk| {
+                for (sk) |s| allocator.free(s);
+                allocator.free(sk);
+            }
+            allocator.free(leaf_secret_keys);
+        }
+
+        // Generate keys for each leaf using SIMD winternitz
+        for (0..num_leaves) |i| {
+            const addr = @as(u64, @intCast(i));
+            var sk = try Winternitz.generatePrivateKey(allocator, self.params, seed, addr);
+            var pk = try Winternitz.generatePublicKey(allocator, sk);
+
+            // Convert SIMD keys to byte arrays to match optimized v2 format
+            const sk_bytes = try convertPrivateKeyToBytes(allocator, sk);
+            const pk_bytes = try convertPublicKeyToBytes(allocator, pk);
+
+            // Clean up SIMD keys
+            sk.deinit(allocator);
+            pk.deinit(allocator);
+
+            leaf_secret_keys[i] = sk_bytes;
+            leaf_public_keys[i] = pk_bytes;
+        }
+
+        // Build Merkle tree and get root
+        const merkle_root = try self.buildMerkleTree(allocator, leaf_public_keys);
+
+        // Combine all secret keys into one
+        const total_secret_len = num_leaves * self.params.num_chains * self.params.hash_output_len;
+        var combined_secret = try allocator.alloc(u8, total_secret_len);
+        var offset: usize = 0;
+
+        for (leaf_secret_keys) |sk| {
+            for (sk) |s| {
+                @memcpy(combined_secret[offset .. offset + s.len], s);
+                offset += s.len;
+            }
+        }
 
         return KeyPair{
-            .secret_key = secret_key,
-            .public_key = public_key,
+            .public_key = merkle_root,
+            .secret_key = combined_secret,
         };
     }
 
-    // Generate Merkle tree with SIMD optimizations
-    pub fn generateMerkleTree(self: *SimdHashSignature, allocator: std.mem.Allocator, _: []const [32]u8) ![]u32 {
-        const tree_size = 2 * self.num_leaves - 1;
-        var tree = try allocator.alloc(u32, tree_size * 8); // 8 field elements per node
-        defer allocator.free(tree);
+    // Build Merkle tree (same as optimized v2)
+    fn buildMerkleTree(self: *SimdHashSignature, allocator: std.mem.Allocator, leaf_public_keys: [][]u8) ![]u8 {
+        const tree_height = self.params.tree_height;
+        const num_leaves = leaf_public_keys.len;
+        const hash_output_len = self.params.hash_output_len;
 
-        // Initialize leaves (simplified for this example)
-        for (0..self.num_leaves) |i| {
-            // Zero padding for all leaves (simplified)
-            @memset(tree[i * 8 .. i * 8 + 8], 0);
+        // Start with leaf nodes
+        var current_level = try allocator.alloc([]u8, num_leaves);
+        defer {
+            for (current_level) |node| allocator.free(node);
+            allocator.free(current_level);
         }
 
-        // Build tree level by level with SIMD
-        var level_start = self.num_leaves;
-        var level_size = self.num_leaves / 2;
+        // Copy leaf public keys
+        for (leaf_public_keys, 0..) |leaf, i| {
+            current_level[i] = try allocator.dupe(u8, leaf);
+        }
 
-        while (level_size > 0) {
-            // Process level in SIMD batches
-            var i: usize = 0;
-            while (i + 4 <= level_size) {
-                var batch_hashes: @Vector(4, Poseidon2.Vec4) = undefined;
+        var level_size = num_leaves;
+        var current_height = tree_height;
 
-                // Load 4 pairs of nodes
-                for (0..4) |j| {
-                    const left_idx = (level_start - level_size) + (i + j) * 2;
-                    const right_idx = left_idx + 1;
+        // Build tree level by level with optimized memory management
+        while (level_size > 1) {
+            const next_level_size = (level_size + 1) / 2;
+            var next_level = try allocator.alloc([]u8, next_level_size);
 
-                    const left_node = tree[left_idx * 8 .. left_idx * 8 + 8].*;
-                    const right_node = tree[right_idx * 8 .. right_idx * 8 + 8].*;
-
-                    // Combine left and right nodes
-                    var combined: [64]u8 = undefined;
-                    @memcpy(combined[0..32], &Poseidon2.fieldElementsToBytes(left_node));
-                    @memcpy(combined[32..64], &Poseidon2.fieldElementsToBytes(right_node));
-
-                    // Hash combined node
-                    const hash_result = Poseidon2.hash(&combined);
-                    batch_hashes[j] = Poseidon2.bytesToFieldElements(&hash_result);
-                }
-
-                // Process batch with SIMD
-                for (0..4) |j| {
-                    const parent_idx = level_start + i + j;
-                    @memcpy(tree[parent_idx * 8 .. parent_idx * 8 + 8], &batch_hashes[j]);
-                }
-
-                i += 4;
-            }
-
-            // Process remaining nodes individually
-            while (i < level_size) {
-                const left_idx = (level_start - level_size) + i * 2;
+            for (0..next_level_size) |i| {
+                const left_idx = i * 2;
                 const right_idx = left_idx + 1;
 
-                const left_node = tree[left_idx * 8 .. left_idx * 8 + 8].*;
-                const right_node = tree[right_idx * 8 .. right_idx * 8 + 8].*;
+                if (right_idx < level_size) {
+                    // Combine left and right children
+                    var combined = try allocator.alloc(u8, hash_output_len * 2);
+                    @memcpy(combined[0..hash_output_len], current_level[left_idx][0..hash_output_len]);
+                    @memcpy(combined[hash_output_len .. hash_output_len * 2], current_level[right_idx][0..hash_output_len]);
 
-                // Combine and hash
-                var combined: [64]u8 = undefined;
-                @memcpy(combined[0..32], &Poseidon2.fieldElementsToBytes(left_node));
-                @memcpy(combined[32..64], &Poseidon2.fieldElementsToBytes(right_node));
-
-                const hash_result = Poseidon2.hash(&combined);
-                const parent_elements = Poseidon2.bytesToFieldElements(&hash_result);
-                @memcpy(tree[(level_start + i) * 8 .. (level_start + i) * 8 + 8], &parent_elements);
-
-                i += 1;
+                    const hash_result = try self.hash.hash(allocator, combined, current_height);
+                    allocator.free(combined);
+                    next_level[i] = hash_result;
+                } else {
+                    // Odd number of nodes, copy the last one
+                    next_level[i] = try allocator.dupe(u8, current_level[left_idx]);
+                }
             }
 
-            level_start += level_size;
-            level_size /= 2;
+            // Clean up current level
+            for (current_level) |node| allocator.free(node);
+            allocator.free(current_level);
+
+            current_level = next_level;
+            level_size = next_level_size;
+            current_height -= 1;
         }
 
-        return tree;
+        // Return the root
+        const root = current_level[0];
+        current_level[0] = try allocator.dupe(u8, root);
+        allocator.free(root);
+        return current_level[0];
+    }
+
+    // Convert SIMD private key to byte array
+    fn convertPrivateKeyToBytes(allocator: std.mem.Allocator, sk: Winternitz.PrivateKey) ![][]u8 {
+        const num_chains = sk.chains.len;
+        var chains = try allocator.alloc([]u8, num_chains);
+        errdefer {
+            for (chains) |c| allocator.free(c);
+            allocator.free(chains);
+        }
+
+        for (sk.chains, 0..) |chain, i| {
+            const chain_bytes = std.mem.asBytes(&chain);
+            chains[i] = try allocator.dupe(u8, chain_bytes);
+        }
+
+        return chains;
+    }
+
+    // Convert SIMD public key to byte array
+    fn convertPublicKeyToBytes(allocator: std.mem.Allocator, pk: Winternitz.PublicKey) ![]u8 {
+        const num_chains = pk.chains.len;
+        const chain_size = @sizeOf(@TypeOf(pk.chains[0]));
+        const total_size = num_chains * chain_size;
+
+        var bytes = try allocator.alloc(u8, total_size);
+        var offset: usize = 0;
+
+        for (pk.chains) |chain| {
+            const chain_bytes = std.mem.asBytes(&chain);
+            @memcpy(bytes[offset .. offset + chain_size], chain_bytes);
+            offset += chain_size;
+        }
+
+        return bytes;
     }
 
     // Sign message with SIMD optimizations

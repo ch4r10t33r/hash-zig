@@ -1,6 +1,7 @@
 const std = @import("std");
 const simd_field = @import("simd_montgomery");
 const simd_poseidon = @import("simd_poseidon2");
+const simd_hash = @import("simd_hash.zig").SimdHash;
 
 // SIMD-optimized Winternitz OTS implementation
 // Uses vectorized field operations and batch processing for better performance
@@ -8,10 +9,12 @@ const simd_poseidon = @import("simd_poseidon2");
 pub const simd_winternitz_ots = struct {
     const Field = simd_field.koala_bear_simd;
     const Poseidon2 = simd_poseidon.simd_poseidon2;
+    const Hash = simd_hash;
 
-    const chain_length = 8; // Chain length
+    const chain_length = 256; // Chain length (2^8 = 256)
     const hash_output_len = 32; // 256 bits = 32 bytes
     const field_elements_per_hash = 8; // 32 bytes / 4 bytes per element
+    const poseidon_width = 16; // Poseidon2 width (matches SIMD implementation)
 
     // Chain state type
     pub const ChainState = @Vector(field_elements_per_hash, u32);
@@ -44,7 +47,7 @@ pub const simd_winternitz_ots = struct {
     };
 
     // Generate private key with SIMD operations
-    pub fn generatePrivateKey(allocator: std.mem.Allocator, signature_params: anytype, seed: []const u8) !PrivateKey {
+    pub fn generatePrivateKey(allocator: std.mem.Allocator, signature_params: anytype, seed: []const u8, addr: u64) !PrivateKey {
         const num_chains = signature_params.num_chains;
         var chains = try allocator.alloc(ChainState, num_chains);
         errdefer allocator.free(chains);
@@ -53,27 +56,42 @@ pub const simd_winternitz_ots = struct {
         var chain_seeds = try allocator.alloc([32]u8, num_chains);
         defer allocator.free(chain_seeds);
 
-        for (0..num_chains) |i| {
-            // Derive chain seed from master seed
-            var seed_derivation: [32]u8 = undefined;
-            if (seed.len >= 32) {
-                @memcpy(seed_derivation[0..32], seed[0..32]);
-            } else {
-                @memset(seed_derivation[0..32], 0);
-                @memcpy(seed_derivation[0..seed.len], seed);
-            }
+        // Initialize SIMD hash function
+        var hash = Hash.init(allocator);
+        defer hash.deinit();
 
-            // Add chain index to seed
-            std.mem.writeInt(u32, seed_derivation[28..32], @intCast(i), .little);
-            chain_seeds[i] = seed_derivation;
+        for (0..num_chains) |i| {
+            // Use the same prfHash approach as optimized v2: prfHash(seed, addr + i)
+            const chain_addr = addr + i;
+            const hash_result = try hash.prfHash(allocator, seed, chain_addr);
+            defer allocator.free(hash_result);
+
+            // Copy hash result and pad to 32 bytes if needed
+            const copy_len = @min(hash_result.len, 32);
+            @memcpy(chain_seeds[i][0..copy_len], hash_result[0..copy_len]);
+            if (copy_len < 32) {
+                @memset(chain_seeds[i][copy_len..32], 0); // Pad with zeros
+            }
         }
 
-        // Generate initial chain states using SIMD
+        // Generate initial chain states using SIMD hash
         for (0..num_chains) |i| {
-            const hash_result = Poseidon2.hash(&chain_seeds[i]);
-            const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-            // Convert first 8 elements to ChainState vector
-            chains[i] = @Vector(field_elements_per_hash, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+            const hash_result = try hash.hash(allocator, &chain_seeds[i], 0);
+            defer allocator.free(hash_result);
+
+            // Convert hash result to field elements
+            var chain_state: ChainState = undefined;
+            for (0..field_elements_per_hash) |j| {
+                const byte_offset = j * 4;
+                if (byte_offset + 3 < hash_result.len) {
+                    const slice = hash_result[byte_offset .. byte_offset + 4];
+                    const val = std.mem.readInt(u32, slice[0..4], .little);
+                    chain_state[j] = val % Field.modulus;
+                } else {
+                    chain_state[j] = 0;
+                }
+            }
+            chains[i] = chain_state;
         }
 
         return PrivateKey{ .chains = chains };
@@ -84,6 +102,10 @@ pub const simd_winternitz_ots = struct {
         const num_chains = private_key.chains.len;
         var public_chains = try allocator.alloc(ChainState, num_chains);
         errdefer allocator.free(public_chains);
+
+        // Initialize SIMD hash function
+        var hash = Hash.init(allocator);
+        defer hash.deinit();
 
         // Process chains in batches of 4 for SIMD optimization
         var i: usize = 0;
@@ -96,7 +118,7 @@ pub const simd_winternitz_ots = struct {
             }
 
             // Generate chains with SIMD
-            generateChainsBatch(&batch_states, chain_length);
+            try generateChainsBatch(allocator, &hash, &batch_states, chain_length);
 
             // Store results
             for (0..4) |j| {
@@ -109,7 +131,7 @@ pub const simd_winternitz_ots = struct {
         // Process remaining chains individually
         while (i < num_chains) {
             var state = private_key.chains[i];
-            generateChain(&state, chain_length);
+            try generateChain(allocator, &hash, &state, chain_length);
             public_chains[i] = state;
             i += 1;
         }
@@ -118,40 +140,65 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate a single chain with SIMD operations
-    pub fn generateChain(state: *ChainState, length: u32) void {
+    pub fn generateChain(allocator: std.mem.Allocator, hash: *Hash, state: *ChainState, length: u32) !void {
         for (0..length) |_| {
-            // Convert vector to array for fieldElementsToBytes
-            const state_array: [16]u32 = .{
-                state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7],
-                0, 0, 0, 0, 0, 0, 0, 0, // Pad with zeros to make it 16 elements
-            };
-            const state_bytes = Poseidon2.fieldElementsToBytes(state_array);
+            // Convert vector to bytes for hashing
+            var state_bytes: [field_elements_per_hash * 4]u8 = undefined;
+            for (0..field_elements_per_hash) |i| {
+                const byte_offset = i * 4;
+                const slice = state_bytes[byte_offset .. byte_offset + 4];
+                std.mem.writeInt(u32, slice[0..4], state[i], .little);
+            }
 
-            // Hash the state
-            const hash_result = Poseidon2.hash(&state_bytes);
+            // Hash the state using SIMD hash
+            const hash_result = try hash.hash(allocator, &state_bytes, 0);
+            defer allocator.free(hash_result);
 
             // Update state with hash result
-            const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-            state.* = @Vector(8, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+            var new_state: ChainState = undefined;
+            for (0..field_elements_per_hash) |j| {
+                const byte_offset = j * 4;
+                if (byte_offset + 3 < hash_result.len) {
+                    const slice = hash_result[byte_offset .. byte_offset + 4];
+                    const val = std.mem.readInt(u32, slice[0..4], .little);
+                    new_state[j] = val % Field.modulus;
+                } else {
+                    new_state[j] = 0;
+                }
+            }
+            state.* = new_state;
         }
     }
 
     // Generate multiple chains in batch using SIMD
-    pub fn generateChainsBatch(states: *[4]ChainState, length: u32) void {
+    pub fn generateChainsBatch(allocator: std.mem.Allocator, hash: *Hash, states: *[4]ChainState, length: u32) !void {
         for (0..length) |_| {
             // Process all 4 states in parallel
             for (0..4) |i| {
-                // Convert vector to array for fieldElementsToBytes
-                const state_array: [16]u32 = .{
-                    states[i][0], states[i][1], states[i][2], states[i][3],
-                    states[i][4], states[i][5], states[i][6], states[i][7],
-                    0,            0,            0,            0,
-                    0, 0, 0, 0, // Pad with zeros to make it 16 elements
-                };
-                const state_bytes = Poseidon2.fieldElementsToBytes(state_array);
-                const hash_result = Poseidon2.hash(&state_bytes);
-                const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-                states[i] = @Vector(8, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+                // Convert vector to bytes for hashing
+                var state_bytes: [field_elements_per_hash * 4]u8 = undefined;
+                for (0..field_elements_per_hash) |j| {
+                    const byte_offset = j * 4;
+                    const slice = state_bytes[byte_offset .. byte_offset + 4];
+                    std.mem.writeInt(u32, slice[0..4], states[i][j], .little);
+                }
+
+                const hash_result = try hash.hash(allocator, &state_bytes, 0);
+                defer allocator.free(hash_result);
+
+                // Update state with hash result
+                var new_state: ChainState = undefined;
+                for (0..field_elements_per_hash) |j| {
+                    const byte_offset = j * 4;
+                    if (byte_offset + 3 < hash_result.len) {
+                        const slice = hash_result[byte_offset .. byte_offset + 4];
+                        const val = std.mem.readInt(u32, slice[0..4], .little);
+                        new_state[j] = val % Field.modulus;
+                    } else {
+                        new_state[j] = 0;
+                    }
+                }
+                states[i] = new_state;
             }
         }
     }
@@ -162,9 +209,26 @@ pub const simd_winternitz_ots = struct {
         var signature_chains = try allocator.alloc(ChainState, num_chains);
         errdefer allocator.free(signature_chains);
 
-        // Hash the message
-        const message_hash = Poseidon2.hash(message);
-        const hash_elements = Poseidon2.bytesToFieldElements(&message_hash);
+        // Initialize SIMD hash function
+        var hash = Hash.init(allocator);
+        defer hash.deinit();
+
+        // Hash the message using SIMD hash
+        const message_hash = try hash.hash(allocator, message, 0);
+        defer allocator.free(message_hash);
+
+        // Convert hash to field elements
+        var hash_elements: [field_elements_per_hash]u32 = undefined;
+        for (0..field_elements_per_hash) |i| {
+            const byte_offset = i * 4;
+            if (byte_offset + 3 < message_hash.len) {
+                const slice = message_hash[byte_offset .. byte_offset + 4];
+                const val = std.mem.readInt(u32, slice[0..4], .little);
+                hash_elements[i] = val % Field.modulus;
+            } else {
+                hash_elements[i] = 0;
+            }
+        }
 
         // Generate signature chains in parallel
         var i: usize = 0;
@@ -183,7 +247,7 @@ pub const simd_winternitz_ots = struct {
             }
 
             // Generate signature chains with SIMD
-            generateSignatureChainsBatch(&batch_states, batch_lengths);
+            try generateSignatureChainsBatch(allocator, &hash, &batch_states, batch_lengths);
 
             // Store results
             for (0..4) |j| {
@@ -199,7 +263,7 @@ pub const simd_winternitz_ots = struct {
             const chain_len = hash_element % chain_length;
 
             var state = private_key.chains[i];
-            generateChain(&state, chain_len);
+            try generateChain(allocator, &hash, &state, chain_len);
             signature_chains[i] = state;
             i += 1;
         }
@@ -208,7 +272,7 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate signature chains in batch using SIMD
-    pub fn generateSignatureChainsBatch(states: *[4]ChainState, lengths: [4]u32) void {
+    pub fn generateSignatureChainsBatch(allocator: std.mem.Allocator, hash: *Hash, states: *[4]ChainState, lengths: [4]u32) !void {
         // Find maximum length
         const max_length = @max(lengths[0], @max(lengths[1], @max(lengths[2], lengths[3])));
 
@@ -216,17 +280,30 @@ pub const simd_winternitz_ots = struct {
         for (0..max_length) |step| {
             for (0..4) |i| {
                 if (step < lengths[i]) {
-                    // Convert vector to array for fieldElementsToBytes
-                    const state_array: [16]u32 = .{
-                        states[i][0], states[i][1], states[i][2], states[i][3],
-                        states[i][4], states[i][5], states[i][6], states[i][7],
-                        0,            0,            0,            0,
-                        0, 0, 0, 0, // Pad with zeros to make it 16 elements
-                    };
-                    const state_bytes = Poseidon2.fieldElementsToBytes(state_array);
-                    const hash_result = Poseidon2.hash(&state_bytes);
-                    const full_elements = Poseidon2.bytesToFieldElements(&hash_result);
-                    states[i] = @Vector(8, u32){ full_elements[0], full_elements[1], full_elements[2], full_elements[3], full_elements[4], full_elements[5], full_elements[6], full_elements[7] };
+                    // Convert vector to bytes for hashing
+                    var state_bytes: [field_elements_per_hash * 4]u8 = undefined;
+                    for (0..field_elements_per_hash) |j| {
+                        const byte_offset = j * 4;
+                        const slice = state_bytes[byte_offset .. byte_offset + 4];
+                        std.mem.writeInt(u32, slice[0..4], states[i][j], .little);
+                    }
+
+                    const hash_result = try hash.hash(allocator, &state_bytes, 0);
+                    defer allocator.free(hash_result);
+
+                    // Update state with hash result
+                    var new_state: ChainState = undefined;
+                    for (0..field_elements_per_hash) |j| {
+                        const byte_offset = j * 4;
+                        if (byte_offset + 3 < hash_result.len) {
+                            const slice = hash_result[byte_offset .. byte_offset + 4];
+                            const val = std.mem.readInt(u32, slice[0..4], .little);
+                            new_state[j] = val % Field.modulus;
+                        } else {
+                            new_state[j] = 0;
+                        }
+                    }
+                    states[i] = new_state;
                 }
             }
         }

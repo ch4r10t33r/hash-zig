@@ -111,6 +111,61 @@ fn parseHex(s: []const u8) u32 {
 // Export the main Poseidon2 type
 pub const poseidon2_type = poseidon2_koalabear;
 
+// Hash function that converts bytes to field elements, applies permutation, and converts back
+// Returns 32 bytes (truncated from 64 bytes) to match expected hash output length
+pub fn hash(input: []const u8) [32]u8 {
+    const state_val = bytesToFieldElements(input);
+    var mont_state: [width]poseidon2_koalabear.field.MontFieldElem = undefined;
+    const FieldMod = poseidon2_koalabear.field;
+
+    // Convert to Montgomery form
+    inline for (0..width) |j| {
+        FieldMod.toMontgomery(&mont_state[j], state_val[j]);
+    }
+
+    // Apply permutation
+    poseidon2_koalabear.permutation(&mont_state);
+
+    // Convert back to normal form
+    var ret: [width]u32 = undefined;
+    inline for (0..width) |j| {
+        ret[j] = FieldMod.toNormal(mont_state[j]);
+    }
+
+    // Convert to bytes and truncate to 32 bytes
+    const full_bytes = fieldElementsToBytes(ret);
+    var truncated: [32]u8 = undefined;
+    @memcpy(truncated[0..32], full_bytes[0..32]);
+    return truncated;
+}
+
+// Convert bytes to field elements (pad with zeros if needed)
+fn bytesToFieldElements(input: []const u8) [width]u32 {
+    var state: [width]u32 = std.mem.zeroes([width]u32);
+    const bytes_per_element = 4;
+    const max_bytes = width * bytes_per_element;
+
+    const copy_len = @min(input.len, max_bytes);
+    for (0..copy_len) |i| {
+        const element_idx = i / bytes_per_element;
+        const byte_idx = i % bytes_per_element;
+        const shift = (bytes_per_element - 1 - byte_idx) * 8;
+        state[element_idx] |= (@as(u32, input[i]) << @intCast(shift));
+    }
+
+    return state;
+}
+
+// Convert field elements to bytes
+fn fieldElementsToBytes(elements: [width]u32) [width * 4]u8 {
+    var bytes: [width * 4]u8 = undefined;
+    for (0..width) |i| {
+        const offset = i * 4;
+        std.mem.writeInt(u32, bytes[offset..][0..4], elements[i], .big);
+    }
+    return bytes;
+}
+
 test "koalabear16 basic" {
     @setEvalBranchQuota(100_000);
 

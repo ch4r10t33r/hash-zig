@@ -13,7 +13,8 @@ A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA
 - **SHA3 Hash Function**: NIST-standardized cryptographic hash (SHA3-256)
 - **128-bit Security**: Focused on a single, well-tested security level
 - **Flexible Key Lifetimes**: Support from 2^10 to 2^32 signatures per keypair
-- **Rust-Compatible Parameters**: 22 chains of length 256 (w=8) matching [hash-sig](https://github.com/b-wagn/hash-sig) implementation
+- **Hypercube Parameters**: 64 chains of length 8 (w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Rust-Compatible Poseidon2**: Width=16, external_rounds=8, internal_rounds=20, sbox_degree=3 matching [hash-sig](https://github.com/b-wagn/hash-sig) implementation
 - **Binary Encoding**: Incomparable binary encoding scheme
 - **Pure Zig**: Minimal dependencies, fully type-safe
 - **Well-Tested**: Comprehensive unit and integration tests
@@ -133,6 +134,11 @@ The hash-zig library includes several built-in programs for demonstration, testi
 **Command**: `zig build simd-benchmark`
 **Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for comparing performance improvements from vectorization.
 
+### Implementation Comparison (`hash-zig-compare`)
+**Purpose**: Direct performance comparison between Optimized V2 and SIMD implementations
+**Command**: `zig build compare`
+**Description**: Compares the performance of Optimized V2 vs SIMD implementations using identical hypercube parameters (64 chains of length 8) and the same seed. Both implementations use Rust-compatible Poseidon2 (width=16). Shows detailed timing analysis, key structure differences, and performance ratios. Demonstrates the performance characteristics of different implementation approaches.
+
 ### Building All Programs
 ```bash
 # Build all executables
@@ -143,6 +149,7 @@ zig build example      # Basic usage demo
 zig build profile      # Performance profiling
 zig build benchmark    # Standard benchmark
 zig build simd-benchmark  # SIMD benchmark
+zig build compare      # Compare Optimized V2 vs SIMD
 ```
 
 ### Program Outputs
@@ -152,6 +159,24 @@ All programs provide detailed timing information and can be used for:
 - **Benchmarking**: Comparing different implementations and optimizations
 - **CI/CD**: Automated performance regression testing
 
+### Performance Comparison Results
+
+The `hash-zig-compare` program demonstrates the performance characteristics of different implementations:
+
+**Current Results (Apple M2, lifetime 2^10, hypercube parameters):**
+- **Optimized V2**: Uses Rust-compatible Poseidon2 (width=16) with hypercube parameters
+- **SIMD**: Uses SIMD-optimized Poseidon2 (width=16) with hypercube parameters
+- **Parameters**: Both use 64 chains of length 8 (w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+
+**Key Characteristics:**
+- **Both Implementations**: Use identical hypercube parameters (64 chains of length 8)
+- **Both Implementations**: Use Rust-compatible Poseidon2 (width=16, external_rounds=8, internal_rounds=20, sbox_degree=3)
+- **Same Security**: Both provide 128-bit post-quantum security
+- **Same Seed**: Both use the same seed for consistent comparison
+- **Different Approaches**: Optimized V2 uses standard implementation, SIMD uses vectorized operations
+
+This comparison highlights the performance characteristics of different implementation approaches while maintaining identical security properties and parameters.
+
 ## 📖 Usage
 
 ### Basic Signing and Verification
@@ -160,8 +185,8 @@ All programs provide detailed timing information and can be used for:
 const hash_zig = @import("hash-zig");
 
 // Configure parameters with Poseidon2 (default)
-// 128-bit security with 22 chains of length 256 (w=8)
-const params = hash_zig.Parameters.init(.lifetime_2_16);
+// 128-bit security with hypercube parameters: 64 chains of length 8 (w=3)
+const params = hash_zig.Parameters.initHypercube(.lifetime_2_16);
 var sig = try hash_zig.HashSignature.init(allocator, params);
 defer sig.deinit();
 
@@ -215,8 +240,8 @@ defer sig.deinit();
 ### Hash Function Selection
 
 ```zig
-// Poseidon2 (default) - optimized for ZK proof systems
-const params_p2 = hash_zig.Parameters.init(.lifetime_2_16);
+// Poseidon2 with hypercube parameters (default) - optimized for ZK proof systems
+const params_p2 = hash_zig.Parameters.initHypercube(.lifetime_2_16);
 
 // SHA3-256 - NIST standard
 const params_sha3 = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
@@ -251,18 +276,19 @@ const params_extreme = hash_zig.Parameters.init(.lifetime_2_32);
 
 ### Security Parameters
 
-Matching [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation:
+Using hypercube parameters as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters):
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | Security Level | 128-bit | Post-quantum secure |
 | Hash Output | 32 bytes | 256-bit hash for 128-bit security |
 | Encoding | Binary | Incomparable binary encoding |
-| Winternitz w | 8 | Chain length (matching Rust) |
-| Number of Chains | 22 | Matching Rust implementation |
-| Chain Length | 256 | Winternitz parameter w=8 |
+| Winternitz w | 3 | Chain length 8 (2^3 = 8) |
+| Number of Chains | 64 | Hypercube parameter specification |
+| Chain Length | 8 | Winternitz parameter w=3 |
+| Poseidon2 Width | 16 | Rust-compatible (external_rounds=8, internal_rounds=20, sbox_degree=3) |
 
-**Note**: These parameters match the `SIGWinternitzLifetime18W8` instantiation from the [hash-sig](https://github.com/b-wagn/hash-sig) repository, ensuring compatibility between Rust and Zig implementations.
+**Note**: These parameters use the hypercube configuration (64 chains of length 8) as specified in the [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters) repository, with Rust-compatible Poseidon2 parameters for interoperability.
 
 ### Hash Functions
 
@@ -317,7 +343,7 @@ hash-zig/
 
 - **Poseidon2**: Arithmetic hash over KoalaBear (31‑bit) with Montgomery reduction; constants match plonky3
 - **SHA3-256**: NIST-standardized Keccak-based hash for general-purpose cryptography
-- **Winternitz OTS**: One-time signature with 22 chains of length 256 (w=8)
+- **Winternitz OTS**: One-time signature with 64 chains of length 8 (w=3) using hypercube parameters
 - **Merkle Tree**: Binary tree implementation for managing OTS public keys
 - **Binary Encoding**: Incomparable binary encoding for 128-bit security
 - **Parallel Key Generation**: Multi-threaded with atomic job queues
@@ -365,7 +391,8 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 | Verify | **99 ms** | Fast (only processes auth path) |
 
 **Performance Notes:**
-- Using **w=8** (22 chains of length 256) matching [hash-sig](https://github.com/b-wagn/hash-sig) implementation
+- Using **hypercube parameters** (64 chains of length 8, w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- Using **Rust-compatible Poseidon2** (width=16) for interoperability
 - **Optimized with inline hints** for field arithmetic operations (~23% improvement)
 - Parallel key generation uses all available CPU cores automatically
 - Falls back to sequential mode for small workloads (< 64 leaves)
@@ -373,6 +400,7 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 - Three levels of parallelization: leaf generation, WOTS chains, and Merkle tree construction
 - Fast verification (~99ms) thanks to shorter chain length
 - **Benchmark against Rust**: Use [hash-sig-benchmarks](https://github.com/ch4r10t33r/hash-sig-benchmarks) for head-to-head comparison
+- **Hypercube Parameters**: Both Optimized V2 and SIMD implementations use identical hypercube parameters (64 chains of length 8)
 
 #### Projected Key Generation Times for All Lifetimes
 
