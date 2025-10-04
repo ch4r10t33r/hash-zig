@@ -100,7 +100,7 @@ pub const Parameters = struct {
             .encoding_type = .binary,
             .tree_height = tree_height,
             .winternitz_w = 3, // Chain length 8 (2^3 = 8 as specified in hypercube parameters)
-            .num_chains = 64,  // Number of chains (64 as specified in hypercube parameters)
+            .num_chains = 64, // Number of chains (64 as specified in hypercube parameters)
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
         };
