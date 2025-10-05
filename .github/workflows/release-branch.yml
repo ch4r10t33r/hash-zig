@@ -1,11 +1,14 @@
-name: Release Branch Workflow
+name: Release Branch Workflow - DEPRECATED
 
+# This workflow is deprecated in favor of release-on-master.yml
+# which creates releases directly on master branch updates
 on:
-  push:
-    branches:
-      - master
-      - main
-  workflow_dispatch: # Allow manual triggering
+  # Disabled - use release-on-master.yml instead
+  # push:
+  #   branches:
+  #     - master
+  #     - main
+  workflow_dispatch: # Keep for manual triggering if needed
 
 jobs:
   create-release-branch:
