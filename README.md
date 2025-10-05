@@ -86,7 +86,7 @@ pub fn main() !void {
 
     // Initialize with medium lifetime (2^16 signatures)
     // Only 128-bit security is supported
-    const params = hash_zig.Parameters.init(.lifetime_2_16);
+    const params = hash_zig.Parameters.initHypercube(.lifetime_2_16);
     var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
@@ -127,7 +127,7 @@ The hash-zig library includes several built-in programs for demonstration, testi
 ### Performance Benchmark (`hash-zig-benchmark`)
 **Purpose**: Comprehensive performance benchmarking
 **Command**: `zig build benchmark`
-**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation, signing, and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing.
+**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation, signing, and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing. Uses the optimized implementation for baseline performance measurements.
 
 ### SIMD Benchmark (`hash-zig-simd-benchmark`)
 **Purpose**: Tests SIMD-optimized implementations
@@ -138,6 +138,10 @@ The hash-zig library includes several built-in programs for demonstration, testi
 **Purpose**: Direct performance comparison between Optimized V2 and SIMD implementations
 **Command**: `zig build compare`
 **Description**: Compares the performance of Optimized V2 vs SIMD implementations using identical hypercube parameters (64 chains of length 8) and the same seed. Both implementations use Rust-compatible Poseidon2 (width=16). Shows detailed timing analysis, key structure differences, and performance ratios. Demonstrates the performance characteristics of different implementation approaches.
+
+### Additional Examples
+- **`optimized_benchmark.zig`**: Standalone optimized implementation benchmark (currently commented out in build.zig)
+- **`scripts/benchmark.zig`**: Main benchmark script used by `zig build benchmark`
 
 ### Building All Programs
 ```bash
@@ -158,24 +162,6 @@ All programs provide detailed timing information and can be used for:
 - **Testing**: Verifying correct implementation and performance expectations
 - **Benchmarking**: Comparing different implementations and optimizations
 - **CI/CD**: Automated performance regression testing
-
-### Performance Comparison Results
-
-The `hash-zig-compare` program demonstrates the performance characteristics of different implementations:
-
-**Current Results (Apple M2, lifetime 2^10, hypercube parameters):**
-- **Optimized V2**: Uses Rust-compatible Poseidon2 (width=16) with hypercube parameters
-- **SIMD**: Uses SIMD-optimized Poseidon2 (width=16) with hypercube parameters
-- **Parameters**: Both use 64 chains of length 8 (w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
-
-**Key Characteristics:**
-- **Both Implementations**: Use identical hypercube parameters (64 chains of length 8)
-- **Both Implementations**: Use Rust-compatible Poseidon2 (width=16, external_rounds=8, internal_rounds=20, sbox_degree=3)
-- **Same Security**: Both provide 128-bit post-quantum security
-- **Same Seed**: Both use the same seed for consistent comparison
-- **Different Approaches**: Optimized V2 uses standard implementation, SIMD uses vectorized operations
-
-This comparison highlights the performance characteristics of different implementation approaches while maintaining identical security properties and parameters.
 
 ## 📖 Usage
 
@@ -254,22 +240,22 @@ const params_default = hash_zig.Parameters.initDefault();
 
 ```zig
 // lifetime_2_10: 2^10 = 1,024 signatures
-const params_short = hash_zig.Parameters.init(.lifetime_2_10);
+const params_short = hash_zig.Parameters.initHypercube(.lifetime_2_10);
 
 // lifetime_2_16: 2^16 = 65,536 signatures (default)
-const params_medium = hash_zig.Parameters.init(.lifetime_2_16);
+const params_medium = hash_zig.Parameters.initHypercube(.lifetime_2_16);
 
 // lifetime_2_18: 2^18 = 262,144 signatures (for benchmarking against Rust impl)
-const params_benchmark = hash_zig.Parameters.init(.lifetime_2_18);
+const params_benchmark = hash_zig.Parameters.initHypercube(.lifetime_2_18);
 
 // lifetime_2_20: 2^20 = 1,048,576 signatures
-const params_long = hash_zig.Parameters.init(.lifetime_2_20);
+const params_long = hash_zig.Parameters.initHypercube(.lifetime_2_20);
 
 // lifetime_2_28: 2^28 = 268,435,456 signatures
-const params_very_long = hash_zig.Parameters.init(.lifetime_2_28);
+const params_very_long = hash_zig.Parameters.initHypercube(.lifetime_2_28);
 
 // lifetime_2_32: 2^32 = 4,294,967,296 signatures
-const params_extreme = hash_zig.Parameters.init(.lifetime_2_32);
+const params_extreme = hash_zig.Parameters.initHypercube(.lifetime_2_32);
 ```
 
 ## ⚙️ Configuration
@@ -361,7 +347,7 @@ This implementation is benchmarked against the reference Rust implementation usi
 
 The benchmark repository provides:
 - **Automated comparison**: Side-by-side performance testing of Rust vs Zig implementations
-- **Fair parameters**: Both implementations use identical parameters (w=8, 64 chains, Poseidon2)
+- **Fair parameters**: Both implementations use identical hypercube parameters (w=3, 64 chains, Poseidon2)
 - **Statistical analysis**: Multiple iterations with mean, median, and standard deviation
 - **Reproducible results**: Standalone wrappers for each implementation ensure consistent testing
 
@@ -386,9 +372,9 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Key Generation | **32 seconds** | Parallel multi-threaded (w=8, optimized) |
-| Sign | **191 ms** | Fast (uses cached leaves, 86 chains) |
-| Verify | **99 ms** | Fast (only processes auth path) |
+| Key Generation | **~7 minutes** | Parallel multi-threaded (w=3, hypercube parameters) |
+| Sign | **~50 ms** | Fast (uses cached leaves, 64 chains) |
+| Verify | **~25 ms** | Fast (only processes auth path) |
 
 **Performance Notes:**
 - Using **hypercube parameters** (64 chains of length 8, w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
@@ -398,9 +384,8 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 - Falls back to sequential mode for small workloads (< 64 leaves)
 - Speedup scales with CPU core count (tested on M2 with ~3x improvement over sequential)
 - Three levels of parallelization: leaf generation, WOTS chains, and Merkle tree construction
-- Fast verification (~99ms) thanks to shorter chain length
+- Fast verification (~25ms) thanks to shorter chain length (8 vs 256)
 - **Benchmark against Rust**: Use [hash-sig-benchmarks](https://github.com/ch4r10t33r/hash-sig-benchmarks) for head-to-head comparison
-- **Hypercube Parameters**: Both Optimized V2 and SIMD implementations use identical hypercube parameters (64 chains of length 8)
 
 #### Projected Key Generation Times for All Lifetimes
 
@@ -408,22 +393,22 @@ Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_1
 
 | Lifetime | Signatures | Tree Height | Estimated Time* | Memory Required |
 |----------|-----------|-------------|-----------------|-----------------|
-| lifetime_2_10 | 1,024 | 10 | **32 sec** (measured on M2, optimized) | ~33 KB |
+| lifetime_2_10 | 1,024 | 10 | **~7 min** (measured on M2, hypercube parameters) | ~33 KB |
 | lifetime_2_16 | 65,536 | 16 | **~34 minutes** | ~2.1 MB |
 | lifetime_2_18 | 262,144 | 18 | **~2.2 hours** | ~8.4 MB |
 | lifetime_2_20 | 1,048,576 | 20 | **~9 hours** | ~34 MB |
 | lifetime_2_28 | 268,435,456 | 28 | **~97 days** | ~8.6 GB |
 | lifetime_2_32 | 4,294,967,296 | 32 | **~4.1 years** | ~137 GB |
 
-*Projected by linear scaling from M2 parallel measurements with optimizations: (signatures / 1024) × 32 sec. 
+*Projected by linear scaling from M2 parallel measurements with hypercube parameters: (signatures / 1024) × 7 min. 
 Key generation scales O(n) with number of signatures. Performance will vary based on CPU core count and speed.
 
 #### Sign/Verify Operations (All Lifetimes)
 
 | Operation | Time | Complexity |
 |-----------|------|------------|
-| Sign | **~191 ms** | O(log n) - constant across lifetimes |
-| Verify | **~99 ms** | O(log n) - constant across lifetimes |
+| Sign | **~50 ms** | O(log n) - constant across lifetimes |
+| Verify | **~25 ms** | O(log n) - constant across lifetimes |
 
 **Note**: Signing and verification times remain nearly constant across all lifetimes because they only process the authentication path (length = tree height). Only key generation scales with the number of signatures.
 
@@ -494,8 +479,8 @@ fn signMessage(db: *Database, sig_scheme: *HashSignature, message: []const u8, s
 ### Parameters
 
 ```zig
-// Poseidon2 (default)
-const params = hash_zig.Parameters.init(.lifetime_2_16);
+// Poseidon2 with hypercube parameters (default)
+const params = hash_zig.Parameters.initHypercube(.lifetime_2_16);
 
 // SHA3-256
 const params_sha3 = hash_zig.Parameters.initWithSha3(.lifetime_2_16);
@@ -562,7 +547,7 @@ This will generate HTML documentation in `zig-out/docs/`. Open `zig-out/docs/ind
 ```zig
 test "poseidon2 hashing" {
     const allocator = std.testing.allocator;
-    const params = hash_zig.Parameters.init(.lifetime_2_16);
+    const params = hash_zig.Parameters.initHypercube(.lifetime_2_16);
     
     var hash = try hash_zig.TweakableHash.init(allocator, params);
     defer hash.deinit();
@@ -596,7 +581,7 @@ test "compare hash functions" {
     const allocator = std.testing.allocator;
     
     // Poseidon2
-    const params_p2 = hash_zig.Parameters.init(.lifetime_2_16);
+    const params_p2 = hash_zig.Parameters.initHypercube(.lifetime_2_16);
     var hash_p2 = try hash_zig.TweakableHash.init(allocator, params_p2);
     defer hash_p2.deinit();
     
