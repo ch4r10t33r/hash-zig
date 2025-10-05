@@ -1,28 +1,22 @@
 # Release Process
 
-This repository uses an automated release process that works with protected branches by creating pull requests instead of pushing directly to the main branch.
+This repository uses an automated release process that creates tagged releases directly when commits are pushed to the master branch.
 
 ## How It Works
 
 ### 1. Automatic Release Detection
 When commits are pushed to the `master` or `main` branch, the release workflow automatically:
 - Analyzes commit messages to determine the next version (semantic versioning)
-- Creates a new release branch (`release/vX.Y.Z`)
 - Updates the version in `build.zig.zon`
-- Creates a pull request to merge the release into the main branch
+- Creates a Git tag for the release
+- Creates a GitHub release with the new version
 
-### 2. Release Branch Workflow
-The `release-branch.yml` workflow:
+### 2. Direct Release Workflow
+The `release-on-master.yml` workflow:
 - **Triggers**: On push to `master`/`main` branches
-- **Creates**: A new release branch with version bump
-- **Opens**: A pull request for the release
-- **Waits**: For the PR to be merged
-
-### 3. Release Creation
-The `release-on-pr-merge.yml` workflow:
-- **Triggers**: When a release PR is merged
+- **Updates**: Version in `build.zig.zon`
 - **Creates**: Git tag and GitHub release
-- **Cleans up**: The release branch
+- **Pushes**: Version bump commit back to master
 
 ## Semantic Versioning
 
@@ -43,18 +37,18 @@ release: minor
 ## Release Process Steps
 
 1. **Push commits** to `master`/`main` branch
-2. **Workflow triggers** and creates release branch
-3. **Review the PR** that was created
-4. **Merge the PR** to trigger the release
-5. **Release is created** automatically with tag and GitHub release
+2. **Workflow triggers** and analyzes commits
+3. **Version is determined** using semantic versioning
+4. **Release is created** automatically with tag and GitHub release
+5. **Version bump** is committed back to master
 
 ## Benefits
 
-- ✅ **Works with protected branches** - No direct pushes required
-- ✅ **Reviewable releases** - All releases go through PR review
-- ✅ **Automatic cleanup** - Release branches are deleted after merge
+- ✅ **Simple and direct** - No complex branch management
+- ✅ **Automatic releases** - Creates releases on every master push
 - ✅ **Semantic versioning** - Automatic version detection
 - ✅ **Manual override** - Can specify version bump level
+- ✅ **Immediate releases** - No waiting for PR reviews
 
 ## Troubleshooting
 
@@ -76,6 +70,7 @@ To create a manual release:
 
 ## Workflow Files
 
-- `release-branch.yml` - Creates release branches and PRs
-- `release-on-pr-merge.yml` - Creates releases when PRs are merged
-- `release-on-merge.yml` - **DEPRECATED** - Old workflow that pushed directly
+- `release-on-master.yml` - **ACTIVE** - Creates releases directly on master branch updates
+- `release-branch.yml` - **DEPRECATED** - Old branch-based workflow
+- `release-on-pr-merge.yml` - **DEPRECATED** - Old PR-based workflow
+- `release-on-merge.yml` - **DEPRECATED** - Old direct push workflow
