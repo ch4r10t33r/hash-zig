@@ -1,0 +1,246 @@
+name: Release Branch Workflow
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  create-release-branch:
+    name: Create Release Branch and PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Determine previous tag
+        id: prev
+        run: |
+          set -euo pipefail
+          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+            PREV_TAG=$(git describe --tags --abbrev=0)
+          else
+            PREV_TAG="0.0.0"
+          fi
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREV_TAG"
+
+      - name: Compute next version (semantic)
+        id: next
+        run: |
+          set -euo pipefail
+          PREV_TAG="${{ steps.prev.outputs.prev_tag }}"
+          RANGE="${PREV_TAG}..HEAD"
+          if [ "$PREV_TAG" = "0.0.0" ]; then RANGE=""; fi
+
+          COMMITS=$(git log --format=%s ${RANGE})
+
+          LEVEL="patch"
+          if echo "$COMMITS" | grep -E "^feat!|BREAKING CHANGE" >/dev/null; then
+            LEVEL="major"
+          elif echo "$COMMITS" | grep -E "^feat\b" >/dev/null; then
+            LEVEL="minor"
+          elif echo "$COMMITS" | grep -E "^fix\b|^perf\b|^refactor\b|^chore\b|^build\b|^ci\b|^docs\b|^style\b|^test\b" >/dev/null; then
+            LEVEL="patch"
+          fi
+
+          # Allow manual override via commit footer 'release: major|minor|patch'
+          if echo "$COMMITS" | grep -E "release: (major|minor|patch)" >/dev/null; then
+            LEVEL=$(echo "$COMMITS" | grep -Eo "release: (major|minor|patch)" | tail -n1 | awk '{print $2}')
+          fi
+
+          MAJOR=$(echo "$PREV_TAG" | cut -d. -f1)
+          MINOR=$(echo "$PREV_TAG" | cut -d. -f2)
+          PATCH=$(echo "$PREV_TAG" | cut -d. -f3)
+
+          case "$LEVEL" in
+            major)
+              MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor)
+              MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch)
+              PATCH=$((PATCH+1)) ;;
+          esac
+
+          NEXT_TAG="${MAJOR}.${MINOR}.${PATCH}"
+          echo "level=$LEVEL" >> $GITHUB_OUTPUT
+          echo "next_tag=$NEXT_TAG" >> $GITHUB_OUTPUT
+          echo "Next version: $NEXT_TAG ($LEVEL)"
+
+      - name: Check if release is needed
+        id: check
+        run: |
+          set -euo pipefail
+          PREV_TAG="${{ steps.prev.outputs.prev_tag }}"
+          NEXT_TAG="${{ steps.next.outputs.next_tag }}"
+          
+          if [ "$PREV_TAG" = "$NEXT_TAG" ]; then
+            echo "No new commits since last release, skipping"
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "New release needed: $PREV_TAG -> $NEXT_TAG"
+            echo "needs_release=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release branch
+        if: steps.check.outputs.needs_release == 'true'
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ steps.next.outputs.next_tag }}"
+          RELEASE_BRANCH="release/v${NEXT_TAG}"
+          
+          # Check if release branch already exists
+          if git show-ref --verify --quiet refs/heads/${RELEASE_BRANCH}; then
+            echo "Release branch ${RELEASE_BRANCH} already exists, skipping"
+            echo "release_branch=${RELEASE_BRANCH}" >> $GITHUB_ENV
+            echo "branch_exists=true" >> $GITHUB_ENV
+          else
+            # Create new release branch
+            git checkout -b ${RELEASE_BRANCH}
+            echo "release_branch=${RELEASE_BRANCH}" >> $GITHUB_ENV
+            echo "branch_exists=false" >> $GITHUB_ENV
+          fi
+
+      - name: Update build.zig.zon version
+        if: steps.check.outputs.needs_release == 'true' && env.branch_exists == 'false'
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ steps.next.outputs.next_tag }}"
+          sed -E -i "s/(\\.version = \"[0-9]+\\.[0-9]+\\.[0-9]+\")/\.version = \"${NEXT_TAG}\"/" build.zig.zon
+          echo "Updated build.zig.zon to version ${NEXT_TAG}"
+          git diff -- build.zig.zon || true
+
+      - name: Commit version bump
+        if: steps.check.outputs.needs_release == 'true' && env.branch_exists == 'false'
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ steps.next.outputs.next_tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build.zig.zon
+          git commit -m "chore(release): v${NEXT_TAG}" || echo "No changes to commit"
+
+      - name: Push release branch
+        if: steps.check.outputs.needs_release == 'true' && env.branch_exists == 'false'
+        run: |
+          set -euo pipefail
+          RELEASE_BRANCH="${{ env.release_branch }}"
+          git push origin ${RELEASE_BRANCH}
+
+      - name: Create Pull Request
+        if: steps.check.outputs.needs_release == 'true' && env.branch_exists == 'false'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          head: ${{ env.release_branch }}
+          base: master
+          title: "Release v${{ steps.next.outputs.next_tag }}"
+          body: |
+            ## Release v${{ steps.next.outputs.next_tag }}
+            
+            This PR contains the version bump for release v${{ steps.next.outputs.next_tag }}.
+            
+            **Changes:**
+            - Updated version in `build.zig.zon` to `${{ steps.next.outputs.next_tag }}`
+            - Release level: `${{ steps.next.outputs.level }}`
+            
+            **Previous version:** ${{ steps.prev.outputs.prev_tag }}
+            **New version:** ${{ steps.next.outputs.next_tag }}
+            
+            Once this PR is merged, the release will be automatically created.
+          labels: |
+            release
+            automated
+          draft: false
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: create-release-branch
+    if: needs.create-release-branch.outputs.needs_release == 'true'
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for PR merge
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ needs.create-release-branch.outputs.next_tag }}"
+          RELEASE_BRANCH="release/v${NEXT_TAG}"
+          
+          echo "Waiting for release branch ${RELEASE_BRANCH} to be merged..."
+          
+          # Wait for the release branch to be merged (check if it exists in master)
+          for i in {1..30}; do
+            if git show-ref --verify --quiet refs/remotes/origin/${RELEASE_BRANCH}; then
+              echo "Release branch still exists, waiting..."
+              sleep 10
+            else
+              echo "Release branch merged successfully"
+              break
+            fi
+          done
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NEXT_TAG="${{ needs.create-release-branch.outputs.next_tag }}"
+          
+          # Create and push tag
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${NEXT_TAG}" -m "Release ${NEXT_TAG}" || echo "Tag exists"
+          git push origin "${NEXT_TAG}" || echo "Tag already pushed"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release-branch.outputs.next_tag }}
+          name: hash-zig v${{ needs.create-release-branch.outputs.next_tag }}
+          body: |
+            ## Release v${{ needs.create-release-branch.outputs.next_tag }}
+            
+            Automated release for hash-zig.
+            
+            **Version:** ${{ needs.create-release-branch.outputs.next_tag }}
+            **Bump level:** ${{ needs.create-release-branch.outputs.level }}
+            
+            ### Changes
+            This release includes all commits since the previous release.
+            
+            ### Installation
+            ```zig
+            .{
+                .name = .my_project,
+                .version = "0.1.0",
+                .dependencies = .{
+                    .@"hash-zig" = .{
+                        .url = "https://github.com/ch4r10t33r/hash-zig/archive/refs/tags/v${{ needs.create-release-branch.outputs.next_tag }}.tar.gz",
+                        .hash = "1220...", // Will be generated by zig build
+                    },
+                },
+            }
+            ```
+          draft: false
+          prerelease: false

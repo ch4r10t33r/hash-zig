@@ -1,10 +1,14 @@
-name: Release on Merge (Semantic Versioning)
+name: Release on Merge (Semantic Versioning) - DEPRECATED
 
+# This workflow is deprecated in favor of release-branch.yml
+# which works with protected branches by creating PRs instead of direct pushes
 on:
-  push:
-    branches:
-      - master
-      - main
+  # Disabled - use release-branch.yml instead
+  # push:
+  #   branches:
+  #     - master
+  #     - main
+  workflow_dispatch: # Keep for manual triggering if needed
 
 jobs:
   semver-release:
