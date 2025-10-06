@@ -11,10 +11,9 @@ pub fn main() !void {
     std.debug.print("Focus: Key Generation Performance for Lifetime 2^10\n", .{});
     std.debug.print("Target: Measure improvements from optimizations\n\n", .{});
 
-    // Test different lifetimes - focus on 2^10 for detailed analysis
+    // Test with 2^10 lifetime only (hypercube parameters)
     const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.params.KeyLifetime, expected_time_sec: f64, description: []const u8 }{
-        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 30.0, .description = "1,024 signatures - Quick test" },
-        .{ .name = "2^16", .lifetime = .lifetime_2_16, .expected_time_sec = 300.0, .description = "65,536 signatures - Full benchmark" },
+        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 30.0, .description = "1,024 signatures - Hypercube parameters" },
     };
 
     for (lifetimes) |config| {
@@ -31,7 +30,7 @@ pub fn main() !void {
         // Key generation benchmark - this is the main focus
         std.debug.print("Starting key generation...\n", .{});
         const keygen_start = std.time.nanoTimestamp();
-        var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+        var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
         const keygen_end = std.time.nanoTimestamp();
         defer keypair.deinit(allocator);
 
@@ -51,7 +50,7 @@ pub fn main() !void {
         // Sign benchmark
         const message = "Performance test message";
         const sign_start = std.time.nanoTimestamp();
-        var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
+        var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, 0, &seed);
         const sign_end = std.time.nanoTimestamp();
         defer signature.deinit(allocator);
 
@@ -60,7 +59,7 @@ pub fn main() !void {
 
         // Verify benchmark
         const verify_start = std.time.nanoTimestamp();
-        const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
+        const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
         const verify_end = std.time.nanoTimestamp();
 
         const verify_duration_ns = verify_end - verify_start;

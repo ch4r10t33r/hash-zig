@@ -55,24 +55,6 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the example application");
     run_step.dependOn(&run_example.step);
 
-    // Profiling executable
-    const profiling_module = b.createModule(.{
-        .root_source_file = b.path("examples/profiling.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    profiling_module.addImport("hash-zig", hash_zig_module);
-
-    const profiling = b.addExecutable(.{
-        .name = "hash-zig-profile",
-        .root_module = profiling_module,
-    });
-    b.installArtifact(profiling);
-
-    const run_profiling = b.addRunArtifact(profiling);
-    const profile_step = b.step("profile", "Run profiling analysis");
-    profile_step.dependOn(&run_profiling.step);
-
     // Benchmark executable
     const benchmark_module = b.createModule(.{
         .root_source_file = b.path("scripts/benchmark.zig"),
@@ -119,7 +101,8 @@ pub fn build(b: *std.Build) void {
     // Set up module dependencies
     simd_signature_module.addImport("simd_winternitz", simd_winternitz_module);
     simd_signature_module.addImport("simd_poseidon2", simd_poseidon2_module);
-    simd_signature_module.addImport("params", hash_zig_module);
+    simd_signature_module.addImport("hash-zig", hash_zig_module);
+    // Do not add a separate params module; code should use @import("hash-zig").params
 
     simd_winternitz_module.addImport("simd_montgomery", simd_montgomery_module);
     simd_winternitz_module.addImport("simd_poseidon2", simd_poseidon2_module);
@@ -133,6 +116,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // Only attach 'hash-zig' as the root module once to avoid duplicate module roots
     simd_benchmark.root_module.addImport("hash-zig", hash_zig_module);
     simd_benchmark.root_module.addImport("simd_signature", simd_signature_module);
     simd_benchmark.root_module.addImport("simd_winternitz", simd_winternitz_module);
@@ -156,31 +140,8 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(comparison);
 
     const run_comparison = b.addRunArtifact(comparison);
-    const comparison_step = b.step("compare", "Compare Optimized V2 vs SIMD implementations");
+    const comparison_step = b.step("compare", "Compare Standard vs SIMD implementations");
     comparison_step.dependOn(&run_comparison.step);
-
-    // Optimized benchmark executable (commented out for now)
-    // const optimized_benchmark_module = b.createModule(.{
-    //     .root_source_file = b.path("examples/optimized_benchmark.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // optimized_benchmark_module.addImport("hash-zig", hash_zig_module);
-    // optimized_benchmark_module.addImport("optimized_signature", b.addModule("optimized_signature", .{
-    //     .root_source_file = b.path("src/optimized_signature.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // }));
-
-    // const optimized_benchmark = b.addExecutable(.{
-    //     .name = "hash-zig-optimized-benchmark",
-    //     .root_module = optimized_benchmark_module,
-    // });
-    // b.installArtifact(optimized_benchmark);
-
-    // const run_optimized_benchmark = b.addRunArtifact(optimized_benchmark);
-    // const optimized_benchmark_step = b.step("optimized-benchmark", "Run optimized performance benchmark");
-    // optimized_benchmark_step.dependOn(&run_optimized_benchmark.step);
 
     // Documentation (opt-in to avoid enabling -femit-docs on default builds)
     if (enable_docs) {

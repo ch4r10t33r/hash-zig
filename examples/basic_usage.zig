@@ -14,12 +14,12 @@ pub fn main() !void {
 
     // Initialize with 128-bit security (only security level supported)
     // Using lifetime_2_10 (1,024 signatures)
-    const params = hash_sig.Parameters.init(.lifetime_2_10);
+    const params = hash_sig.Parameters.initHypercube(.lifetime_2_10);
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
     std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
-    std.debug.print("Parameters: 64 chains of length 8 (w=8)\n", .{});
+    std.debug.print("Parameters: 64 chains of length 8 (w=3)\n", .{});
     std.debug.print("Hash: Poseidon2\n\n", .{});
 
     std.debug.print("Generating keypair...\n", .{});
@@ -30,7 +30,8 @@ pub fn main() !void {
 
     // Measure key generation time
     const start_time = std.time.nanoTimestamp();
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+    // Generate key pair with full lifetime (0 = use all epochs)
+    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
     const end_time = std.time.nanoTimestamp();
     defer keypair.deinit(allocator);
 
@@ -42,17 +43,26 @@ pub fn main() !void {
     std.debug.print("\nBENCHMARK_RESULT: {d:.6}\n", .{duration_sec});
 
     std.debug.print("\nPublic Key:\n", .{});
-    std.debug.print("  Length: {} bytes\n", .{keypair.public_key.len});
-    std.debug.print("  Content: ", .{});
-    for (keypair.public_key) |byte| {
+    std.debug.print("  Root length: {} bytes\n", .{keypair.public_key.root.len});
+    std.debug.print("  Root: ", .{});
+    for (keypair.public_key.root) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
     std.debug.print("\n\n", .{});
 
     std.debug.print("Secret Key:\n", .{});
-    std.debug.print("  Length: {} bytes\n", .{keypair.secret_key.len});
-    std.debug.print("  Content: ", .{});
-    for (keypair.secret_key) |byte| {
+    std.debug.print("  PRF key length: {} bytes\n", .{keypair.secret_key.prf_key.len});
+    std.debug.print("  PRF key: ", .{});
+    for (keypair.secret_key.prf_key) |byte| {
+        std.debug.print("{x:0>2}", .{byte});
+    }
+    std.debug.print("\n  Tree nodes: {}\n", .{keypair.secret_key.tree.len});
+    std.debug.print("  Activation epoch: {}\n", .{keypair.secret_key.activation_epoch});
+    std.debug.print("  Active epochs: {}\n", .{keypair.secret_key.num_active_epochs});
+    std.debug.print("\n", .{});
+    std.debug.print("Seed used:\n", .{});
+    std.debug.print("  Content (first 32 bytes): ", .{});
+    for (seed[0..32]) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
     std.debug.print("\n\n", .{});
@@ -62,20 +72,20 @@ pub fn main() !void {
     std.debug.print("Signing message: \"{s}\"\n", .{message});
 
     const sign_start = std.time.nanoTimestamp();
-    var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
+    var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, 0, &seed);
     const sign_end = std.time.nanoTimestamp();
     defer signature.deinit(allocator);
 
     const sign_duration_ms = @as(f64, @floatFromInt(sign_end - sign_start)) / 1_000_000.0;
-    std.debug.print("Signature generated (index: {}) in {d:.2} ms\n", .{ signature.index, sign_duration_ms });
-    std.debug.print("  OTS signature parts: {}\n", .{signature.ots_signature.len});
+    std.debug.print("Signature generated (epoch: {}) in {d:.2} ms\n", .{ signature.epoch, sign_duration_ms });
+    std.debug.print("  OTS signature parts: {}\n", .{signature.hashes.len});
     std.debug.print("  Auth path length: {}\n\n", .{signature.auth_path.len});
 
     // Verify the signature
     std.debug.print("Verifying signature...\n", .{});
 
     const verify_start = std.time.nanoTimestamp();
-    const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
+    const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
     const verify_end = std.time.nanoTimestamp();
 
     const verify_duration_ms = @as(f64, @floatFromInt(verify_end - verify_start)) / 1_000_000.0;
@@ -89,7 +99,7 @@ pub fn main() !void {
     // Try with wrong message
     const wrong_message = "Different message";
     std.debug.print("\nVerifying with wrong message: \"{s}\"\n", .{wrong_message});
-    const is_valid_wrong = try sig_scheme.verify(allocator, wrong_message, signature, keypair.public_key);
+    const is_valid_wrong = try sig_scheme.verify(allocator, wrong_message, signature, &keypair.public_key);
 
     if (!is_valid_wrong) {
         std.debug.print("✓ Correctly rejected invalid signature\n", .{});

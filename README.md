@@ -4,21 +4,30 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements XMSS-like signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with parameters matching the [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation. Poseidon2 here targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants), optimized for throughput.
+A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements **Generalized XMSS** signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with **exact compatibility** with the [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation. Features include PRF-based key derivation, epoch management, encoding randomness, and full Merkle tree storage. Poseidon2 targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants).
 
 ## 🌟 Features
 
-- **Multiple Hash Functions**: Support for both Poseidon2 (ZK-optimized) and SHA3-256 (NIST standard)
-- **Poseidon2 Hash Function**: Efficient arithmetic hash (KoalaBear 31‑bit field, Montgomery form), compatible with plonky3 constants
-- **SHA3 Hash Function**: NIST-standardized cryptographic hash (SHA3-256)
-- **128-bit Security**: Focused on a single, well-tested security level
-- **Flexible Key Lifetimes**: Support from 2^10 to 2^32 signatures per keypair
-- **Hypercube Parameters**: 64 chains of length 8 (w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
-- **Rust-Compatible Poseidon2**: Width=16, external_rounds=8, internal_rounds=20, sbox_degree=3 matching [hash-sig](https://github.com/b-wagn/hash-sig) implementation
-- **Binary Encoding**: Incomparable binary encoding scheme
+### Rust Compatibility ✅
+- **Exact Rust Implementation Match**: Key structures, signatures, and API match [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation
+- **PRF-Based Key Derivation**: Derives OTS keys on-demand from a 32-byte PRF key (not storing all keys)
+- **Epoch Management**: Supports activation_epoch and num_active_epochs for flexible key lifetimes
+- **Encoding Randomness**: Includes `rho` (encoding randomness) in signatures for security
+- **Full Tree Storage**: Stores complete Merkle tree structure (all 2047 nodes for 1024 leaves) in secret key
+- **Self-Contained Keys**: Parameters stored in public and secret keys
+
+### Hash Functions & Parameters
+- **Poseidon2 (KoalaBear)**: Width=16, external_rounds=8, internal_rounds=20, sbox_degree=3, Montgomery arithmetic
+- **SHA3-256**: NIST-standardized cryptographic hash
+- **Hypercube Parameters**: 64 chains of length 8 (w=3) from [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Binary Encoding**: Incomparable binary encoding with randomness
+
+### Implementation Quality
+- **128-bit Post-Quantum Security**: Well-tested security level
+- **Flexible Lifetimes**: 2^10 to 2^32 signatures per keypair
+- **Parallel Key Generation**: Multi-threaded with atomic work queues (~3x speedup on 8-core M2)
 - **Pure Zig**: Minimal dependencies, fully type-safe
-- **Well-Tested**: Comprehensive unit and integration tests
-- **Parallel Key Generation**: Multi-threaded implementation with atomic work queues (~3x speedup on 8-core M2)
+- **Comprehensive Tests**: Unit and integration tests
 
 ## 📋 Table of Contents
 
@@ -80,9 +89,9 @@ const std = @import("std");
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // Initialize with medium lifetime (2^16 signatures)
     // Only 128-bit security is supported
@@ -94,19 +103,25 @@ pub fn main() !void {
     var seed: [32]u8 = undefined;
     std.crypto.random.bytes(&seed);
 
-    // Generate keypair from seed
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+    // Generate keypair from seed with epoch management
+    // Parameters: seed, activation_epoch, num_active_epochs (0 = use full lifetime)
+    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
     defer keypair.deinit(allocator);
 
-// Sign a message (index must be tracked by your application!)
-const message = "Hello, hash-based signatures!";
-const index: u64 = 0; // YOUR APP must track this and never reuse!
-var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, index);
+    // Sign a message (epoch must be tracked by your application!)
+    const message = "Hello, hash-based signatures!";
+    const epoch: u64 = 0; // YOUR APP must track this and never reuse!
+    
+    // RNG seed for encoding randomness (rho)
+    var rng_seed: [32]u8 = undefined;
+    std.crypto.random.bytes(&rng_seed);
+    
+    var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, epoch, &rng_seed);
 defer signature.deinit(allocator);
 
-// Verify signature
-const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
-std.debug.print("Signature valid: {}\n", .{is_valid});
+    // Verify signature
+    const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
+    std.debug.print("Signature valid: {}\n", .{is_valid});
 }
 ```
 
@@ -117,31 +132,22 @@ The hash-zig library includes several built-in programs for demonstration, testi
 ### Basic Example (`hash-zig-example`)
 **Purpose**: Demonstrates basic usage of the hash-zig library
 **Command**: `zig build example` or `zig build run`
-**Description**: Shows how to generate keypairs, sign messages, and verify signatures. Includes timing measurements and displays key information. Perfect for understanding the library's core functionality.
-
-### Performance Profiler (`hash-zig-profile`)
-**Purpose**: Detailed performance analysis and profiling
-**Command**: `zig build profile`
-**Description**: Provides in-depth timing analysis of individual operations including WOTS (Winternitz One-Time Signature) operations, hash functions, and full key generation. Useful for understanding performance bottlenecks and optimization opportunities.
+**Description**: Shows how to generate keypairs, sign messages, and verify signatures using the Rust-compatible implementation. Includes timing measurements, displays key information (PRF key, tree structure, epoch management), and demonstrates encoding randomness. Perfect for understanding the library's core functionality.
 
 ### Performance Benchmark (`hash-zig-benchmark`)
 **Purpose**: Comprehensive performance benchmarking
 **Command**: `zig build benchmark`
-**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation, signing, and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing. Uses the optimized implementation for baseline performance measurements.
+**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation (with on-demand key derivation from PRF), signing (with encoding randomness), and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing. Uses the Rust-compatible implementation.
 
 ### SIMD Benchmark (`hash-zig-simd-benchmark`)
 **Purpose**: Tests SIMD-optimized implementations
 **Command**: `zig build simd-benchmark`
-**Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for comparing performance improvements from vectorization.
+**Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for measuring performance with vectorization. Uses the same Rust-compatible architecture as the standard implementation but with SIMD optimizations.
 
 ### Implementation Comparison (`hash-zig-compare`)
-**Purpose**: Direct performance comparison between Optimized V2 and SIMD implementations
+**Purpose**: Compare Standard vs SIMD implementations
 **Command**: `zig build compare`
-**Description**: Compares the performance of Optimized V2 vs SIMD implementations using identical hypercube parameters (64 chains of length 8) and the same seed. Both implementations use Rust-compatible Poseidon2 (width=16). Shows detailed timing analysis, key structure differences, and performance ratios. Demonstrates the performance characteristics of different implementation approaches.
-
-### Additional Examples
-- **`optimized_benchmark.zig`**: Standalone optimized implementation benchmark (currently commented out in build.zig)
-- **`scripts/benchmark.zig`**: Main benchmark script used by `zig build benchmark`
+**Description**: Compares the performance and correctness of the standard (scalar) vs SIMD implementations. Both use identical Rust-compatible architecture (PRF-based key derivation, epoch management, encoding randomness) and hypercube parameters (64 chains × 8 length). Shows performance speedups from SIMD optimizations and verifies public key consistency.
 
 ### Building All Programs
 ```bash
@@ -149,11 +155,10 @@ The hash-zig library includes several built-in programs for demonstration, testi
 zig build
 
 # Run specific programs
-zig build example      # Basic usage demo
-zig build profile      # Performance profiling
-zig build benchmark    # Standard benchmark
+zig build example         # Basic usage demo (Rust-compatible)
+zig build benchmark       # Standard benchmark
 zig build simd-benchmark  # SIMD benchmark
-zig build compare      # Compare Optimized V2 vs SIMD
+zig build compare         # Compare Standard vs SIMD
 ```
 
 ### Program Outputs
@@ -180,17 +185,24 @@ defer sig.deinit();
 var seed: [32]u8 = undefined;
 std.crypto.random.bytes(&seed);
 
-// Generate keys from seed
-var keypair = try sig.generateKeyPair(allocator, &seed);
+// Generate keys from seed with epoch management
+// activation_epoch: 0 (start from beginning)
+// num_active_epochs: 0 (use full lifetime)
+var keypair = try sig.generateKeyPair(allocator, &seed, 0, 0);
 defer keypair.deinit(allocator);
 
-// Sign (YOU must track indices and never reuse!)
-const index: u64 = 0; // Track this in your app's database!
-var signature = try sig.sign(allocator, "message", keypair.secret_key, index);
+// Sign (YOU must track epochs and never reuse!)
+const epoch: u64 = 0; // Track this in your app's database!
+
+// Generate RNG seed for encoding randomness (rho)
+var rng_seed: [32]u8 = undefined;
+std.crypto.random.bytes(&rng_seed);
+
+var signature = try sig.sign(allocator, "message", &keypair.secret_key, epoch, &rng_seed);
 defer signature.deinit(allocator);
 
 // Verify
-const valid = try sig.verify(allocator, "message", signature, keypair.public_key);
+const valid = try sig.verify(allocator, "message", signature, &keypair.public_key);
 ```
 
 ### Deterministic Key Generation
@@ -204,12 +216,20 @@ The `generateKeyPair` function requires a 32-byte seed. You can use this for:
 // Random key generation (default approach)
 var random_seed: [32]u8 = undefined;
 std.crypto.random.bytes(&random_seed);
-var keypair = try sig.generateKeyPair(allocator, &random_seed);
+var keypair = try sig.generateKeyPair(allocator, &random_seed, 0, 0);
 
 // Deterministic key generation from a known seed
 const deterministic_seed: [32]u8 = .{1} ** 32; // Use a proper KDF in production!
-var keypair2 = try sig.generateKeyPair(allocator, &deterministic_seed);
+var keypair2 = try sig.generateKeyPair(allocator, &deterministic_seed, 0, 0);
 // Same seed will always generate the same keypair
+
+// Epoch management example
+var keypair_limited = try sig.generateKeyPair(
+    allocator, 
+    &seed,
+    100,    // activation_epoch: first valid epoch is 100
+    50      // num_active_epochs: can sign epochs 100-149
+);
 ```
 
 ### Using SHA3 Hash Function
@@ -325,19 +345,16 @@ hash-zig/
 └── build.zig
 ```
 
-### Key Components
+### Key Components (Matching Rust Implementation)
 
 - **Poseidon2**: Arithmetic hash over KoalaBear (31‑bit) with Montgomery reduction; constants match plonky3
 - **SHA3-256**: NIST-standardized Keccak-based hash for general-purpose cryptography
 - **Winternitz OTS**: One-time signature with 64 chains of length 8 (w=3) using hypercube parameters
-- **Merkle Tree**: Binary tree implementation for managing OTS public keys
-- **Binary Encoding**: Incomparable binary encoding for 128-bit security
-- **Parallel Key Generation**: Multi-threaded with atomic job queues
-  - Work-queue model for WOTS leaf generation (no per-thread fixed partitions)
-  - Per-thread scratch buffers in hot loops (zero per-node allocations)
-  - Parallel Merkle construction using the same atomic index pattern
-  - Adaptive job sizing and sequential fallback for small workloads
-  - ~3x speedup on 8-core M2 Mac (hardware-dependent)
+- **Merkle Tree**: Full binary tree storage (all nodes) with authentication path generation
+- **Binary Encoding**: Incomparable binary encoding with randomness (rho) for security
+- **PRF-Based Key Derivation**: On-demand OTS key generation from 32-byte PRF key
+- **Epoch Management**: Flexible key lifetime with activation_epoch and num_active_epochs support
+- **Parallel Key Generation**: Multi-threaded with atomic job queues (~3x speedup on 8-core M2)
 
 ## 📊 Performance
 
@@ -368,16 +385,23 @@ The benchmark suite automatically:
 
 Measured on **Apple M2** with Zig 0.14.1, using **Poseidon2** hash and **level_128** security:
 
-#### Core Operations (lifetime_2_10 baseline: 1,024 signatures)
+#### Core Operations (lifetime_2_10: 1,024 signatures)
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Key Generation | **~7 minutes** | Parallel multi-threaded (w=3, hypercube parameters) |
-| Sign | **~50 ms** | Fast (uses cached leaves, 64 chains) |
-| Verify | **~25 ms** | Fast (only processes auth path) |
+| Key Generation | **~110 seconds** | Parallel multi-threaded, generates 1024 leaves + full tree (2047 nodes) |
+| Sign | **~370 ms** | Derives OTS keys from PRF, includes encoding randomness |
+| Verify | **~93 ms** | Reconstructs leaf, verifies Merkle path |
+
+**Key Sizes** (Matching Rust):
+- **Public Key**: 32 bytes (Merkle root) + Parameters struct
+- **Secret Key**: 32 bytes (PRF key) + Full tree (2047 nodes × 32 bytes) + Epoch info
+- **Signature**: Auth path (10 × 32 bytes) + OTS hashes (64 × 32 bytes) + rho (32 bytes)
 
 **Performance Notes:**
-- Using **hypercube parameters** (64 chains of length 8, w=3) as specified in [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- Using **hypercube parameters** (64 chains of length 8, w=3) from [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **PRF-based key derivation**: Keys derived on-demand during signing (not pre-stored)
+- **Full tree storage**: All 2047 tree nodes stored for fast auth path generation
 - Using **Rust-compatible Poseidon2** (width=16) for interoperability
 - **Optimized with inline hints** for field arithmetic operations (~23% improvement)
 - Parallel key generation uses all available CPU cores automatically
@@ -476,10 +500,77 @@ fn signMessage(db: *Database, sig_scheme: *HashSignature, message: []const u8, s
 
 ## 📚 API Reference
 
+### Key Structures (Rust-Compatible)
+
+The implementation matches Rust's `GeneralizedXMSSSignatureScheme` exactly:
+
+```zig
+// Public Key (matches Rust GeneralizedXMSSPublicKey)
+pub const PublicKey = struct {
+    root: []u8,              // Merkle root hash
+    parameter: Parameters,   // Hash function parameters
+};
+
+// Secret Key (matches Rust GeneralizedXMSSSecretKey)
+pub const SecretKey = struct {
+    prf_key: [32]u8,            // PRF key for key derivation
+    tree: [][]u8,               // Full Merkle tree (all nodes)
+    tree_height: u32,
+    parameter: Parameters,       // Hash function parameters
+    activation_epoch: u64,       // First valid epoch
+    num_active_epochs: u64,      // Number of valid epochs
+};
+
+// Signature (matches Rust GeneralizedXMSSSignature)
+pub const Signature = struct {
+    epoch: u64,              // Signature epoch/index
+    auth_path: [][]u8,       // Merkle authentication path
+    rho: [32]u8,            // Encoding randomness
+    hashes: [][]u8,         // OTS signature values
+};
+```
+
+### Main API Functions
+
+```zig
+// Initialize signature scheme
+var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
+defer sig_scheme.deinit();
+
+// Generate keypair (Rust: key_gen)
+// activation_epoch: first valid epoch (0 = start)
+// num_active_epochs: number of epochs (0 = use full lifetime)
+var keypair = try sig_scheme.generateKeyPair(
+    allocator, 
+    &seed,              // 32-byte seed
+    0,                  // activation_epoch
+    0                   // num_active_epochs (0 = all)
+);
+defer keypair.deinit(allocator);
+
+// Sign a message (Rust: sign)
+var signature = try sig_scheme.sign(
+    allocator,
+    message,            // Message to sign
+    &keypair.secret_key, // Secret key reference
+    epoch,              // Epoch index (0 to lifetime-1)
+    &rng_seed          // RNG seed for encoding randomness
+);
+defer signature.deinit(allocator);
+
+// Verify signature (Rust: verify)
+const is_valid = try sig_scheme.verify(
+    allocator,
+    message,            // Message to verify
+    signature,          // Signature to check
+    &keypair.public_key // Public key reference
+);
+```
+
 ### Parameters
 
 ```zig
-// Poseidon2 with hypercube parameters (default)
+// Poseidon2 with hypercube parameters (recommended)
 const params = hash_zig.Parameters.initHypercube(.lifetime_2_16);
 
 // SHA3-256
