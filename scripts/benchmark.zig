@@ -31,7 +31,7 @@ pub fn main() !void {
         // Key generation benchmark - this is the main focus
         std.debug.print("Starting key generation...\n", .{});
         const keygen_start = std.time.nanoTimestamp();
-        var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+        var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
         const keygen_end = std.time.nanoTimestamp();
         defer keypair.deinit(allocator);
 
@@ -51,7 +51,7 @@ pub fn main() !void {
         // Sign benchmark
         const message = "Performance test message";
         const sign_start = std.time.nanoTimestamp();
-        var signature = try sig_scheme.sign(allocator, message, keypair.secret_key, 0);
+        var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, 0, &seed);
         const sign_end = std.time.nanoTimestamp();
         defer signature.deinit(allocator);
 
@@ -60,7 +60,7 @@ pub fn main() !void {
 
         // Verify benchmark
         const verify_start = std.time.nanoTimestamp();
-        const is_valid = try sig_scheme.verify(allocator, message, signature, keypair.public_key);
+        const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
         const verify_end = std.time.nanoTimestamp();
 
         const verify_duration_ns = verify_end - verify_start;

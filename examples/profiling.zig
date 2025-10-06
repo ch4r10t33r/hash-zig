@@ -67,7 +67,7 @@ pub fn main() !void {
     // Now do full keygen with timing
     std.debug.print("--- Full Key Generation ---\n", .{});
     const start = std.time.nanoTimestamp();
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
     const end = std.time.nanoTimestamp();
     defer keypair.deinit(allocator);
 

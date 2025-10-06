@@ -40,24 +40,51 @@ pub const HashSignature = struct {
         }
     }
 
-    pub const KeyPair = struct {
-        public_key: []u8,
-        secret_key: []u8,
+    /// Public key matching Rust GeneralizedXMSSPublicKey
+    pub const PublicKey = struct {
+        root: []u8, // Merkle root (TH::Domain)
+        parameter: Parameters, // Hash function parameters (TH::Parameter)
 
-        pub fn deinit(self: *KeyPair, allocator: Allocator) void {
-            allocator.free(self.public_key);
-            allocator.free(self.secret_key);
+        pub fn deinit(self: *PublicKey, allocator: Allocator) void {
+            allocator.free(self.root);
         }
     };
 
+    /// Secret key matching Rust GeneralizedXMSSSecretKey
+    pub const SecretKey = struct {
+        prf_key: [32]u8, // PRF key for key derivation (PRF::Key)
+        tree: [][]u8, // Full Merkle tree structure (HashTree<TH>)
+        tree_height: u32, // Height of the Merkle tree
+        parameter: Parameters, // Hash function parameters (TH::Parameter)
+        activation_epoch: u64, // First valid epoch
+        num_active_epochs: u64, // Number of valid epochs
+
+        pub fn deinit(self: *SecretKey, allocator: Allocator) void {
+            for (self.tree) |node| allocator.free(node);
+            allocator.free(self.tree);
+        }
+    };
+
+    pub const KeyPair = struct {
+        public_key: PublicKey,
+        secret_key: SecretKey,
+
+        pub fn deinit(self: *KeyPair, allocator: Allocator) void {
+            self.public_key.deinit(allocator);
+            self.secret_key.deinit(allocator);
+        }
+    };
+
+    /// Signature matching Rust GeneralizedXMSSSignature
     pub const Signature = struct {
-        index: u64,
-        ots_signature: [][]u8,
-        auth_path: [][]u8,
+        epoch: u64, // Epoch index (implicit in Rust via function parameter)
+        auth_path: [][]u8, // Merkle authentication path (HashTreeOpening<TH>)
+        rho: [32]u8, // Encoding randomness (IE::Randomness)
+        hashes: [][]u8, // OTS signature (Vec<TH::Domain>)
 
         pub fn deinit(self: *Signature, allocator: Allocator) void {
-            for (self.ots_signature) |sig| allocator.free(sig);
-            allocator.free(self.ots_signature);
+            for (self.hashes) |hash| allocator.free(hash);
+            allocator.free(self.hashes);
             for (self.auth_path) |path| allocator.free(path);
             allocator.free(self.auth_path);
         }
@@ -115,8 +142,25 @@ pub const HashSignature = struct {
         }
     }
 
-    pub fn generateKeyPair(self: *HashSignature, allocator: Allocator, seed: []const u8) !KeyPair {
+    /// Generate key pair matching Rust implementation
+    /// - activation_epoch: first valid epoch for this key (default 0)
+    /// - num_active_epochs: number of epochs this key covers (default: all, 0 means use full lifetime)
+    pub fn generateKeyPair(
+        self: *HashSignature,
+        allocator: Allocator,
+        seed: []const u8,
+        activation_epoch: u64,
+        num_active_epochs: u64,
+    ) !KeyPair {
         if (seed.len != 32) return error.InvalidSeedLength;
+
+        const lifetime = @as(u64, 1) << @intCast(self.params.tree_height);
+        const actual_num_active = if (num_active_epochs == 0) lifetime else num_active_epochs;
+
+        // Validate epoch range
+        if (activation_epoch + actual_num_active > lifetime) {
+            return error.InvalidEpochRange;
+        }
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
 
@@ -213,22 +257,15 @@ pub const HashSignature = struct {
             if (error_flag.load(.monotonic)) return error.InternalError;
         }
 
-        // Build Merkle tree and get root
-        const merkle_root = try self.tree.buildTree(allocator, leaves);
+        // Build full Merkle tree structure (bottom-up, level by level)
+        const tree_nodes = try self.buildFullMerkleTree(allocator, leaves);
+        const merkle_root = try allocator.dupe(u8, tree_nodes[tree_nodes.len - 1]); // Root is last node
 
-        // Combine all secret keys into one large secret key
-        const total_secret_len = num_leaves * self.params.num_chains * self.params.hash_output_len;
-        var combined_secret = try allocator.alloc(u8, total_secret_len);
-        var offset: usize = 0;
+        // Use the provided seed as the PRF key (in Rust this would be PRF::key_gen(rng))
+        var prf_key: [32]u8 = undefined;
+        @memcpy(&prf_key, seed);
 
-        for (leaf_secret_keys) |sk| {
-            for (sk) |s| {
-                @memcpy(combined_secret[offset .. offset + s.len], s);
-                offset += s.len;
-            }
-        }
-
-        // Cache the leaves for future signing operations
+        // Cache the leaves for future signing operations (needed for auth path generation)
         const cached = try allocator.alloc([]const u8, num_leaves);
         for (leaves, 0..) |leaf, i| {
             cached[i] = try allocator.dupe(u8, leaf);
@@ -236,53 +273,145 @@ pub const HashSignature = struct {
         self.cached_leaves = cached;
 
         return KeyPair{
-            .public_key = merkle_root,
-            .secret_key = combined_secret,
+            .public_key = .{
+                .root = merkle_root,
+                .parameter = self.params,
+            },
+            .secret_key = .{
+                .prf_key = prf_key,
+                .tree = tree_nodes,
+                .tree_height = self.params.tree_height,
+                .parameter = self.params,
+                .activation_epoch = activation_epoch,
+                .num_active_epochs = actual_num_active,
+            },
         };
     }
 
-    pub fn sign(self: *HashSignature, allocator: Allocator, message: []const u8, secret_key: []const u8, epoch: u64) !Signature {
-        // epoch is the index/epoch of the signature (0 to lifetime-1)
-        // Extract the OTS private key for this epoch from the combined secret key
-        const num_chains = self.params.num_chains;
-        const hash_output_len = self.params.hash_output_len;
-        const leaf_sk_size = num_chains * hash_output_len;
-        const leaf_offset = epoch * leaf_sk_size;
+    /// Build full Merkle tree structure (all nodes, level by level)
+    /// Returns array of all tree nodes from leaves to root
+    fn buildFullMerkleTree(self: *HashSignature, allocator: Allocator, leaves: []const []const u8) ![][]u8 {
+        const num_leaves = leaves.len;
+        const tree_height = self.params.tree_height;
 
-        if (leaf_offset + leaf_sk_size > secret_key.len) {
-            return error.InvalidIndex;
+        // Calculate total number of nodes in the tree
+        var total_nodes: usize = num_leaves;
+        var level_size = num_leaves;
+        var h: u32 = 0;
+        while (h < tree_height) : (h += 1) {
+            level_size = (level_size + 1) / 2;
+            total_nodes += level_size;
         }
 
-        // Reconstruct the leaf secret key structure
+        var all_nodes = try allocator.alloc([]u8, total_nodes);
+        errdefer {
+            for (all_nodes) |node| allocator.free(node);
+            allocator.free(all_nodes);
+        }
+
+        // Copy leaves to first level
+        for (leaves, 0..) |leaf, i| {
+            all_nodes[i] = try allocator.dupe(u8, leaf);
+        }
+
+        var current_level_start: usize = 0;
+        var current_level_size = num_leaves;
+        var next_level_start = num_leaves;
+
+        // Build tree level by level
+        h = 0;
+        while (h < tree_height) : (h += 1) {
+            const next_level_size = (current_level_size + 1) / 2;
+
+            for (0..next_level_size) |i| {
+                const left_idx = current_level_start + (i * 2);
+                const right_idx = left_idx + 1;
+
+                if (right_idx < current_level_start + current_level_size) {
+                    // Both children exist
+                    const combined = try allocator.alloc(u8, all_nodes[left_idx].len + all_nodes[right_idx].len);
+                    defer allocator.free(combined);
+                    @memcpy(combined[0..all_nodes[left_idx].len], all_nodes[left_idx]);
+                    @memcpy(combined[all_nodes[left_idx].len..], all_nodes[right_idx]);
+                    all_nodes[next_level_start + i] = try self.tree.hash.hash(allocator, combined, i);
+                } else {
+                    // Only left child exists (odd number of nodes)
+                    all_nodes[next_level_start + i] = try allocator.dupe(u8, all_nodes[left_idx]);
+                }
+            }
+
+            current_level_start = next_level_start;
+            current_level_size = next_level_size;
+            next_level_start += next_level_size;
+        }
+
+        return all_nodes;
+    }
+
+    /// Sign a message matching Rust implementation
+    /// Derives OTS keys on-demand from PRF key
+    pub fn sign(
+        self: *HashSignature,
+        allocator: Allocator,
+        message: []const u8,
+        secret_key: *const SecretKey,
+        epoch: u64,
+        rng_seed: []const u8, // For generating encoding randomness
+    ) !Signature {
+        // Check that epoch is within the activation range
+        if (epoch < secret_key.activation_epoch or
+            epoch >= secret_key.activation_epoch + secret_key.num_active_epochs)
+        {
+            return error.EpochOutOfRange;
+        }
+
+        // Generate encoding randomness (rho) - in Rust this is IE::rand(rng)
+        var rho: [32]u8 = undefined;
+        crypto.hash.sha3.Sha3_256.hash(rng_seed, &rho, .{});
+
+        // Derive OTS private key for this epoch from PRF key
+        // In Rust: PRF::apply(&prf_key, epoch as u32, chain_index as u64)
+        const num_chains = self.params.num_chains;
         var private_key = try allocator.alloc([]u8, num_chains);
         defer {
             for (private_key) |pk| allocator.free(pk);
             allocator.free(private_key);
         }
 
-        for (0..num_chains) |i| {
-            const chain_offset = leaf_offset + (i * hash_output_len);
-            private_key[i] = try allocator.dupe(u8, secret_key[chain_offset .. chain_offset + hash_output_len]);
+        for (0..num_chains) |chain_idx| {
+            // PRF: hash(prf_key, epoch + chain_idx)
+            private_key[chain_idx] = try self.wots.hash.prfHash(
+                allocator,
+                &secret_key.prf_key,
+                epoch + chain_idx,
+            );
         }
 
         // Sign the message with the one-time signature scheme
         const ots_signature = try self.wots.sign(allocator, message, private_key);
 
         // Generate authentication path using cached leaves
-        // This is the key optimization: leaves were already generated during key generation
         const auth_path = if (self.cached_leaves) |leaves|
             try self.tree.generateAuthPath(allocator, leaves, @intCast(epoch))
         else
-            return error.LeavesNotCached; // Signing requires cached leaves
+            return error.LeavesNotCached;
 
         return Signature{
-            .index = epoch,
-            .ots_signature = ots_signature,
+            .epoch = epoch,
             .auth_path = auth_path,
+            .rho = rho,
+            .hashes = ots_signature,
         };
     }
 
-    pub fn verify(self: *HashSignature, allocator: Allocator, message: []const u8, signature: Signature, public_key: []const u8) !bool {
+    /// Verify a signature matching Rust implementation
+    pub fn verify(
+        self: *HashSignature,
+        allocator: Allocator,
+        message: []const u8,
+        signature: Signature,
+        public_key: *const PublicKey,
+    ) !bool {
         // Step 1: Compute the OTS leaf public key from the signature
         const msg_hash = try self.wots.hash.hash(allocator, message, 0);
         defer allocator.free(msg_hash);
@@ -294,14 +423,14 @@ pub const HashSignature = struct {
         const chain_len = self.wots.getChainLength();
         const hash_output_len = self.params.hash_output_len;
 
-        var public_parts = try allocator.alloc([]u8, signature.ots_signature.len);
+        var public_parts = try allocator.alloc([]u8, signature.hashes.len);
         defer {
             for (public_parts) |part| allocator.free(part);
             allocator.free(public_parts);
         }
 
         // Derive public key parts from signature by completing hash chains
-        for (signature.ots_signature, 0..) |sig, i| {
+        for (signature.hashes, 0..) |sig, i| {
             var current = try allocator.dupe(u8, sig);
 
             const start_val = if (i < encoded.len) encoded[i] else 0;
@@ -328,7 +457,7 @@ pub const HashSignature = struct {
         defer allocator.free(current_hash);
 
         // Step 2: Use authentication path to compute the Merkle root
-        var leaf_idx = signature.index;
+        var leaf_idx = signature.epoch;
 
         for (signature.auth_path, 0..) |sibling, level| {
             _ = level;
@@ -359,7 +488,7 @@ pub const HashSignature = struct {
             leaf_idx = parent_index;
         }
 
-        // Step 3: Compare computed root with provided public_key
-        return std.mem.eql(u8, current_hash, public_key);
+        // Step 3: Compare computed root with provided public_key root
+        return std.mem.eql(u8, current_hash, public_key.root);
     }
 };
