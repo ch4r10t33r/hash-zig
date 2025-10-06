@@ -80,9 +80,9 @@ const std = @import("std");
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // Initialize with medium lifetime (2^16 signatures)
     // Only 128-bit security is supported

@@ -1,13 +1,14 @@
 const std = @import("std");
 const simd_winternitz = @import("simd_winternitz");
-const params = @import("params");
+const hz = @import("hash-zig");
+const params = hz.params;
 
 // SIMD-optimized hash-based signature scheme
 // Integrates SIMD Winternitz OTS and Poseidon2 for maximum performance
 
 pub const SimdHashSignature = struct {
     const Winternitz = simd_winternitz.simd_winternitz_ots;
-    const Hash = params.optimized_hash_v2.OptimizedHashV2;
+    const Hash = hz.optimized_hash_v2.OptimizedHashV2;
 
     // Configuration
     params: params.Parameters,

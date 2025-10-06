@@ -1,7 +1,8 @@
 //! Merkle tree for hash-based signatures
 
 const std = @import("std");
-const params = @import("params.zig");
+const root = @import("root.zig");
+const params = root.params;
 const tweakable_hash = @import("tweakable_hash.zig");
 const Parameters = params.Parameters;
 const TweakableHash = tweakable_hash.TweakableHash;
@@ -85,6 +86,7 @@ pub const MerkleTree = struct {
 
         const num_cpus = std.Thread.getCpuCount() catch 8;
 
+        var level_num: usize = 0;
         while (current_len > 1) {
             const next_len = (current_len + 1) / 2;
             var next_level = try allocator.alloc([]u8, next_len);
@@ -96,7 +98,7 @@ pub const MerkleTree = struct {
 
             const num_threads = @min(num_cpus, next_len);
 
-            if (num_threads <= 1 or next_len < 32) {
+            if (num_threads <= 1 or next_len < 32 or true) {
                 // Sequential for small workloads
                 for (0..next_len) |i| {
                     const left_idx = i * 2;
@@ -154,13 +156,14 @@ pub const MerkleTree = struct {
 
             level = next_level;
             current_len = next_len;
+            level_num += 1;
         }
 
         // Return the root (move ownership to caller)
-        const root = level[0];
+        const root_node = level[0];
         allocator.free(level);
 
-        return root;
+        return root_node;
     }
 
     pub fn generateAuthPath(self: *MerkleTree, allocator: Allocator, leaves: [][]const u8, leaf_idx: usize) ![][]u8 {

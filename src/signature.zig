@@ -83,8 +83,9 @@ pub const HashSignature = struct {
     const WorkerCtx = struct {
         hash_sig: *HashSignature,
         allocator: Allocator,
-        secret_key: []const u8,
+        seed: []const u8,
         leaves: [][]const u8,
+        leaf_secret_keys: [][][]u8,
         queue: *LeafQueue,
         error_flag: *std.atomic.Value(bool),
     };
@@ -95,19 +96,21 @@ pub const HashSignature = struct {
             if (maybe_job == null) break;
             const job = maybe_job.?;
             for (job.start..job.end) |i| {
-                const sk_part = ctx.hash_sig.wots.generatePrivateKey(ctx.allocator, ctx.secret_key, i * 1000) catch {
+                const epoch = @as(u32, @intCast(i)); // Use epoch directly
+                const sk = ctx.hash_sig.wots.generatePrivateKey(ctx.allocator, ctx.seed, epoch) catch {
                     ctx.error_flag.store(true, .monotonic);
                     return;
                 };
-                defer {
-                    for (sk_part) |k| ctx.allocator.free(k);
-                    ctx.allocator.free(sk_part);
-                }
 
-                ctx.leaves[i] = ctx.hash_sig.wots.generatePublicKey(ctx.allocator, sk_part) catch {
+                const pk = ctx.hash_sig.wots.generatePublicKey(ctx.allocator, sk) catch {
+                    for (sk) |k| ctx.allocator.free(k);
+                    ctx.allocator.free(sk);
                     ctx.error_flag.store(true, .monotonic);
                     return;
                 };
+
+                ctx.leaf_secret_keys[i] = sk;
+                ctx.leaves[i] = pk;
             }
         }
     }
@@ -115,10 +118,23 @@ pub const HashSignature = struct {
     pub fn generateKeyPair(self: *HashSignature, allocator: Allocator, seed: []const u8) !KeyPair {
         if (seed.len != 32) return error.InvalidSeedLength;
 
-        const secret_key = try allocator.dupe(u8, seed);
-        errdefer allocator.free(secret_key);
-
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
+
+        var leaf_public_keys = try allocator.alloc([]u8, num_leaves);
+        defer {
+            for (leaf_public_keys) |pk| allocator.free(pk);
+            allocator.free(leaf_public_keys);
+        }
+
+        var leaf_secret_keys = try allocator.alloc([][]u8, num_leaves);
+        defer {
+            for (leaf_secret_keys) |sk| {
+                for (sk) |s| allocator.free(s);
+                allocator.free(sk);
+            }
+            allocator.free(leaf_secret_keys);
+        }
+
         var leaves = try allocator.alloc([]const u8, num_leaves);
         defer {
             for (leaves) |leaf| {
@@ -141,13 +157,13 @@ pub const HashSignature = struct {
         if (num_threads <= 1 or num_leaves < parallel_threshold) {
             // Fall back to sequential for small workloads
             for (0..num_leaves) |i| {
-                const secret_key_part = try self.wots.generatePrivateKey(allocator, secret_key, i * 1000);
-                defer {
-                    for (secret_key_part) |k| allocator.free(k);
-                    allocator.free(secret_key_part);
-                }
+                const epoch = @as(u32, @intCast(i)); // Use epoch directly, not i * 1000
+                const sk = try self.wots.generatePrivateKey(allocator, seed, epoch);
+                const pk = try self.wots.generatePublicKey(allocator, sk);
 
-                leaves[i] = try self.wots.generatePublicKey(allocator, secret_key_part);
+                leaf_secret_keys[i] = sk;
+                leaf_public_keys[i] = pk;
+                leaves[i] = pk;
             }
         } else {
             // Parallel leaf generation using a global queue and workers
@@ -183,8 +199,9 @@ pub const HashSignature = struct {
                 ctxs[t] = .{
                     .hash_sig = self,
                     .allocator = allocator,
-                    .secret_key = secret_key,
+                    .seed = seed,
                     .leaves = leaves,
+                    .leaf_secret_keys = leaf_secret_keys,
                     .queue = &queue,
                     .error_flag = &error_flag,
                 };
@@ -196,10 +213,22 @@ pub const HashSignature = struct {
             if (error_flag.load(.monotonic)) return error.InternalError;
         }
 
-        const public_key = try self.tree.buildTree(allocator, leaves);
+        // Build Merkle tree and get root
+        const merkle_root = try self.tree.buildTree(allocator, leaves);
+
+        // Combine all secret keys into one large secret key
+        const total_secret_len = num_leaves * self.params.num_chains * self.params.hash_output_len;
+        var combined_secret = try allocator.alloc(u8, total_secret_len);
+        var offset: usize = 0;
+
+        for (leaf_secret_keys) |sk| {
+            for (sk) |s| {
+                @memcpy(combined_secret[offset .. offset + s.len], s);
+                offset += s.len;
+            }
+        }
 
         // Cache the leaves for future signing operations
-        // Make a copy since we're about to free the local leaves
         const cached = try allocator.alloc([]const u8, num_leaves);
         for (leaves, 0..) |leaf, i| {
             cached[i] = try allocator.dupe(u8, leaf);
@@ -207,18 +236,33 @@ pub const HashSignature = struct {
         self.cached_leaves = cached;
 
         return KeyPair{
-            .public_key = public_key,
-            .secret_key = secret_key,
+            .public_key = merkle_root,
+            .secret_key = combined_secret,
         };
     }
 
-    pub fn sign(self: *HashSignature, allocator: Allocator, message: []const u8, secret_key: []const u8, index: u64) !Signature {
-        // Generate the OTS private key deterministically for this index
-        // Using the PRF approach: derive from secret_key + index
-        const private_key = try self.wots.generatePrivateKey(allocator, secret_key, index * 1000);
+    pub fn sign(self: *HashSignature, allocator: Allocator, message: []const u8, secret_key: []const u8, epoch: u64) !Signature {
+        // epoch is the index/epoch of the signature (0 to lifetime-1)
+        // Extract the OTS private key for this epoch from the combined secret key
+        const num_chains = self.params.num_chains;
+        const hash_output_len = self.params.hash_output_len;
+        const leaf_sk_size = num_chains * hash_output_len;
+        const leaf_offset = epoch * leaf_sk_size;
+
+        if (leaf_offset + leaf_sk_size > secret_key.len) {
+            return error.InvalidIndex;
+        }
+
+        // Reconstruct the leaf secret key structure
+        var private_key = try allocator.alloc([]u8, num_chains);
         defer {
             for (private_key) |pk| allocator.free(pk);
             allocator.free(private_key);
+        }
+
+        for (0..num_chains) |i| {
+            const chain_offset = leaf_offset + (i * hash_output_len);
+            private_key[i] = try allocator.dupe(u8, secret_key[chain_offset .. chain_offset + hash_output_len]);
         }
 
         // Sign the message with the one-time signature scheme
@@ -227,12 +271,12 @@ pub const HashSignature = struct {
         // Generate authentication path using cached leaves
         // This is the key optimization: leaves were already generated during key generation
         const auth_path = if (self.cached_leaves) |leaves|
-            try self.tree.generateAuthPath(allocator, leaves, @intCast(index))
+            try self.tree.generateAuthPath(allocator, leaves, @intCast(epoch))
         else
             return error.LeavesNotCached; // Signing requires cached leaves
 
         return Signature{
-            .index = index,
+            .index = epoch,
             .ots_signature = ots_signature,
             .auth_path = auth_path,
         };
@@ -286,7 +330,8 @@ pub const HashSignature = struct {
         // Step 2: Use authentication path to compute the Merkle root
         var leaf_idx = signature.index;
 
-        for (signature.auth_path) |sibling| {
+        for (signature.auth_path, 0..) |sibling, level| {
+            _ = level;
             // Determine if current node is left or right child
             const is_left = (leaf_idx % 2 == 0);
 
@@ -305,7 +350,8 @@ pub const HashSignature = struct {
 
             // Hash to get parent node (use parent position as tweak to match tree build)
             const parent_index = leaf_idx / 2;
-            const parent = try self.wots.hash.hash(allocator, combined_nodes, parent_index);
+            const parent = try self.tree.hash.hash(allocator, combined_nodes, parent_index);
+
             allocator.free(current_hash);
             current_hash = parent;
 
@@ -314,8 +360,6 @@ pub const HashSignature = struct {
         }
 
         // Step 3: Compare computed root with provided public_key
-        const roots_match = std.mem.eql(u8, current_hash, public_key);
-
-        return roots_match;
+        return std.mem.eql(u8, current_hash, public_key);
     }
 };

@@ -14,12 +14,12 @@ pub fn main() !void {
 
     // Initialize with 128-bit security (only security level supported)
     // Using lifetime_2_10 (1,024 signatures)
-    const params = hash_sig.Parameters.init(.lifetime_2_10);
+    const params = hash_sig.Parameters.initHypercube(.lifetime_2_10);
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
     std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
-    std.debug.print("Parameters: 64 chains of length 8 (w=8)\n", .{});
+    std.debug.print("Parameters: 64 chains of length 8 (w=3)\n", .{});
     std.debug.print("Hash: Poseidon2\n\n", .{});
 
     std.debug.print("Generating keypair...\n", .{});
@@ -51,8 +51,14 @@ pub fn main() !void {
 
     std.debug.print("Secret Key:\n", .{});
     std.debug.print("  Length: {} bytes\n", .{keypair.secret_key.len});
-    std.debug.print("  Content: ", .{});
-    for (keypair.secret_key) |byte| {
+    std.debug.print("  Content (first 32 bytes): ", .{});
+    for (keypair.secret_key[0..@min(32, keypair.secret_key.len)]) |byte| {
+        std.debug.print("{x:0>2}", .{byte});
+    }
+    std.debug.print("\n", .{});
+    std.debug.print("Seed used:\n", .{});
+    std.debug.print("  Content (first 32 bytes): ", .{});
+    for (seed[0..32]) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
     std.debug.print("\n\n", .{});

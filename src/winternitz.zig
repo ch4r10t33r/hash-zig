@@ -25,21 +25,19 @@ pub const WinternitzOTS = struct {
     }
 
     pub inline fn getChainLength(self: WinternitzOTS) u32 {
-        return @as(u32, 1) << @intCast(@ctz(self.params.winternitz_w));
+        return @as(u32, 1) << @intCast(self.params.winternitz_w);
     }
 
     pub fn generatePrivateKey(self: *WinternitzOTS, allocator: Allocator, seed: []const u8, addr: u64) ![][]u8 {
-        const winternitz_w = self.params.winternitz_w;
-        const hash_output_len = self.params.hash_output_len;
-        const len = (8 * hash_output_len + @ctz(winternitz_w) - 1) / @ctz(winternitz_w);
+        const num_chains = self.params.num_chains;
 
-        var private_key = try allocator.alloc([]u8, len);
+        var private_key = try allocator.alloc([]u8, num_chains);
         errdefer {
             for (private_key) |pk| allocator.free(pk);
             allocator.free(private_key);
         }
 
-        for (0..len) |i| {
+        for (0..num_chains) |i| {
             private_key[i] = try self.hash.prfHash(allocator, seed, addr + i);
         }
 
@@ -102,7 +100,7 @@ pub const WinternitzOTS = struct {
         const num_cpus = std.Thread.getCpuCount() catch 8;
         const num_threads = @min(num_cpus, num_chains);
 
-        if (num_threads <= 1 or num_chains < 16) {
+        if (num_threads <= 1 or num_chains < 16 or true) {
             // Sequential fallback for small workloads
             for (private_key, 0..) |pk, i| {
                 var current = try allocator.dupe(u8, pk);
