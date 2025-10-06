@@ -117,31 +117,17 @@ The hash-zig library includes several built-in programs for demonstration, testi
 ### Basic Example (`hash-zig-example`)
 **Purpose**: Demonstrates basic usage of the hash-zig library
 **Command**: `zig build example` or `zig build run`
-**Description**: Shows how to generate keypairs, sign messages, and verify signatures. Includes timing measurements and displays key information. Perfect for understanding the library's core functionality.
-
-### Performance Profiler (`hash-zig-profile`)
-**Purpose**: Detailed performance analysis and profiling
-**Command**: `zig build profile`
-**Description**: Provides in-depth timing analysis of individual operations including WOTS (Winternitz One-Time Signature) operations, hash functions, and full key generation. Useful for understanding performance bottlenecks and optimization opportunities.
+**Description**: Shows how to generate keypairs, sign messages, and verify signatures using the Rust-compatible implementation. Includes timing measurements, displays key information (PRF key, tree structure, epoch management), and demonstrates encoding randomness. Perfect for understanding the library's core functionality.
 
 ### Performance Benchmark (`hash-zig-benchmark`)
 **Purpose**: Comprehensive performance benchmarking
 **Command**: `zig build benchmark`
-**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation, signing, and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing. Uses the optimized implementation for baseline performance measurements.
+**Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation (with on-demand key derivation from PRF), signing (with encoding randomness), and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing. Uses the Rust-compatible implementation.
 
 ### SIMD Benchmark (`hash-zig-simd-benchmark`)
 **Purpose**: Tests SIMD-optimized implementations
 **Command**: `zig build simd-benchmark`
-**Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for comparing performance improvements from vectorization.
-
-### Implementation Comparison (`hash-zig-compare`)
-**Purpose**: Direct performance comparison between Optimized V2 and SIMD implementations
-**Command**: `zig build compare`
-**Description**: Compares the performance of Optimized V2 vs SIMD implementations using identical hypercube parameters (64 chains of length 8) and the same seed. Both implementations use Rust-compatible Poseidon2 (width=16). Shows detailed timing analysis, key structure differences, and performance ratios. Demonstrates the performance characteristics of different implementation approaches.
-
-### Additional Examples
-- **`optimized_benchmark.zig`**: Standalone optimized implementation benchmark (currently commented out in build.zig)
-- **`scripts/benchmark.zig`**: Main benchmark script used by `zig build benchmark`
+**Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for measuring performance with vectorization.
 
 ### Building All Programs
 ```bash
@@ -149,11 +135,9 @@ The hash-zig library includes several built-in programs for demonstration, testi
 zig build
 
 # Run specific programs
-zig build example      # Basic usage demo
-zig build profile      # Performance profiling
-zig build benchmark    # Standard benchmark
+zig build example         # Basic usage demo (Rust-compatible)
+zig build benchmark       # Standard benchmark
 zig build simd-benchmark  # SIMD benchmark
-zig build compare      # Compare Optimized V2 vs SIMD
 ```
 
 ### Program Outputs
