@@ -45,6 +45,7 @@ jobs:
         run: |
           echo "Running performance benchmark for current version (Standard implementation)..."
           echo "Using hash-zig-benchmark (Rust-compatible HashSignature)"
+          echo "Lifetime: 2^10 (1,024 signatures)"
           if zig build benchmark -Doptimize=ReleaseFast; then
             ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
@@ -57,28 +58,16 @@ jobs:
           fi
           echo "Standard implementation benchmark completed"
           
-          # Extract key metrics
+          # Extract key metrics for 2^10 only
           KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" current_results.txt | cut -d: -f3)
-          KEYGEN_2_16=$(grep "BENCHMARK_RESULT: 2^16:keygen:" current_results.txt | cut -d: -f3)
           SIGN_2_10=$(grep "BENCHMARK_RESULT: 2^10:sign:" current_results.txt | cut -d: -f3)
-          SIGN_2_16=$(grep "BENCHMARK_RESULT: 2^16:sign:" current_results.txt | cut -d: -f3)
           VERIFY_2_10=$(grep "BENCHMARK_RESULT: 2^10:verify:" current_results.txt | cut -d: -f3)
-          VERIFY_2_16=$(grep "BENCHMARK_RESULT: 2^16:verify:" current_results.txt | cut -d: -f3)
           THROUGHPUT_2_10=$(grep "BENCHMARK_RESULT: 2^10:throughput:" current_results.txt | cut -d: -f3)
-          THROUGHPUT_2_16=$(grep "BENCHMARK_RESULT: 2^16:throughput:" current_results.txt | cut -d: -f3)
-          PERF_RATIO_2_10=$(grep "BENCHMARK_RESULT: 2^10:performance_ratio:" current_results.txt | cut -d: -f3)
-          PERF_RATIO_2_16=$(grep "BENCHMARK_RESULT: 2^16:performance_ratio:" current_results.txt | cut -d: -f3)
           
           echo "keygen_2_10=$KEYGEN_2_10" >> $GITHUB_OUTPUT
-          echo "keygen_2_16=$KEYGEN_2_16" >> $GITHUB_OUTPUT
           echo "sign_2_10=$SIGN_2_10" >> $GITHUB_OUTPUT
-          echo "sign_2_16=$SIGN_2_16" >> $GITHUB_OUTPUT
           echo "verify_2_10=$VERIFY_2_10" >> $GITHUB_OUTPUT
-          echo "verify_2_16=$VERIFY_2_16" >> $GITHUB_OUTPUT
           echo "throughput_2_10=$THROUGHPUT_2_10" >> $GITHUB_OUTPUT
-          echo "throughput_2_16=$THROUGHPUT_2_16" >> $GITHUB_OUTPUT
-          echo "perf_ratio_2_10=$PERF_RATIO_2_10" >> $GITHUB_OUTPUT
-          echo "perf_ratio_2_16=$PERF_RATIO_2_16" >> $GITHUB_OUTPUT
           
           # Display results
           cat current_results.txt
@@ -115,10 +104,9 @@ jobs:
       - name: Benchmark base version
         id: base_benchmark
         run: |
-          echo "Running performance benchmark for base version..."
-          if zig build simd-benchmark -Doptimize=ReleaseFast; then
-            ./zig-out/bin/hash-zig-simd-benchmark > base_results.txt 2>&1
-          elif zig build benchmark -Doptimize=ReleaseFast; then
+          echo "Running performance benchmark for base version (Standard implementation)..."
+          echo "Lifetime: 2^10 (1,024 signatures)"
+          if zig build benchmark -Doptimize=ReleaseFast; then
             ./zig-out/bin/hash-zig-benchmark > base_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
             echo "No benchmark build step on base; compiling scripts/benchmark.zig directly"
@@ -129,28 +117,16 @@ jobs:
             : > base_results.txt
           fi
           
-          # Extract key metrics
+          # Extract key metrics for 2^10 only
           KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" base_results.txt | cut -d: -f3)
-          KEYGEN_2_16=$(grep "BENCHMARK_RESULT: 2^16:keygen:" base_results.txt | cut -d: -f3)
           SIGN_2_10=$(grep "BENCHMARK_RESULT: 2^10:sign:" base_results.txt | cut -d: -f3)
-          SIGN_2_16=$(grep "BENCHMARK_RESULT: 2^16:sign:" base_results.txt | cut -d: -f3)
           VERIFY_2_10=$(grep "BENCHMARK_RESULT: 2^10:verify:" base_results.txt | cut -d: -f3)
-          VERIFY_2_16=$(grep "BENCHMARK_RESULT: 2^16:verify:" base_results.txt | cut -d: -f3)
           THROUGHPUT_2_10=$(grep "BENCHMARK_RESULT: 2^10:throughput:" base_results.txt | cut -d: -f3)
-          THROUGHPUT_2_16=$(grep "BENCHMARK_RESULT: 2^16:throughput:" base_results.txt | cut -d: -f3)
-          PERF_RATIO_2_10=$(grep "BENCHMARK_RESULT: 2^10:performance_ratio:" base_results.txt | cut -d: -f3)
-          PERF_RATIO_2_16=$(grep "BENCHMARK_RESULT: 2^16:performance_ratio:" base_results.txt | cut -d: -f3)
           
           echo "keygen_2_10=$KEYGEN_2_10" >> $GITHUB_OUTPUT
-          echo "keygen_2_16=$KEYGEN_2_16" >> $GITHUB_OUTPUT
           echo "sign_2_10=$SIGN_2_10" >> $GITHUB_OUTPUT
-          echo "sign_2_16=$SIGN_2_16" >> $GITHUB_OUTPUT
           echo "verify_2_10=$VERIFY_2_10" >> $GITHUB_OUTPUT
-          echo "verify_2_16=$VERIFY_2_16" >> $GITHUB_OUTPUT
           echo "throughput_2_10=$THROUGHPUT_2_10" >> $GITHUB_OUTPUT
-          echo "throughput_2_16=$THROUGHPUT_2_16" >> $GITHUB_OUTPUT
-          echo "perf_ratio_2_10=$PERF_RATIO_2_10" >> $GITHUB_OUTPUT
-          echo "perf_ratio_2_16=$PERF_RATIO_2_16" >> $GITHUB_OUTPUT
           
           # Display results
           cat base_results.txt
@@ -171,10 +147,10 @@ jobs:
           
           echo "## 🚀 Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Key Generation Performance (Focus: 2^10)" >> $GITHUB_STEP_SUMMARY
+          echo "### Key Generation Performance (2^10 lifetime = 1,024 signatures)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Lifetime | Base Version | Current Version | Improvement | Throughput (sig/s) |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------------|-----------------|-------------|-------------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Operation | Base Version | Current Version | Improvement | Throughput (sig/s) |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------------|-----------------|-------------|-------------------|" >> $GITHUB_STEP_SUMMARY
           
           base_k10="${{ steps.base_benchmark.outputs.keygen_2_10 }}"
           curr_k10="${{ steps.current_benchmark.outputs.keygen_2_10 }}"
@@ -184,23 +160,7 @@ jobs:
           else
             imp_k10="N/A"
           fi
-          echo "| 2^10 | ${base_k10:-N/A}s | ${curr_k10:-N/A}s | ${imp_k10}% | ${thr_k10:-N/A} |" >> $GITHUB_STEP_SUMMARY
-
-          base_k16="${{ steps.base_benchmark.outputs.keygen_2_16 }}"
-          curr_k16="${{ steps.current_benchmark.outputs.keygen_2_16 }}"
-          thr_k16="${{ steps.current_benchmark.outputs.throughput_2_16 }}"
-          if is_num "$base_k16" && is_num "$curr_k16" && [ "$(echo "$base_k16 > 0" | bc)" -eq 1 ]; then
-            imp_k16=$(pct_improve "$base_k16" "$curr_k16")
-          else
-            imp_k16="N/A"
-          fi
-          echo "| 2^16 | ${base_k16:-N/A}s | ${curr_k16:-N/A}s | ${imp_k16}% | ${thr_k16:-N/A} |" >> $GITHUB_STEP_SUMMARY
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Sign/Verify Performance" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Operation | Lifetime | Base Version | Current Version | Improvement |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|----------|--------------|-----------------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| KeyGen | ${base_k10:-N/A}s | ${curr_k10:-N/A}s | ${imp_k10}% | ${thr_k10:-N/A} |" >> $GITHUB_STEP_SUMMARY
           
           base_s10="${{ steps.base_benchmark.outputs.sign_2_10 }}"; curr_s10="${{ steps.current_benchmark.outputs.sign_2_10 }}"
           if is_num "$base_s10" && is_num "$curr_s10" && [ "$(echo "$base_s10 > 0" | bc)" -eq 1 ]; then
@@ -208,7 +168,7 @@ jobs:
           else
             imp_s10="N/A"
           fi
-          echo "| Sign | 2^10 | ${base_s10:-N/A}s | ${curr_s10:-N/A}s | ${imp_s10}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Sign | ${base_s10:-N/A}s | ${curr_s10:-N/A}s | ${imp_s10}% | - |" >> $GITHUB_STEP_SUMMARY
 
           base_v10="${{ steps.base_benchmark.outputs.verify_2_10 }}"; curr_v10="${{ steps.current_benchmark.outputs.verify_2_10 }}"
           if is_num "$base_v10" && is_num "$curr_v10" && [ "$(echo "$base_v10 > 0" | bc)" -eq 1 ]; then
@@ -216,21 +176,22 @@ jobs:
           else
             imp_v10="N/A"
           fi
-          echo "| Verify | 2^10 | ${base_v10:-N/A}s | ${curr_v10:-N/A}s | ${imp_v10}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Verify | ${base_v10:-N/A}s | ${curr_v10:-N/A}s | ${imp_v10}% | - |" >> $GITHUB_STEP_SUMMARY
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This benchmark compares the current PR against the base version to measure performance improvements." >> $GITHUB_STEP_SUMMARY
-          echo "Positive percentages indicate performance improvements (faster execution)." >> $GITHUB_STEP_SUMMARY
+          echo "This benchmark compares the current PR against the base version using:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Standard Rust-compatible implementation** (not SIMD)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Lifetime: 2^10 = 1,024 signatures**" >> $GITHUB_STEP_SUMMARY
+          echo "- Positive percentages indicate performance improvements (faster execution)" >> $GITHUB_STEP_SUMMARY
           
           # Console output
           echo "Performance Analysis Complete!"
           echo "=============================="
-          echo "2^10 Keygen: base=${base_k10:-N/A}s current=${curr_k10:-N/A}s improvement=${imp_k10}%"
-          echo "2^16 Keygen: base=${base_k16:-N/A}s current=${curr_k16:-N/A}s improvement=${imp_k16}%"
-          echo "Sign 2^10: base=${base_s10:-N/A}s current=${curr_s10:-N/A}s improvement=${imp_s10}%"
-          echo "Verify 2^10: base=${base_v10:-N/A}s current=${curr_v10:-N/A}s improvement=${imp_v10}%"
+          echo "KeyGen: base=${base_k10:-N/A}s current=${curr_k10:-N/A}s improvement=${imp_k10}%"
+          echo "Sign:   base=${base_s10:-N/A}s current=${curr_s10:-N/A}s improvement=${imp_s10}%"
+          echo "Verify: base=${base_v10:-N/A}s current=${curr_v10:-N/A}s improvement=${imp_v10}%"
       
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4

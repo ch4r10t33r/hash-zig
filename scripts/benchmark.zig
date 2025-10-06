@@ -11,10 +11,9 @@ pub fn main() !void {
     std.debug.print("Focus: Key Generation Performance for Lifetime 2^10\n", .{});
     std.debug.print("Target: Measure improvements from optimizations\n\n", .{});
 
-    // Test different lifetimes - focus on 2^10 for detailed analysis
+    // Test with 2^10 lifetime only (hypercube parameters)
     const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.params.KeyLifetime, expected_time_sec: f64, description: []const u8 }{
-        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 30.0, .description = "1,024 signatures - Quick test" },
-        .{ .name = "2^16", .lifetime = .lifetime_2_16, .expected_time_sec = 300.0, .description = "65,536 signatures - Full benchmark" },
+        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 30.0, .description = "1,024 signatures - Hypercube parameters" },
     };
 
     for (lifetimes) |config| {
