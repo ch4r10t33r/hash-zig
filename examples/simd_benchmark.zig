@@ -48,15 +48,15 @@ pub fn main() !void {
         defer sig_scheme.deinit();
 
         const keygen_start = std.time.nanoTimestamp();
-        var keypair = try sig_scheme.generateKeyPair(allocator, &seed);
+        var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
         const keygen_end = std.time.nanoTimestamp();
         defer keypair.deinit(allocator);
 
         const keygen_duration = @as(f64, @floatFromInt(keygen_end - keygen_start)) / 1_000_000_000.0;
 
         // Calculate key sizes
-        const secret_key_size = keypair.secret_key.len;
-        const public_key_size = keypair.public_key.len;
+        const secret_key_size = keypair.secret_key.prf_key.len + (keypair.secret_key.tree.len * 32); // PRF + tree
+        const public_key_size = keypair.public_key.root.len;
 
         // Store results
         results[i] = .{

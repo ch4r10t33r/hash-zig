@@ -128,7 +128,20 @@ pub fn build(b: *std.Build) void {
     const simd_benchmark_step = b.step("simd-benchmark", "Run SIMD performance benchmark");
     simd_benchmark_step.dependOn(&run_simd_benchmark.step);
 
-    // (Optimized benchmark and comparison disabled - implementations now match Rust)
+    // Implementation comparison executable
+    const comparison = b.addExecutable(.{
+        .name = "hash-zig-compare",
+        .root_source_file = b.path("examples/compare_implementations.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    comparison.root_module.addImport("hash-zig", hash_zig_module);
+    comparison.root_module.addImport("simd_signature", simd_signature_module);
+    b.installArtifact(comparison);
+
+    const run_comparison = b.addRunArtifact(comparison);
+    const comparison_step = b.step("compare", "Compare Standard vs SIMD implementations");
+    comparison_step.dependOn(&run_comparison.step);
 
     // Documentation (opt-in to avoid enabling -femit-docs on default builds)
     if (enable_docs) {

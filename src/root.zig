@@ -16,6 +16,11 @@ pub const winternitz = @import("winternitz.zig");
 pub const merkle = @import("merkle.zig");
 pub const signature = @import("signature.zig");
 
+// Note: SIMD implementations (simd_signature, simd_winternitz, etc.) are available
+// as separate modules in build.zig. Access them via:
+//   const simd_signature = @import("simd_signature");
+// They are not re-exported here to avoid module conflicts.
+
 // Convenience exports
 pub const SecurityLevel = params.SecurityLevel;
 pub const Parameters = params.Parameters;

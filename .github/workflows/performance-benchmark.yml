@@ -40,13 +40,12 @@ jobs:
           echo "Current version built successfully"
           ls -la zig-out/bin/ || echo "No binary output directory found"
       
-      - name: Benchmark current version
+      - name: Benchmark current version (Standard Rust-compatible implementation)
         id: current_benchmark
         run: |
-          echo "Running performance benchmark for current version..."
-          if zig build simd-benchmark -Doptimize=ReleaseFast; then
-            ./zig-out/bin/hash-zig-simd-benchmark > current_results.txt 2>&1
-          elif zig build benchmark -Doptimize=ReleaseFast; then
+          echo "Running performance benchmark for current version (Standard implementation)..."
+          echo "Using hash-zig-benchmark (Rust-compatible HashSignature)"
+          if zig build benchmark -Doptimize=ReleaseFast; then
             ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
           elif [ -f scripts/benchmark.zig ]; then
             echo "No benchmark build step; compiling scripts/benchmark.zig directly"
@@ -56,6 +55,7 @@ jobs:
             echo "No benchmark target or script found; skipping current metrics"
             : > current_results.txt
           fi
+          echo "Standard implementation benchmark completed"
           
           # Extract key metrics
           KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" current_results.txt | cut -d: -f3)
