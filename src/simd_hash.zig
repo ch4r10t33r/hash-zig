@@ -1,7 +1,7 @@
 const std = @import("std");
 const simd_poseidon2 = @import("simd_poseidon2");
 
-// SIMD-optimized hash function that matches the optimized v2 parameters
+// SIMD-optimized hash function using Poseidon2
 // Uses SIMD Poseidon2 with width=16 to match the Rust implementation
 // but with SIMD optimizations for better performance
 
@@ -19,7 +19,7 @@ pub const SimdHash = struct {
         // No cleanup needed
     }
 
-    // Hash function that matches optimized v2 interface
+    // Hash function using SIMD Poseidon2
     pub fn hash(self: *SimdHash, allocator: std.mem.Allocator, data: []const u8, tweak: u64) ![]u8 {
         _ = self;
 
@@ -38,7 +38,7 @@ pub const SimdHash = struct {
         return result;
     }
 
-    // PRF hash function that matches optimized v2 interface
+    // PRF hash function using SIMD Poseidon2
     pub fn prfHash(self: *SimdHash, allocator: std.mem.Allocator, key: []const u8, index: u64) ![]u8 {
         return self.hash(allocator, key, index);
     }

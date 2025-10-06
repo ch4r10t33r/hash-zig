@@ -15,9 +15,6 @@ pub const tweakable_hash = @import("tweakable_hash.zig");
 pub const winternitz = @import("winternitz.zig");
 pub const merkle = @import("merkle.zig");
 pub const signature = @import("signature.zig");
-pub const optimized_hash_v2 = @import("optimized_hash_v2.zig");
-pub const optimized_winternitz_v2 = @import("optimized_winternitz_v2.zig");
-pub const optimized_signature_v2 = @import("optimized_signature_v2.zig");
 
 // Convenience exports
 pub const SecurityLevel = params.SecurityLevel;

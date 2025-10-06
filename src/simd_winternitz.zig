@@ -61,7 +61,7 @@ pub const simd_winternitz_ots = struct {
         defer hash.deinit();
 
         for (0..num_chains) |i| {
-            // Use the same prfHash approach as optimized v2: prfHash(seed, addr + i)
+            // Use prfHash approach: prfHash(seed, addr + i)
             const chain_addr = addr + i;
             const hash_result = try hash.prfHash(allocator, seed, chain_addr);
             defer allocator.free(hash_result);

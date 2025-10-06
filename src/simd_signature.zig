@@ -8,7 +8,7 @@ const params = hz.params;
 
 pub const SimdHashSignature = struct {
     const Winternitz = simd_winternitz.simd_winternitz_ots;
-    const Hash = hz.optimized_hash_v2.OptimizedHashV2;
+    const Hash = hz.tweakable_hash.TweakableHash;
 
     // Configuration
     params: params.Parameters,
@@ -40,7 +40,7 @@ pub const SimdHashSignature = struct {
         self.hash.deinit();
     }
 
-    // Key pair type (matching optimized v2 format)
+    // Key pair type
     pub const KeyPair = struct {
         public_key: []u8, // Merkle root (32 bytes)
         secret_key: []u8, // Combined secret keys
@@ -90,7 +90,7 @@ pub const SimdHashSignature = struct {
             var sk = try Winternitz.generatePrivateKey(allocator, self.params, seed, addr);
             var pk = try Winternitz.generatePublicKey(allocator, sk);
 
-            // Convert SIMD keys to byte arrays to match optimized v2 format
+            // Convert SIMD keys to byte arrays
             const sk_bytes = try convertPrivateKeyToBytes(allocator, sk);
             const pk_bytes = try convertPublicKeyToBytes(allocator, pk);
 
@@ -123,7 +123,7 @@ pub const SimdHashSignature = struct {
         };
     }
 
-    // Build Merkle tree (same as optimized v2)
+    // Build Merkle tree
     fn buildMerkleTree(self: *SimdHashSignature, allocator: std.mem.Allocator, leaf_public_keys: [][]u8) ![]u8 {
         const tree_height = self.params.tree_height;
         const num_leaves = leaf_public_keys.len;
