@@ -9,11 +9,12 @@ pub fn main() !void {
     std.debug.print("Hash-Zig Performance Benchmark\n", .{});
     std.debug.print("==============================\n", .{});
     std.debug.print("Focus: Key Generation Performance for Lifetime 2^10\n", .{});
+    std.debug.print("Parameters: Winternitz (22 chains × 256, w=8)\n", .{});
     std.debug.print("Target: Measure improvements from optimizations\n\n", .{});
 
-    // Test with 2^10 lifetime only (hypercube parameters)
+    // Test with 2^10 lifetime only (recommended Winternitz parameters)
     const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.params.KeyLifetime, expected_time_sec: f64, description: []const u8 }{
-        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 30.0, .description = "1,024 signatures - Hypercube parameters" },
+        .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 1.0, .description = "1,024 signatures - Winternitz w=8" },
     };
 
     for (lifetimes) |config| {
