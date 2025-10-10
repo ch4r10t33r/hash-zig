@@ -100,7 +100,7 @@ pub const WinternitzOTS = struct {
         const num_cpus = std.Thread.getCpuCount() catch 8;
         const num_threads = @min(num_cpus, num_chains);
 
-        if (num_threads <= 1 or num_chains < 16 or true) {
+        if (num_threads <= 1 or num_chains < 16) {
             // Sequential fallback for small workloads
             for (private_key, 0..) |pk, i| {
                 var current = try allocator.dupe(u8, pk);
