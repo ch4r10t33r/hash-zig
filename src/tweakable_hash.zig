@@ -64,6 +64,45 @@ pub const TweakableHash = struct {
     pub fn prfHash(self: *TweakableHash, allocator: Allocator, key: []const u8, index: u64) ![]u8 {
         return self.hash(allocator, key, index);
     }
+
+    /// Batch hash multiple inputs with corresponding tweaks
+    /// This is optimized for Winternitz chain generation where we process
+    /// all chains at the same iteration step simultaneously
+    pub fn hashBatch(self: *TweakableHash, allocator: Allocator, data_array: []const []const u8, tweaks: []const u64) ![][]u8 {
+        if (data_array.len != tweaks.len) return error.MismatchedArrayLengths;
+        
+        // Prepare tweaked inputs
+        var tweaked_inputs = try allocator.alloc([]u8, data_array.len);
+        defer {
+            for (tweaked_inputs) |input| allocator.free(input);
+            allocator.free(tweaked_inputs);
+        }
+        
+        for (data_array, tweaks, 0..) |data, tweak, i| {
+            tweaked_inputs[i] = try allocator.alloc(u8, 8 + data.len);
+            std.mem.writeInt(u64, tweaked_inputs[i][0..8], tweak, .big);
+            @memcpy(tweaked_inputs[i][8..], data);
+        }
+        
+        // Batch hash using underlying implementation
+        return switch (self.hash_impl) {
+            .poseidon2 => |*p| try p.hashBatch(allocator, tweaked_inputs),
+            .sha3 => |*s| {
+                // SHA3 doesn't have batch optimization, process sequentially
+                var results = try allocator.alloc([]u8, tweaked_inputs.len);
+                errdefer {
+                    for (results) |r| {
+                        if (r.len > 0) allocator.free(r);
+                    }
+                    allocator.free(results);
+                }
+                for (tweaked_inputs, 0..) |input, i| {
+                    results[i] = try s.hashBytes(allocator, input);
+                }
+                return results;
+            },
+        };
+    }
 };
 
 test "tweakable hash different tweaks poseidon2" {

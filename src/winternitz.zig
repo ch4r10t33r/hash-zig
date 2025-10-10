@@ -61,21 +61,45 @@ pub const WinternitzOTS = struct {
             part.* = &[_]u8{};
         }
 
-        // NOTE: Chain generation is kept sequential (not parallelized)
-        // Reason: This function is called from signature.zig parallel workers,
-        // creating nested parallelism (threads spawning threads) which causes issues.
-        // The main performance benefit comes from leaf-level parallelism in signature.zig
-        // (parallelizing 1024+ leaves), not chain-level parallelism (22-64 chains per leaf).
-        for (private_key, 0..) |pk, i| {
-            var current = try allocator.dupe(u8, pk);
+        // NOTE: Chain generation uses batching for better performance
+        // Process all chains in lockstep (batch all chains at each iteration)
+        // This provides better CPU pipeline utilization than processing chains sequentially
 
-            for (0..chain_len) |_| {
-                const next = try self.hash.hash(allocator, current, i);
-                allocator.free(current);
-                current = next;
+        // Optimization: Batch process all chains together for better ILP
+        // Instead of: chain0(256x) → chain1(256x) → ...
+        // We do: iteration0(all chains) → iteration1(all chains) → ...
+
+        // Copy initial values
+        for (private_key, 0..) |pk, i| {
+            public_parts[i] = try allocator.dupe(u8, pk);
+        }
+
+        // Pre-allocate reusable buffers to reduce allocation overhead
+        const tweaks = try allocator.alloc(u64, private_key.len);
+        defer allocator.free(tweaks);
+        for (0..private_key.len) |i| {
+            tweaks[i] = i; // Each chain uses its index as tweak
+        }
+
+        var batch_inputs = try allocator.alloc([]const u8, private_key.len);
+        defer allocator.free(batch_inputs);
+
+        // Process all chains in lockstep for chain_len iterations
+        for (0..chain_len) |_| {
+            // Prepare batch of current states from all chains (reuse buffer)
+            for (public_parts, 0..) |part, i| {
+                batch_inputs[i] = part;
             }
 
-            public_parts[i] = current;
+            // Batch hash all chain states at this iteration with their tweaks
+            const batch_results = try self.hash.hashBatch(allocator, batch_inputs, tweaks);
+            defer allocator.free(batch_results);
+
+            // Update public_parts with results
+            for (public_parts, 0..) |old_part, i| {
+                allocator.free(old_part);
+                public_parts[i] = batch_results[i];
+            }
         }
 
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
