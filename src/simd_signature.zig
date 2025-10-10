@@ -90,6 +90,77 @@ pub const SimdHashSignature = struct {
         }
     };
 
+    // Worker context for parallel key generation (copied from signature.zig)
+    const LeafJob = struct { start: usize, end: usize };
+
+    const LeafQueue = struct {
+        jobs: []LeafJob,
+        next: std.atomic.Value(usize),
+
+        fn init(jobs: []LeafJob) LeafQueue {
+            return .{ .jobs = jobs, .next = std.atomic.Value(usize).init(0) };
+        }
+
+        fn pop(self: *LeafQueue) ?LeafJob {
+            const idx = self.next.fetchAdd(1, .monotonic);
+            if (idx >= self.jobs.len) return null;
+            return self.jobs[idx];
+        }
+    };
+
+    const WorkerCtx = struct {
+        simd_sig: *SimdHashSignature,
+        allocator: std.mem.Allocator,
+        seed: []const u8,
+        leaves: [][]const u8,
+        queue: *LeafQueue,
+        error_flag: *std.atomic.Value(bool),
+    };
+
+    fn worker(ctx: *WorkerCtx) void {
+        // Create arena allocator for this worker thread (optimization #1)
+        var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        while (!ctx.error_flag.load(.monotonic)) {
+            const maybe_job = ctx.queue.pop();
+            if (maybe_job == null) break;
+            const job = maybe_job.?;
+
+            for (job.start..job.end) |i| {
+                const epoch = @as(u32, @intCast(i));
+
+                // Generate using arena allocator for intermediate allocations
+                var sk = Winternitz.generatePrivateKey(arena_allocator, ctx.simd_sig.params, ctx.seed, epoch) catch {
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+                defer sk.deinit(arena_allocator);
+
+                var pk = Winternitz.generatePublicKey(arena_allocator, ctx.simd_sig.params, sk) catch {
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+                defer pk.deinit(arena_allocator);
+
+                // Convert to bytes and copy to parent allocator
+                const pk_bytes = convertPublicKeyToBytes(arena_allocator, pk) catch {
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+
+                ctx.leaves[i] = ctx.allocator.dupe(u8, pk_bytes) catch {
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+            }
+
+            // Reset arena after each job
+            _ = arena.reset(.retain_capacity);
+        }
+    }
+
     /// Generate key pair matching Rust implementation (with SIMD optimizations)
     /// - activation_epoch: first valid epoch for this key (default 0)
     /// - num_active_epochs: number of epochs this key covers (default: all, 0 means use full lifetime)
@@ -119,20 +190,105 @@ pub const SimdHashSignature = struct {
             allocator.free(leaf_public_keys);
         }
 
-        // Generate leaf public keys using SIMD winternitz (with epoch addressing)
-        for (0..num_leaves) |i| {
-            const epoch = @as(u32, @intCast(i)); // Use epoch directly (matches Rust)
-            var sk = try Winternitz.generatePrivateKey(allocator, self.params, seed, epoch);
-            var pk = try Winternitz.generatePublicKey(allocator, sk);
+        var leaves = try allocator.alloc([]const u8, num_leaves);
+        defer {
+            for (leaves) |leaf| {
+                if (leaf.len > 0) allocator.free(leaf);
+            }
+            allocator.free(leaves);
+        }
 
-            // Convert SIMD public key to bytes
-            const pk_bytes = try convertPublicKeyToBytes(allocator, pk);
+        // Initialize leaves to empty slices
+        for (leaves) |*leaf| {
+            leaf.* = &[_]u8{};
+        }
 
-            // Clean up SIMD keys (we don't store them)
-            sk.deinit(allocator);
-            pk.deinit(allocator);
+        // Determine optimal number of threads (copied from signature.zig)
+        const num_cpus = std.Thread.getCpuCount() catch 8;
+        const num_threads = @min(num_cpus, num_leaves);
 
-            leaf_public_keys[i] = pk_bytes;
+        // Use adaptive threshold (same as standard implementation)
+        const parallel_threshold: usize = if (num_leaves >= 1 << 16) 512 else if (num_leaves >= 8192) 256 else 2048;
+
+        if (num_threads <= 1 or num_leaves < parallel_threshold) {
+            // Sequential path with arena allocator
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const arena_allocator = arena.allocator();
+
+            for (0..num_leaves) |i| {
+                const epoch = @as(u32, @intCast(i));
+
+                var sk = try Winternitz.generatePrivateKey(arena_allocator, self.params, seed, epoch);
+                defer sk.deinit(arena_allocator);
+
+                var pk = try Winternitz.generatePublicKey(arena_allocator, self.params, sk);
+                defer pk.deinit(arena_allocator);
+
+                // Convert and copy to parent allocator
+                const pk_bytes = try convertPublicKeyToBytes(arena_allocator, pk);
+                const pk_copy = try allocator.dupe(u8, pk_bytes);
+                leaves[i] = pk_copy;
+                leaf_public_keys[i] = pk_copy;
+
+                // Periodically reset arena
+                if (i % 64 == 63) {
+                    _ = arena.reset(.retain_capacity);
+                }
+            }
+        } else {
+            // Parallel path with worker threads
+            var error_flag = std.atomic.Value(bool).init(false);
+
+            // Determine job size (same as standard)
+            const base_job: usize = if (num_leaves >= (1 << 20)) 2048 else if (num_leaves >= (1 << 16)) 1024 else 256;
+            const job_size = if (num_leaves / num_threads < base_job)
+                @max(64, num_leaves / (num_threads * 2))
+            else
+                base_job;
+            const num_jobs = (num_leaves + job_size - 1) / job_size;
+
+            var jobs = try allocator.alloc(LeafJob, num_jobs);
+            defer allocator.free(jobs);
+
+            var job_idx: usize = 0;
+            var i: usize = 0;
+            while (i < num_leaves) : (i += job_size) {
+                const end = @min(i + job_size, num_leaves);
+                jobs[job_idx] = .{ .start = i, .end = end };
+                job_idx += 1;
+            }
+
+            var queue = LeafQueue.init(jobs);
+
+            var threads = try allocator.alloc(std.Thread, num_threads);
+            defer allocator.free(threads);
+
+            var ctxs = try allocator.alloc(WorkerCtx, num_threads);
+            defer allocator.free(ctxs);
+
+            for (0..num_threads) |t| {
+                ctxs[t] = .{
+                    .simd_sig = self,
+                    .allocator = allocator,
+                    .seed = seed,
+                    .leaves = leaves,
+                    .queue = &queue,
+                    .error_flag = &error_flag,
+                };
+                threads[t] = try std.Thread.spawn(.{}, worker, .{&ctxs[t]});
+            }
+
+            for (threads) |th| th.join();
+
+            if (error_flag.load(.monotonic)) return error.InternalError;
+
+            // Copy leaves to leaf_public_keys
+            for (leaves, 0..) |leaf, idx| {
+                // leaves[idx] already points to the same memory as allocated in worker
+                // Just assign the pointer (it's already []u8 from allocator.dupe)
+                leaf_public_keys[idx] = @constCast(leaf);
+            }
         }
 
         // Build full Merkle tree structure (all nodes, level by level)
@@ -297,8 +453,8 @@ pub const SimdHashSignature = struct {
         var simd_sk = try Winternitz.generatePrivateKey(allocator, self.params, &secret_key.prf_key, epoch_u32);
         defer simd_sk.deinit(allocator);
 
-        // Sign with SIMD Winternitz
-        var simd_sig = try Winternitz.sign(allocator, message, simd_sk);
+        // Sign with SIMD Winternitz (pass parameters for correct chain length)
+        var simd_sig = try Winternitz.sign(allocator, self.params, message, simd_sk);
         defer simd_sig.deinit(allocator);
 
         // Convert SIMD signature to byte array
