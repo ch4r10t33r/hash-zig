@@ -100,9 +100,13 @@ pub const WinternitzOTS = struct {
         const num_cpus = std.Thread.getCpuCount() catch 8;
         const num_threads = @min(num_cpus, num_chains);
 
+<<<<<<< HEAD
         // DISABLED: Parallel chain generation has thread-safety issues with shared allocator
         // TODO: Fix by using thread-local allocators or proper synchronization
         if (num_threads <= 1 or num_chains < 16 or true) {
+=======
+        if (num_threads <= 1 or num_chains < 16) {
+>>>>>>> e32301aa3317b5756e06fb425ce0b6716595a4d7
             // Sequential fallback for small workloads
             for (private_key, 0..) |pk, i| {
                 var current = try allocator.dupe(u8, pk);

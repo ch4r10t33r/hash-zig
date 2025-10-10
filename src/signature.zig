@@ -118,8 +118,13 @@ pub const HashSignature = struct {
     };
 
     fn worker(ctx: *WorkerCtx) void {
+<<<<<<< HEAD
         // Create arena allocator for this worker thread to reduce allocation overhead
         // All intermediate hash computations use the arena; final results copied to parent
+=======
+        // Create arena allocator for this worker thread
+        // All intermediate allocations use the arena, eliminating overhead
+>>>>>>> e32301aa3317b5756e06fb425ce0b6716595a4d7
         var arena = std.heap.ArenaAllocator.init(ctx.allocator);
         defer arena.deinit();
         const arena_allocator = arena.allocator();
@@ -131,8 +136,13 @@ pub const HashSignature = struct {
             
             for (job.start..job.end) |i| {
                 const epoch = @as(u32, @intCast(i)); // Use epoch directly
+<<<<<<< HEAD
                 
                 // Generate keys using arena allocator for intermediate allocations
+=======
+
+                // Use arena allocator for intermediate allocations
+>>>>>>> e32301aa3317b5756e06fb425ce0b6716595a4d7
                 const sk_temp = ctx.hash_sig.wots.generatePrivateKey(arena_allocator, ctx.seed, epoch) catch {
                     ctx.error_flag.store(true, .monotonic);
                     return;
@@ -143,14 +153,22 @@ pub const HashSignature = struct {
                     return;
                 };
 
+<<<<<<< HEAD
                 // Copy final results to parent allocator (these persist after arena cleanup)
+=======
+                // Copy final results to parent allocator (will persist after arena cleanup)
+>>>>>>> e32301aa3317b5756e06fb425ce0b6716595a4d7
                 const sk = ctx.allocator.alloc([]u8, sk_temp.len) catch {
                     ctx.error_flag.store(true, .monotonic);
                     return;
                 };
                 for (sk_temp, 0..) |k, idx| {
                     sk[idx] = ctx.allocator.dupe(u8, k) catch {
+<<<<<<< HEAD
                         // Clean up on error
+=======
+                        // Clean up already allocated slices on error
+>>>>>>> e32301aa3317b5756e06fb425ce0b6716595a4d7
                         for (sk[0..idx]) |s| ctx.allocator.free(s);
                         ctx.allocator.free(sk);
                         ctx.error_flag.store(true, .monotonic);
@@ -168,8 +186,14 @@ pub const HashSignature = struct {
                 ctx.leaf_secret_keys[i] = sk;
                 ctx.leaves[i] = pk;
             }
+<<<<<<< HEAD
             
             // Reset arena after each job to keep memory usage bounded
+=======
+
+            // Reset arena after each job to keep memory usage bounded
+            // This frees all intermediate allocations from this job
+>>>>>>> e32301aa3317b5756e06fb425ce0b6716595a4d7
             _ = arena.reset(.retain_capacity);
         }
     }
@@ -232,14 +256,35 @@ pub const HashSignature = struct {
         const parallel_threshold: usize = if (num_leaves >= 1 << 16) 512 else if (num_leaves >= 8192) 256 else 2048;
         if (num_threads <= 1 or num_leaves < parallel_threshold) {
             // Fall back to sequential for small workloads
+            // Use arena allocator for intermediate allocations (same optimization as parallel path)
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const arena_allocator = arena.allocator();
+
             for (0..num_leaves) |i| {
                 const epoch = @as(u32, @intCast(i)); // Use epoch directly, not i * 1000
-                const sk = try self.wots.generatePrivateKey(allocator, seed, epoch);
-                const pk = try self.wots.generatePublicKey(allocator, sk);
+
+                // Generate using arena allocator for intermediate allocations
+                const sk_temp = try self.wots.generatePrivateKey(arena_allocator, seed, epoch);
+                const pk_temp = try self.wots.generatePublicKey(arena_allocator, sk_temp);
+
+                // Copy final results to parent allocator
+                const sk = try allocator.alloc([]u8, sk_temp.len);
+                errdefer allocator.free(sk);
+                for (sk_temp, 0..) |k, idx| {
+                    sk[idx] = try allocator.dupe(u8, k);
+                }
+
+                const pk = try allocator.dupe(u8, pk_temp);
 
                 leaf_secret_keys[i] = sk;
                 leaf_public_keys[i] = pk;
                 leaves[i] = pk;
+
+                // Periodically reset arena to keep memory usage bounded
+                if (i % 64 == 63) {
+                    _ = arena.reset(.retain_capacity);
+                }
             }
         } else {
             // Parallel leaf generation using a global queue and workers
