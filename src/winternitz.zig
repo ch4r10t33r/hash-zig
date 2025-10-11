@@ -49,14 +49,19 @@ pub const WinternitzOTS = struct {
         private_key: [][]u8,
         public_parts: [][]u8,
         chain_len: u32,
-        allocator: Allocator,
+        parent_allocator: Allocator,
         errors: []?anyerror,
         mutex: std.Thread.Mutex,
     };
 
     fn generateChainRange(context: *ChainGenContext, start: usize, end: usize) void {
+        // Create thread-local arena for this worker
+        var thread_arena = std.heap.ArenaAllocator.init(context.parent_allocator);
+        defer thread_arena.deinit();
+        const allocator = thread_arena.allocator();
+
         for (start..end) |i| {
-            var current = context.allocator.dupe(u8, context.private_key[i]) catch |err| {
+            var current = allocator.dupe(u8, context.private_key[i]) catch |err| {
                 context.mutex.lock();
                 defer context.mutex.unlock();
                 context.errors[i] = err;
@@ -64,18 +69,25 @@ pub const WinternitzOTS = struct {
             };
 
             for (0..context.chain_len) |_| {
-                const next = context.wots.hash.hash(context.allocator, current, i) catch |err| {
-                    context.allocator.free(current);
+                const next = context.wots.hash.hash(allocator, current, i) catch |err| {
                     context.mutex.lock();
                     defer context.mutex.unlock();
                     context.errors[i] = err;
                     return;
                 };
-                context.allocator.free(current);
                 current = next;
             }
 
-            context.public_parts[i] = current;
+            // Duplicate to parent allocator since thread arena will be freed
+            // Must lock mutex because parent allocator may not be thread-safe
+            context.mutex.lock();
+            const result = context.parent_allocator.dupe(u8, current) catch |err| {
+                context.errors[i] = err;
+                context.mutex.unlock();
+                return;
+            };
+            context.public_parts[i] = result;
+            context.mutex.unlock();
         }
     }
 
@@ -100,7 +112,11 @@ pub const WinternitzOTS = struct {
         const num_cpus = std.Thread.getCpuCount() catch 8;
         const num_threads = @min(num_cpus, num_chains);
 
-        if (num_threads <= 1 or num_chains < 16) {
+        // CRITICAL: Parallel processing has issues with some allocators
+        // For safety and correctness, use sequential processing
+        // TODO: Investigate thread-local arena approach for parallel support with Arena
+        const force_sequential = true;
+        if (num_threads <= 1 or num_chains < 16 or force_sequential) {
             // Sequential fallback for small workloads
             for (private_key, 0..) |pk, i| {
                 var current = try allocator.dupe(u8, pk);
@@ -124,7 +140,7 @@ pub const WinternitzOTS = struct {
                 .private_key = private_key,
                 .public_parts = public_parts,
                 .chain_len = chain_len,
-                .allocator = allocator,
+                .parent_allocator = allocator,
                 .errors = errors,
                 .mutex = std.Thread.Mutex{},
             };
@@ -156,8 +172,12 @@ pub const WinternitzOTS = struct {
             }
         }
 
+        // Allocate and ZERO the combined buffer to ensure deterministic results
+        // Without zeroing, uninitialized memory causes non-deterministic hashes with Arena allocators
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
+        @memset(combined, 0); // CRITICAL: Zero the buffer first
         defer allocator.free(combined);
+
         for (public_parts, 0..) |part, i| {
             @memcpy(combined[i * hash_output_len ..][0..hash_output_len], part);
         }
@@ -227,7 +247,9 @@ pub const WinternitzOTS = struct {
             public_parts[i] = current;
         }
 
+        // Allocate and ZERO the combined buffer to ensure deterministic results
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
+        @memset(combined, 0); // CRITICAL: Zero the buffer first
         defer allocator.free(combined);
 
         for (public_parts, 0..) |part, i| {

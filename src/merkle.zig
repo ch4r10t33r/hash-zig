@@ -166,7 +166,7 @@ pub const MerkleTree = struct {
         return root_node;
     }
 
-    pub fn generateAuthPath(self: *MerkleTree, allocator: Allocator, leaves: [][]const u8, leaf_idx: usize) ![][]u8 {
+    pub fn generateAuthPath(self: *MerkleTree, allocator: Allocator, leaves: []const []u8, leaf_idx: usize) ![][]u8 {
         if (leaves.len == 0) return error.EmptyLeaves;
         if (leaf_idx >= leaves.len) return error.InvalidIndex;
 

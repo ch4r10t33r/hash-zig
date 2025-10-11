@@ -17,7 +17,7 @@ pub const HashSignature = struct {
     wots: WinternitzOTS,
     tree: MerkleTree,
     allocator: Allocator,
-    cached_leaves: ?[][]const u8,
+    cached_leaves: ?[][]u8,
 
     pub fn init(allocator: Allocator, parameters: Parameters) !HashSignature {
         return .{
@@ -34,9 +34,11 @@ pub const HashSignature = struct {
         self.tree.deinit();
 
         // Free cached leaves if they exist
-        if (self.cached_leaves) |leaves| {
-            for (leaves) |leaf| self.allocator.free(leaf);
-            self.allocator.free(leaves);
+        // NOTE: cached_leaves contains direct references to leaf memory (not duplicates)
+        // So we need to free both the leaf contents AND the array container
+        if (self.cached_leaves) |cached| {
+            for (cached) |leaf| self.allocator.free(leaf);
+            self.allocator.free(cached);
         }
     }
 
@@ -111,7 +113,7 @@ pub const HashSignature = struct {
         hash_sig: *HashSignature,
         allocator: Allocator,
         seed: []const u8,
-        leaves: [][]const u8,
+        leaves: [][]u8,
         leaf_secret_keys: [][][]u8,
         queue: *LeafQueue,
         error_flag: *std.atomic.Value(bool),
@@ -164,32 +166,23 @@ pub const HashSignature = struct {
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
 
-        var leaf_public_keys = try allocator.alloc([]u8, num_leaves);
-        defer {
-            for (leaf_public_keys) |pk| allocator.free(pk);
-            allocator.free(leaf_public_keys);
-        }
-
+        // Allocate arrays for leaves and secret keys
+        var leaves = try allocator.alloc([]u8, num_leaves);
         var leaf_secret_keys = try allocator.alloc([][]u8, num_leaves);
-        defer {
-            for (leaf_secret_keys) |sk| {
-                for (sk) |s| allocator.free(s);
-                allocator.free(sk);
-            }
-            allocator.free(leaf_secret_keys);
-        }
 
-        var leaves = try allocator.alloc([]const u8, num_leaves);
-        defer {
+        errdefer {
+            // Clean up on error
             for (leaves) |leaf| {
                 if (leaf.len > 0) allocator.free(leaf);
             }
             allocator.free(leaves);
-        }
-
-        // Initialize leaves to empty slices
-        for (leaves) |*leaf| {
-            leaf.* = &[_]u8{};
+            for (leaf_secret_keys) |sk| {
+                if (sk.len > 0) {
+                    for (sk) |s| allocator.free(s);
+                    allocator.free(sk);
+                }
+            }
+            allocator.free(leaf_secret_keys);
         }
 
         // Determine optimal number of threads (use CPU count or default to 8)
@@ -206,7 +199,6 @@ pub const HashSignature = struct {
                 const pk = try self.wots.generatePublicKey(allocator, sk);
 
                 leaf_secret_keys[i] = sk;
-                leaf_public_keys[i] = pk;
                 leaves[i] = pk;
             }
         } else {
@@ -266,11 +258,23 @@ pub const HashSignature = struct {
         @memcpy(&prf_key, seed);
 
         // Cache the leaves for future signing operations (needed for auth path generation)
-        const cached = try allocator.alloc([]const u8, num_leaves);
+        // We MUST duplicate to ensure memory safety with Arena allocators
+        const cached = try allocator.alloc([]u8, num_leaves);
         for (leaves, 0..) |leaf, i| {
             cached[i] = try allocator.dupe(u8, leaf);
         }
         self.cached_leaves = cached;
+
+        // Now free the temporary leaves array
+        for (leaves) |leaf| allocator.free(leaf);
+        allocator.free(leaves);
+
+        // Free leaf secret keys (we don't need them after key generation)
+        for (leaf_secret_keys) |sk| {
+            for (sk) |s| allocator.free(s);
+            allocator.free(sk);
+        }
+        allocator.free(leaf_secret_keys);
 
         return KeyPair{
             .public_key = .{
@@ -290,7 +294,7 @@ pub const HashSignature = struct {
 
     /// Build full Merkle tree structure (all nodes, level by level)
     /// Returns array of all tree nodes from leaves to root
-    fn buildFullMerkleTree(self: *HashSignature, allocator: Allocator, leaves: []const []const u8) ![][]u8 {
+    fn buildFullMerkleTree(self: *HashSignature, allocator: Allocator, leaves: []const []u8) ![][]u8 {
         const num_leaves = leaves.len;
         const tree_height = self.params.tree_height;
 
@@ -446,7 +450,9 @@ pub const HashSignature = struct {
         }
 
         // Combine public key parts into the leaf
+        // CRITICAL: Zero the buffer to ensure deterministic results with Arena allocators
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
+        @memset(combined, 0);
         defer allocator.free(combined);
 
         for (public_parts, 0..) |part, i| {
@@ -477,15 +483,17 @@ pub const HashSignature = struct {
                 @memcpy(combined_nodes[sibling.len..], current_hash);
             }
 
-            // Hash to get parent node (use parent position as tweak to match tree build)
-            const parent_index = leaf_idx / 2;
-            const parent = try self.tree.hash.hash(allocator, combined_nodes, parent_index);
+            // Hash to get parent node
+            // IMPORTANT: Use index within level (not absolute index) to match tree building
+            // During tree building, tweak is `i` (index within level), so use same here
+            const parent_index_in_level = leaf_idx / 2;
+            const parent = try self.tree.hash.hash(allocator, combined_nodes, parent_index_in_level);
 
             allocator.free(current_hash);
             current_hash = parent;
 
-            // Move to parent index
-            leaf_idx = parent_index;
+            // Move to parent index within next level
+            leaf_idx = parent_index_in_level;
         }
 
         // Step 3: Compare computed root with provided public_key root

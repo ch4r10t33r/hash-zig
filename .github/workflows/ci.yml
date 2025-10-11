@@ -51,16 +51,48 @@ jobs:
       - name: Verify Zig installation
         run: zig version
       
-      - name: Run tests
+      - name: Run all tests (includes Rust compatibility tests)
         run: zig build test
+        env:
+          RUST_COMPAT_REQUIRED: "true"
       
       - name: Build library
         run: zig build
   
+  rust-compatibility:
+    name: Rust Compatibility (CRITICAL)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      
+      - name: Run Rust compatibility tests
+        id: rust_compat
+        run: |
+          echo "🔍 Running CRITICAL Rust compatibility tests..."
+          echo "⚠️  If these tests fail, the PR CANNOT be merged!"
+          echo ""
+          zig build test
+          echo ""
+          echo "✅ All Rust compatibility tests passed!"
+        continue-on-error: false
+      
+      - name: Verify signature works
+        run: |
+          echo "🔐 Verifying signature generation and verification..."
+          zig build example
+          echo "✅ Signature verification successful!"
+  
   build-examples:
     name: Build Examples
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, rust-compatibility]
     
     steps:
       - name: Checkout code

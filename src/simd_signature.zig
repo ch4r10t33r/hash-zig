@@ -365,7 +365,9 @@ pub const SimdHashSignature = struct {
         }
 
         // Combine public key parts into the leaf
+        // CRITICAL: Zero the buffer to ensure deterministic results with Arena allocators
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
+        @memset(combined, 0);
         defer allocator.free(combined);
 
         for (public_parts, 0..) |part, i| {
