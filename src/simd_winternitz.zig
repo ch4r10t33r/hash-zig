@@ -11,7 +11,9 @@ pub const simd_winternitz_ots = struct {
     const Poseidon2 = simd_poseidon.simd_poseidon2;
     const Hash = simd_hash;
 
-    const chain_length = 256; // Chain length (2^8 = 256)
+    // Note: chain_length is now computed from parameters, not hardcoded!
+    // Was: const chain_length = 256; (2^8) - TOO LONG!
+    // Now: Computed as 2^winternitz_w from parameters (typically 8 for w=3)
     const hash_output_len = 32; // 256 bits = 32 bytes
     const field_elements_per_hash = 8; // 32 bytes / 4 bytes per element
     const poseidon_width = 16; // Poseidon2 width (matches SIMD implementation)
@@ -98,10 +100,13 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate public key with SIMD-optimized chain generation
-    pub fn generatePublicKey(allocator: std.mem.Allocator, private_key: PrivateKey) !PublicKey {
+    pub fn generatePublicKey(allocator: std.mem.Allocator, signature_params: anytype, private_key: PrivateKey) !PublicKey {
         const num_chains = private_key.chains.len;
         var public_chains = try allocator.alloc(ChainState, num_chains);
         errdefer allocator.free(public_chains);
+
+        // Get chain length from parameters (not hardcoded!)
+        const chain_len = @as(u32, 1) << @intCast(signature_params.winternitz_w);
 
         // Initialize SIMD hash function
         var hash = Hash.init(allocator);
@@ -117,8 +122,8 @@ pub const simd_winternitz_ots = struct {
                 batch_states[j] = private_key.chains[i + j];
             }
 
-            // Generate chains with SIMD
-            try generateChainsBatch(allocator, &hash, &batch_states, chain_length);
+            // Generate chains with SIMD using correct chain length
+            try generateChainsBatch(allocator, &hash, &batch_states, chain_len);
 
             // Store results
             for (0..4) |j| {
@@ -131,7 +136,7 @@ pub const simd_winternitz_ots = struct {
         // Process remaining chains individually
         while (i < num_chains) {
             var state = private_key.chains[i];
-            try generateChain(allocator, &hash, &state, chain_length);
+            try generateChain(allocator, &hash, &state, chain_len);
             public_chains[i] = state;
             i += 1;
         }
@@ -204,7 +209,8 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Generate signature with SIMD operations
-    pub fn sign(allocator: std.mem.Allocator, message: []const u8, private_key: PrivateKey) !Signature {
+    pub fn sign(allocator: std.mem.Allocator, signature_params: anytype, message: []const u8, private_key: PrivateKey) !Signature {
+        const chain_length = @as(u32, 1) << @intCast(signature_params.winternitz_w);
         const num_chains = private_key.chains.len;
         var signature_chains = try allocator.alloc(ChainState, num_chains);
         errdefer allocator.free(signature_chains);
@@ -310,7 +316,8 @@ pub const simd_winternitz_ots = struct {
     }
 
     // Verify signature with SIMD operations
-    pub fn verify(message: []const u8, signature: Signature, public_key: PublicKey) !bool {
+    pub fn verify(signature_params: anytype, message: []const u8, signature: Signature, public_key: PublicKey) !bool {
+        const chain_length = @as(u32, 1) << @intCast(signature_params.winternitz_w);
         const num_chains = signature.chains.len;
         if (num_chains != public_key.chains.len) return false;
 

@@ -10,14 +10,12 @@ on:
 
 jobs:
   performance-benchmark:
-    name: Performance Benchmark
+    name: Performance Benchmark (lifetime_2_10)
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout current PR
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
@@ -27,178 +25,70 @@ jobs:
       - name: Verify Zig installation
         run: zig version
       
-      - name: Setup Zig cache directory
+      - name: Build with optimizations
         run: |
-          mkdir -p ~/.cache/zig
-          chmod 755 ~/.cache/zig
-          echo "Zig cache directory created and permissions set"
-      
-      - name: Build current version
-        run: |
-          echo "Building current version..."
+          echo "Building with ReleaseFast optimizations..."
           zig build -Doptimize=ReleaseFast
-          echo "Current version built successfully"
-          ls -la zig-out/bin/ || echo "No binary output directory found"
+          echo "Build completed successfully"
       
-      - name: Benchmark current version (Standard Rust-compatible implementation)
-        id: current_benchmark
+      - name: Run benchmark (lifetime_2_10 only)
+        id: benchmark
         run: |
-          echo "Running performance benchmark for current version (Standard implementation)..."
-          echo "Using hash-zig-benchmark (Rust-compatible HashSignature)"
-          echo "Lifetime: 2^10 (1,024 signatures)"
-          if zig build benchmark -Doptimize=ReleaseFast; then
-            ./zig-out/bin/hash-zig-benchmark > current_results.txt 2>&1
+          echo "🚀 Running performance benchmark..."
+          echo "Configuration: lifetime_2_10 (1,024 signatures)"
+          echo "Operations: KeyGen, Sign, Verify"
+          echo ""
+          
+          # Run benchmark and capture output
+          if zig build benchmark -Doptimize=ReleaseFast 2>&1 | tee benchmark_results.txt; then
+            echo "Using zig build benchmark target"
           elif [ -f scripts/benchmark.zig ]; then
-            echo "No benchmark build step; compiling scripts/benchmark.zig directly"
-            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark_current
-            ./benchmark_current > current_results.txt 2>&1
+            echo "Using scripts/benchmark.zig"
+            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark
+            ./benchmark 2>&1 | tee benchmark_results.txt
           else
-            echo "No benchmark target or script found; skipping current metrics"
-            : > current_results.txt
-          fi
-          echo "Standard implementation benchmark completed"
-          
-          # Extract key metrics for 2^10 only
-          KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" current_results.txt | cut -d: -f3)
-          SIGN_2_10=$(grep "BENCHMARK_RESULT: 2^10:sign:" current_results.txt | cut -d: -f3)
-          VERIFY_2_10=$(grep "BENCHMARK_RESULT: 2^10:verify:" current_results.txt | cut -d: -f3)
-          THROUGHPUT_2_10=$(grep "BENCHMARK_RESULT: 2^10:throughput:" current_results.txt | cut -d: -f3)
-          
-          echo "keygen_2_10=$KEYGEN_2_10" >> $GITHUB_OUTPUT
-          echo "sign_2_10=$SIGN_2_10" >> $GITHUB_OUTPUT
-          echo "verify_2_10=$VERIFY_2_10" >> $GITHUB_OUTPUT
-          echo "throughput_2_10=$THROUGHPUT_2_10" >> $GITHUB_OUTPUT
-          
-          # Display results
-          cat current_results.txt
-      
-      - name: Get base commit
-        id: base_commit
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          else
-            BASE_SHA=$(git rev-parse HEAD~1)
-          fi
-          echo "base_sha=$BASE_SHA" >> $GITHUB_OUTPUT
-          echo "Base commit: $BASE_SHA"
-      
-      - name: Checkout base version
-        run: |
-          git checkout ${{ steps.base_commit.outputs.base_sha }}
-          echo "Checked out base version"
-      
-      - name: Setup Zig cache directory (base)
-        run: |
-          mkdir -p ~/.cache/zig
-          chmod 755 ~/.cache/zig
-          echo "Zig cache directory created and permissions set for base version"
-      
-      - name: Build base version
-        run: |
-          echo "Building base version..."
-          zig build -Doptimize=ReleaseFast
-          echo "Base version built successfully"
-          ls -la zig-out/bin/ || echo "No binary output directory found"
-      
-      - name: Benchmark base version
-        id: base_benchmark
-        run: |
-          echo "Running performance benchmark for base version (Standard implementation)..."
-          echo "Lifetime: 2^10 (1,024 signatures)"
-          if zig build benchmark -Doptimize=ReleaseFast; then
-            ./zig-out/bin/hash-zig-benchmark > base_results.txt 2>&1
-          elif [ -f scripts/benchmark.zig ]; then
-            echo "No benchmark build step on base; compiling scripts/benchmark.zig directly"
-            zig build-exe scripts/benchmark.zig -OReleaseFast --dep hash-zig -Mhash-zig=src/root.zig --name benchmark_base
-            ./benchmark_base > base_results.txt 2>&1
-          else
-            echo "No benchmark target or script found on base; skipping base metrics"
-            : > base_results.txt
+            echo "❌ No benchmark target found"
+            exit 1
           fi
           
-          # Extract key metrics for 2^10 only
-          KEYGEN_2_10=$(grep "BENCHMARK_RESULT: 2^10:keygen:" base_results.txt | cut -d: -f3)
-          SIGN_2_10=$(grep "BENCHMARK_RESULT: 2^10:sign:" base_results.txt | cut -d: -f3)
-          VERIFY_2_10=$(grep "BENCHMARK_RESULT: 2^10:verify:" base_results.txt | cut -d: -f3)
-          THROUGHPUT_2_10=$(grep "BENCHMARK_RESULT: 2^10:throughput:" base_results.txt | cut -d: -f3)
+          echo ""
+          echo "✅ Benchmark completed"
           
-          echo "keygen_2_10=$KEYGEN_2_10" >> $GITHUB_OUTPUT
-          echo "sign_2_10=$SIGN_2_10" >> $GITHUB_OUTPUT
-          echo "verify_2_10=$VERIFY_2_10" >> $GITHUB_OUTPUT
-          echo "throughput_2_10=$THROUGHPUT_2_10" >> $GITHUB_OUTPUT
+          # Extract metrics
+          KEYGEN=$(grep "BENCHMARK_RESULT:.*keygen:" benchmark_results.txt | tail -1 | cut -d: -f3 || echo "N/A")
+          SIGN=$(grep "BENCHMARK_RESULT:.*sign:" benchmark_results.txt | tail -1 | cut -d: -f3 || echo "N/A")
+          VERIFY=$(grep "BENCHMARK_RESULT:.*verify:" benchmark_results.txt | tail -1 | cut -d: -f3 || echo "N/A")
           
-          # Display results
-          cat base_results.txt
+          echo "keygen=$KEYGEN" >> $GITHUB_OUTPUT
+          echo "sign=$SIGN" >> $GITHUB_OUTPUT
+          echo "verify=$VERIFY" >> $GITHUB_OUTPUT
       
-      - name: Calculate performance improvements
-        id: performance_analysis
+      - name: Display results
         run: |
-          echo "Calculating performance improvements..."
-          
-          is_num() {
-            echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)?$'
-          }
-          
-          pct_improve() {
-            # args: base current
-            awk 'BEGIN { if ($1 == "" || $2 == "" || $1+0 == 0) { print "N/A"; exit } printf("%.1f", (($1 - $2) / $1) * 100) }' "$1" "$2"
-          }
-          
           echo "## 🚀 Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Key Generation Performance (2^10 lifetime = 1,024 signatures)" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:** lifetime_2_10 (1,024 signatures)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Operation | Base Version | Current Version | Improvement | Throughput (sig/s) |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------------|-----------------|-------------|-------------------|" >> $GITHUB_STEP_SUMMARY
-          
-          base_k10="${{ steps.base_benchmark.outputs.keygen_2_10 }}"
-          curr_k10="${{ steps.current_benchmark.outputs.keygen_2_10 }}"
-          thr_k10="${{ steps.current_benchmark.outputs.throughput_2_10 }}"
-          if is_num "$base_k10" && is_num "$curr_k10" && [ "$(echo "$base_k10 > 0" | bc)" -eq 1 ]; then
-            imp_k10=$(pct_improve "$base_k10" "$curr_k10")
-          else
-            imp_k10="N/A"
-          fi
-          echo "| KeyGen | ${base_k10:-N/A}s | ${curr_k10:-N/A}s | ${imp_k10}% | ${thr_k10:-N/A} |" >> $GITHUB_STEP_SUMMARY
-          
-          base_s10="${{ steps.base_benchmark.outputs.sign_2_10 }}"; curr_s10="${{ steps.current_benchmark.outputs.sign_2_10 }}"
-          if is_num "$base_s10" && is_num "$curr_s10" && [ "$(echo "$base_s10 > 0" | bc)" -eq 1 ]; then
-            imp_s10=$(pct_improve "$base_s10" "$curr_s10")
-          else
-            imp_s10="N/A"
-          fi
-          echo "| Sign | ${base_s10:-N/A}s | ${curr_s10:-N/A}s | ${imp_s10}% | - |" >> $GITHUB_STEP_SUMMARY
-
-          base_v10="${{ steps.base_benchmark.outputs.verify_2_10 }}"; curr_v10="${{ steps.current_benchmark.outputs.verify_2_10 }}"
-          if is_num "$base_v10" && is_num "$curr_v10" && [ "$(echo "$base_v10 > 0" | bc)" -eq 1 ]; then
-            imp_v10=$(pct_improve "$base_v10" "$curr_v10")
-          else
-            imp_v10="N/A"
-          fi
-          echo "| Verify | ${base_v10:-N/A}s | ${curr_v10:-N/A}s | ${imp_v10}% | - |" >> $GITHUB_STEP_SUMMARY
-          
+          echo "| Operation | Time (seconds) |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|----------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Key Generation | ${{ steps.benchmark.outputs.keygen }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Sign | ${{ steps.benchmark.outputs.sign }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Verify | ${{ steps.benchmark.outputs.verify }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This benchmark compares the current PR against the base version using:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Standard Rust-compatible implementation** (not SIMD)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Lifetime: 2^10 = 1,024 signatures**" >> $GITHUB_STEP_SUMMARY
-          echo "- Positive percentages indicate performance improvements (faster execution)" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** Times measured with ReleaseFast optimization on ubuntu-latest" >> $GITHUB_STEP_SUMMARY
           
           # Console output
-          echo "Performance Analysis Complete!"
           echo "=============================="
-          echo "KeyGen: base=${base_k10:-N/A}s current=${curr_k10:-N/A}s improvement=${imp_k10}%"
-          echo "Sign:   base=${base_s10:-N/A}s current=${curr_s10:-N/A}s improvement=${imp_s10}%"
-          echo "Verify: base=${base_v10:-N/A}s current=${curr_v10:-N/A}s improvement=${imp_v10}%"
+          echo "Performance Results:"
+          echo "=============================="
+          echo "KeyGen:  ${{ steps.benchmark.outputs.keygen }}s"
+          echo "Sign:    ${{ steps.benchmark.outputs.sign }}s"
+          echo "Verify:  ${{ steps.benchmark.outputs.verify }}s"
       
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-results
-          path: |
-            current_results.txt
-            base_results.txt
+          path: benchmark_results.txt
           retention-days: 30
