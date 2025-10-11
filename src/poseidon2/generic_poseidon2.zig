@@ -55,14 +55,17 @@ pub fn Poseidon2(
                     state[i] = result;
                 }
 
-                // Apply MDS matrix (simplified - in practice this would be a proper MDS matrix)
+                // Apply MDS matrix using diagonal diffusion
+                // For circulant-like matrices, new_state[i] = sum_j state[j] * diagonal[(j-i) mod width]
                 var new_state: State = undefined;
                 for (0..width) |i| {
                     var sum: Field.MontFieldElem = undefined;
                     Field.toMontgomery(&sum, 0); // Initialize to zero
                     for (0..width) |j| {
+                        // Use circulant indexing: diagonal[(width + j - i) % width]
+                        const diag_idx = (width + j -% i) % width;
                         var diag_mont: Field.MontFieldElem = undefined;
-                        Field.toMontgomery(&diag_mont, diagonal[j]);
+                        Field.toMontgomery(&diag_mont, diagonal[diag_idx]);
                         var tmp: Field.MontFieldElem = undefined;
                         Field.mul(&tmp, state[j], diag_mont);
                         Field.add(&sum, sum, tmp);
@@ -98,14 +101,17 @@ pub fn Poseidon2(
                     state[i] = result;
                 }
 
-                // Apply MDS matrix
+                // Apply MDS matrix using diagonal diffusion
+                // For circulant-like matrices, new_state[i] = sum_j state[j] * diagonal[(j-i) mod width]
                 var new_state: State = undefined;
                 for (0..width) |i| {
                     var sum: Field.MontFieldElem = undefined;
                     Field.toMontgomery(&sum, 0); // Initialize to zero
                     for (0..width) |j| {
+                        // Use circulant indexing: diagonal[(width + j - i) % width]
+                        const diag_idx = (width + j -% i) % width;
                         var diag_mont: Field.MontFieldElem = undefined;
-                        Field.toMontgomery(&diag_mont, diagonal[j]);
+                        Field.toMontgomery(&diag_mont, diagonal[diag_idx]);
                         var tmp: Field.MontFieldElem = undefined;
                         Field.mul(&tmp, state[j], diag_mont);
                         Field.add(&sum, sum, tmp);

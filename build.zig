@@ -30,8 +30,40 @@ pub fn build(b: *std.Build) void {
         .root_module = hash_zig_module,
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-    const test_step = b.step("test", "Run unit tests");
+    
+    // Integration tests
+    const integration_tests = b.addTest(.{
+        .root_source_file = b.path("test/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    integration_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_integration_tests = b.addRunArtifact(integration_tests);
+    
+    // Poseidon2 tests
+    const poseidon2_tests = b.addTest(.{
+        .root_source_file = b.path("test/poseidon2_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    poseidon2_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_poseidon2_tests = b.addRunArtifact(poseidon2_tests);
+    
+    // Rust compatibility tests (CRITICAL - must pass)
+    const rust_compat_tests = b.addTest(.{
+        .root_source_file = b.path("test/rust_compatibility_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rust_compat_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_rust_compat_tests = b.addRunArtifact(rust_compat_tests);
+    
+    // Test step runs all tests
+    const test_step = b.step("test", "Run all tests (MUST pass before merge)");
     test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_integration_tests.step);
+    test_step.dependOn(&run_poseidon2_tests.step);
+    test_step.dependOn(&run_rust_compat_tests.step);
 
     // Example executable module
     const example_module = b.createModule(.{
