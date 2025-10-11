@@ -48,8 +48,8 @@ jobs:
       - name: Verify Zig installation
         run: zig version
       
-      - name: Run all tests (includes Rust compatibility tests)
-        run: zig build test
+      - name: Run Rust compatibility tests (CRITICAL)
+        run: zig build test-rust-compat
         env:
           RUST_COMPAT_REQUIRED: "true"
       

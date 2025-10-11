@@ -64,6 +64,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_integration_tests.step);
     test_step.dependOn(&run_poseidon2_tests.step);
     test_step.dependOn(&run_rust_compat_tests.step);
+    
+    // Rust compatibility test step (for CI)
+    const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests (for CI)");
+    rust_test_step.dependOn(&run_rust_compat_tests.step);
 
     // Example executable module
     const example_module = b.createModule(.{
