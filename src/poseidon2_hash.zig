@@ -145,7 +145,7 @@ pub const Poseidon2 = struct {
             // Apply permutations to all states in batch
             // Optimization: Process permutations together to improve instruction-level parallelism
             // The CPU can pipeline and reorder instructions across multiple permutations
-            
+
             // Process all permutations in the batch
             // Note: Unrolling didn't provide significant benefit in testing
             // Compiler does a good job optimizing the loop

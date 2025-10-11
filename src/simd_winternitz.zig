@@ -315,7 +315,7 @@ pub const simd_winternitz_ots = struct {
         }
     }
 
-    // Verify signature with SIMD operations  
+    // Verify signature with SIMD operations
     pub fn verify(signature_params: anytype, message: []const u8, signature: Signature, public_key: PublicKey) !bool {
         const chain_length = @as(u32, 1) << @intCast(signature_params.winternitz_w);
         const num_chains = signature.chains.len;

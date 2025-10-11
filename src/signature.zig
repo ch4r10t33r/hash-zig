@@ -130,10 +130,10 @@ pub const HashSignature = struct {
             const maybe_job = ctx.queue.pop();
             if (maybe_job == null) break;
             const job = maybe_job.?;
-            
+
             for (job.start..job.end) |i| {
                 const epoch = @as(u32, @intCast(i)); // Use epoch directly
-                
+
                 // Generate keys using arena allocator for intermediate allocations
                 const sk_temp = ctx.hash_sig.wots.generatePrivateKey(arena_allocator, ctx.seed, epoch) catch {
                     ctx.error_flag.store(true, .monotonic);
@@ -170,7 +170,7 @@ pub const HashSignature = struct {
                 ctx.leaf_secret_keys[i] = sk;
                 ctx.leaves[i] = pk;
             }
-            
+
             // Reset arena after each job to keep memory usage bounded
             _ = arena.reset(.retain_capacity);
         }
