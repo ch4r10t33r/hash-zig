@@ -35,30 +35,69 @@ jobs:
   test:
     name: Test & Build
     runs-on: ubuntu-latest
+    outputs:
+      has_zig_changes: ${{ steps.check_changes.outputs.has_zig_changes }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check for Zig file changes
+        id: check_changes
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # Check if any .zig files changed in this PR
+            git fetch origin ${{ github.base_ref }}
+            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+            echo "Changed files:"
+            echo "$CHANGED_FILES"
+            
+            if echo "$CHANGED_FILES" | grep -qE '\.(zig|zon)$'; then
+              echo "has_zig_changes=true" >> $GITHUB_OUTPUT
+              echo "✅ Zig files changed - will run tests"
+            else
+              echo "has_zig_changes=false" >> $GITHUB_OUTPUT
+              echo "⏭️  No Zig files changed - skipping tests"
+            fi
+          else
+            # For push events, always run tests
+            echo "has_zig_changes=true" >> $GITHUB_OUTPUT
+            echo "✅ Push event - will run tests"
+          fi
       
       - name: Setup Zig
+        if: steps.check_changes.outputs.has_zig_changes == 'true'
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.1
       
       - name: Verify Zig installation
+        if: steps.check_changes.outputs.has_zig_changes == 'true'
         run: zig version
       
       - name: Run Rust compatibility tests (CRITICAL)
+        if: steps.check_changes.outputs.has_zig_changes == 'true'
         run: zig build test-rust-compat
         env:
           RUST_COMPAT_REQUIRED: "true"
       
       - name: Build library
+        if: steps.check_changes.outputs.has_zig_changes == 'true'
         run: zig build
+      
+      - name: Skip tests (no Zig changes)
+        if: steps.check_changes.outputs.has_zig_changes == 'false'
+        run: |
+          echo "⏭️  Skipping tests - no Zig files changed"
+          echo "Only documentation, workflows, or other non-code files were modified"
   
   cross-platform-build:
     name: Cross-Platform Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: test
+    if: needs.test.outputs.has_zig_changes == 'true'
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
@@ -79,6 +118,7 @@ jobs:
     name: Build Examples
     runs-on: ubuntu-latest
     needs: [lint, test]
+    if: needs.test.outputs.has_zig_changes == 'true'
     
     steps:
       - name: Checkout code
