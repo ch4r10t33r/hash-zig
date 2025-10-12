@@ -63,9 +63,11 @@ jobs:
             LEVEL=$(echo "$COMMITS" | grep -Eo "release: (major|minor|patch)" | tail -n1 | awk '{print $2}')
           fi
 
-          MAJOR=$(echo "$PREV_TAG" | cut -d. -f1)
-          MINOR=$(echo "$PREV_TAG" | cut -d. -f2)
-          PATCH=$(echo "$PREV_TAG" | cut -d. -f3)
+          # Strip 'v' prefix if present before parsing version numbers
+          VERSION_NO_V=$(echo "$PREV_TAG" | sed 's/^v//')
+          MAJOR=$(echo "$VERSION_NO_V" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NO_V" | cut -d. -f2)
+          PATCH=$(echo "$VERSION_NO_V" | cut -d. -f3)
 
           case "$LEVEL" in
             major)
