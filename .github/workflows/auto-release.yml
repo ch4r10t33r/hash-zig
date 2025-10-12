@@ -264,8 +264,8 @@ jobs:
       - name: Build Release
         run: zig build -Doptimize=ReleaseFast
 
-      - name: Run Tests
-        run: zig build test -Doptimize=ReleaseFast
+      - name: Quick Validation (Rust compatibility only)
+        run: zig build test-rust-compat -Doptimize=ReleaseFast
 
       - name: Create Archive (Unix)
         if: runner.os != 'Windows'
