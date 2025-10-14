@@ -25,8 +25,19 @@ pub const TweakableHash = struct {
     params: Parameters,
     hash_impl: HashImpl,
     allocator: Allocator,
+    parameter: [5]FieldElement, // Random parameter (Rust compatibility)
 
     pub fn init(allocator: Allocator, parameters: Parameters) !TweakableHash {
+        // Default: use zero parameter for backward compatibility
+        const zero_param = [_]FieldElement{FieldElement.zero()} ** 5;
+        return initWithParameter(allocator, parameters, zero_param);
+    }
+
+    pub fn initWithParameter(
+        allocator: Allocator,
+        parameters: Parameters,
+        parameter: [5]FieldElement,
+    ) !TweakableHash {
         const hash_impl = switch (parameters.hash_function) {
             .poseidon2 => blk: {
                 const poseidon_instance = try Poseidon2.init(allocator);
@@ -42,6 +53,7 @@ pub const TweakableHash = struct {
             .params = parameters,
             .hash_impl = hash_impl,
             .allocator = allocator,
+            .parameter = parameter,
         };
     }
 
@@ -136,22 +148,40 @@ pub const TweakableHash = struct {
         // Convert tweak to field elements (TWEAK_LEN_FE = 2 in Rust)
         const tweak_fes = tweak.toFieldElements(2);
 
-        // Combine tweak and input into state
-        // State layout: [tweak_fe[0], tweak_fe[1], input[0], input[1], ..., padding...]
-        const state_size = 2 + input.len; // tweak_len + input_len
+        // Combine parameter + tweak + input into state (matching Rust)
+        // State layout: [param[0..5], tweak[0..2], input[0..N]]
+        const state_size = 5 + 2 + input.len; // param_len + tweak_len + input_len
         var state = try allocator.alloc(FieldElement, state_size);
         defer allocator.free(state);
 
-        // Copy tweak field elements
-        state[0] = tweak_fes[0];
-        state[1] = tweak_fes[1];
+        // Copy parameter (5 elements)
+        @memcpy(state[0..5], &self.parameter);
+
+        // Copy tweak field elements (2 elements)
+        state[5] = tweak_fes[0];
+        state[6] = tweak_fes[1];
 
         // Copy input field elements
-        @memcpy(state[2..][0..input.len], input);
+        @memcpy(state[7..][0..input.len], input);
 
-        // Hash using Poseidon2's compress function
+        // Select hash mode based on input length (matching Rust)
         return switch (self.hash_impl) {
-            .poseidon2 => |*p| try p.compress(allocator, state, output_len),
+            .poseidon2 => |*p| {
+                // Rust uses 3 modes:
+                // 1. Single element: Poseidon2-16 compress
+                // 2. Two elements: Poseidon2-24 compress
+                // 3. Many elements (>2): Poseidon2-24 sponge
+                if (input.len == 1) {
+                    // Mode 1: Chain hashing (single field element array)
+                    return try p.compress(allocator, state, output_len);
+                } else if (input.len == 2) {
+                    // Mode 2: Tree node merging (two field element arrays)
+                    return try p.compress24(allocator, state, output_len);
+                } else {
+                    // Mode 3: Leaf generation (many field element arrays)
+                    return try p.sponge24(allocator, state, output_len);
+                }
+            },
             .sha3 => error.FieldNativeNotSupported,
         };
     }

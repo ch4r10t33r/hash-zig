@@ -24,8 +24,8 @@ pub fn main() !void {
     std.debug.print("Zig hash-zig ↔ Rust hash-sig Cross-Implementation Compatibility Test\n", .{});
     std.debug.print("=" ** 80 ++ "\n\n", .{});
 
-    // Use the same parameters as Rust: lifetime 2^10
-    const params = hash_zig.Parameters.init(.lifetime_2_10);
+    // Use the same parameters as Rust: lifetime 2^18 (262,144 signatures)
+    const params = hash_zig.Parameters.init(.lifetime_2_18);
 
     std.debug.print("Configuration:\n", .{});
     std.debug.print("  Implementation: Zig hash-zig (field-native)\n", .{});
@@ -38,6 +38,7 @@ pub fn main() !void {
         params.num_checksum_chains,
     });
     std.debug.print("  Chain Length: {d}\n", .{@as(u32, 1) << @intCast(params.winternitz_w)});
+    std.debug.print("  Build mode: ReleaseFast (optimized for speed)\n", .{});
     std.debug.print("\n", .{});
 
     // Use the same seed as Rust default: 0x42 repeated 32 times
@@ -48,7 +49,11 @@ pub fn main() !void {
     for (seed) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
-    std.debug.print("\n\n", .{});
+    std.debug.print("\n", .{});
+
+    const num_leaves = @as(u64, 1) << @intCast(params.tree_height);
+    std.debug.print("Total leaves to generate: {d}\n", .{num_leaves});
+    std.debug.print("⏰ Expected time: ~1-2 hours (building full 2^{d} tree)\n\n", .{params.tree_height});
 
     // Initialize signature scheme
     var hash_sig = try hash_zig.HashSignatureNative.init(allocator, params);
@@ -60,12 +65,14 @@ pub fn main() !void {
     std.debug.print("Step 1: Generating keypair...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
 
+    const num_active_epochs = @as(u64, 1) << @intCast(params.tree_height);
+
     const key_gen_start = std.time.milliTimestamp();
     var keypair = try hash_sig.generateKeyPair(
         allocator,
         &seed,
         0, // activation_epoch
-        1024, // num_active_epochs (full lifetime 2^10)
+        num_active_epochs, // num_active_epochs (full lifetime 2^18 = 262,144)
     );
     defer keypair.deinit(allocator);
     const key_gen_end = std.time.milliTimestamp();

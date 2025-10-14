@@ -10,12 +10,18 @@ const poseidon = @import("poseidon");
 const field_types = @import("field.zig");
 const FieldElement = field_types.FieldElement;
 
-const width = 16;
+const width = 16; // Default width for byte-based operations
+const width16 = 16;
+const width24 = 24;
 const output_len = 8; // 8 field elements = 32 bytes (8 * 4 bytes)
 
-// Helper aliases for easier access
-const field_mod = poseidon.Poseidon2KoalaBear.Field;
-const poseidon2_core_type = poseidon.Poseidon2KoalaBear;
+// Helper aliases for easier access (width-16 for legacy byte-based operations)
+const field_mod = poseidon.koalabear16.Poseidon2KoalaBear.Field;
+const poseidon2_core_type = poseidon.koalabear16.Poseidon2KoalaBear;
+
+// Width-24 for Rust compatibility
+const field_mod24 = poseidon.koalabear24.Poseidon2KoalaBear.Field;
+const poseidon2_core_type24 = poseidon.koalabear24.Poseidon2KoalaBear;
 
 pub const Poseidon2 = struct {
     allocator: Allocator,
@@ -359,6 +365,98 @@ pub const Poseidon2 = struct {
         for (0..width) |i| {
             const val = field_mod.toNormal(state_mont[i]);
             result[i] = FieldElement.fromU32(val);
+        }
+
+        return result;
+    }
+
+    /// Compress using Poseidon2-24 (for merging two hashes)
+    /// This matches Rust's mode 2: [left_hash, right_hash]
+    pub fn compress24(
+        self: *Poseidon2,
+        allocator: Allocator,
+        input: []const FieldElement,
+        comptime output_len_fe: usize,
+    ) ![]FieldElement {
+        _ = self;
+
+        if (input.len < output_len_fe) return error.InputTooShort;
+        if (output_len_fe > width24) return error.OutputTooLarge;
+
+        // Save original input
+        var original: [output_len_fe]u32 = undefined;
+        for (0..output_len_fe) |i| {
+            original[i] = input[i].toU32();
+        }
+
+        // Pad to width-24
+        var state: [width24]u32 = std.mem.zeroes([width24]u32);
+        for (0..@min(input.len, width24)) |i| {
+            state[i] = input[i].toU32();
+        }
+
+        // Permute with width-24
+        var state_mont: [width24]field_mod24.MontFieldElem = undefined;
+        for (0..width24) |i| {
+            field_mod24.toMontgomery(&state_mont[i], state[i]);
+        }
+        poseidon2_core_type24.permutation(&state_mont);
+
+        // Feed-forward
+        var result = try allocator.alloc(FieldElement, output_len_fe);
+        for (0..output_len_fe) |i| {
+            const permuted = field_mod24.toNormal(state_mont[i]);
+            const sum = (@as(u64, permuted) + @as(u64, original[i])) % FieldElement.PRIME;
+            result[i] = FieldElement.fromU64(sum);
+        }
+
+        return result;
+    }
+
+    /// Sponge construction using Poseidon2-24 (for many elements)
+    /// This matches Rust's mode 3: hashing 22 chain ends into 1 leaf
+    pub fn sponge24(
+        self: *Poseidon2,
+        allocator: Allocator,
+        input: []const FieldElement,
+        comptime output_len_fe: usize,
+    ) ![]FieldElement {
+        _ = self;
+
+        const rate = 16; // Absorb rate for width-24
+        // const capacity = 8;  // Capacity (not directly used)
+
+        // Initialize state
+        var state: [width24]u32 = std.mem.zeroes([width24]u32);
+
+        // Absorbing phase
+        var offset: usize = 0;
+        while (offset < input.len) {
+            const chunk_len = @min(rate, input.len - offset);
+
+            // XOR/add input into rate portion
+            for (0..chunk_len) |i| {
+                const val = input[offset + i].toU32();
+                state[i] = (state[i] + val) % @as(u32, @intCast(FieldElement.PRIME));
+            }
+
+            // Permute
+            var state_mont: [width24]field_mod24.MontFieldElem = undefined;
+            for (0..width24) |i| {
+                field_mod24.toMontgomery(&state_mont[i], state[i]);
+            }
+            poseidon2_core_type24.permutation(&state_mont);
+            for (0..width24) |i| {
+                state[i] = field_mod24.toNormal(state_mont[i]);
+            }
+
+            offset += chunk_len;
+        }
+
+        // Squeezing phase - extract from rate
+        var result = try allocator.alloc(FieldElement, output_len_fe);
+        for (0..output_len_fe) |i| {
+            result[i] = FieldElement.fromU32(state[i]);
         }
 
         return result;

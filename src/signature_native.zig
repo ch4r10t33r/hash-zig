@@ -45,6 +45,7 @@ pub const HashSignatureNative = struct {
     pub const PublicKey = struct {
         root: FieldElement, // Merkle root (single field element)
         parameter: Parameters,
+        hash_parameter: [5]FieldElement, // Random parameter for hash operations
 
         pub fn serialize(self: *const PublicKey, allocator: Allocator) ![]u8 {
             // Serialize as: root (4 bytes for KoalaBear) + parameters (20 bytes)
@@ -85,6 +86,7 @@ pub const HashSignatureNative = struct {
         tree: [][]FieldElement, // Full tree: tree[level][index]
         tree_height: u32,
         parameter: Parameters,
+        hash_parameter: [5]FieldElement, // Random parameter for hash operations
         activation_epoch: u64,
         num_active_epochs: u64,
 
@@ -127,11 +129,21 @@ pub const HashSignatureNative = struct {
     ) !KeyPair {
         if (seed.len < 32) return error.SeedTooShort;
 
-        // CRITICAL: Generate PRF key from RNG FIRST (before generating leaves)
-        // In Rust: let prf_key = PRF::key_gen(rng); which calls rng.random()
-        // Use ChaCha12 to match Rust's StdRng (rand crate 0.9.x uses ChaCha12)
-        var prf_key: [32]u8 = undefined;
         var rng = chacha12_rng.init(seed[0..32].*);
+
+        // CRITICAL: Generate hash parameter FIRST (matching Rust line 104)
+        // This is a random 5-element array used in all hash operations
+        var parameter: [5]FieldElement = undefined;
+        for (&parameter) |*elem| {
+            var bytes: [4]u8 = undefined;
+            rng.fill(&bytes);
+            const val = std.mem.readInt(u32, &bytes, .little);
+            // Don't reduce - plonky3 stores raw u32 values (reduction happens in arithmetic)
+            elem.* = FieldElement{ .value = val };
+        }
+
+        // Then generate PRF key (matching Rust line 107)
+        var prf_key: [32]u8 = undefined;
         rng.fill(&prf_key);
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
@@ -141,6 +153,13 @@ pub const HashSignatureNative = struct {
             return error.InvalidEpochRange;
         }
 
+        // Create parameter-ized hash instances for this key generation
+        var param_wots = try WinternitzOTSNative.initWithParameter(allocator, self.params, parameter);
+        defer param_wots.deinit();
+
+        var param_tree = try MerkleTreeNative.initWithParameter(allocator, self.params, parameter);
+        defer param_tree.deinit();
+
         // Generate all OTS public keys (leaves)
         var leaves = try allocator.alloc(FieldElement, num_leaves);
         defer allocator.free(leaves);
@@ -149,24 +168,38 @@ pub const HashSignatureNative = struct {
             const epoch = @as(u32, @intCast(i));
 
             // Generate private key (field elements)
-            const sk = try self.wots.generatePrivateKey(allocator, &prf_key, epoch);
+            const sk = try param_wots.generatePrivateKey(allocator, &prf_key, epoch);
             defer {
                 for (sk) |k| allocator.free(k);
                 allocator.free(sk);
             }
 
             // Generate public key (concatenated field elements)
-            const pk = try self.wots.generatePublicKey(allocator, sk, epoch);
+            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
             defer allocator.free(pk);
 
-            // Hash public key to single field element for tree leaf
-            // For simplicity, use the first element as the leaf
-            // In production, this should hash all elements together
-            leaves[i] = pk[0];
+            // Hash full OTS public key to produce tree leaf
+            // This matches Rust's tree leaf generation
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0, // Leaf level
+                    .pos_in_level = @intCast(i),
+                },
+            };
+
+            const leaf_hash = try param_wots.hash.hashFieldElements(
+                allocator,
+                pk,
+                leaf_tweak,
+                1, // Single field element output for tree node
+            );
+            defer allocator.free(leaf_hash);
+
+            leaves[i] = leaf_hash[0];
         }
 
         // Build full Merkle tree
-        const tree_levels = try self.tree.buildFullTree(allocator, leaves);
+        const tree_levels = try param_tree.buildFullTree(allocator, leaves);
 
         const root = tree_levels[tree_levels.len - 1][0];
 
@@ -174,12 +207,14 @@ pub const HashSignatureNative = struct {
             .public_key = PublicKey{
                 .root = root,
                 .parameter = self.params,
+                .hash_parameter = parameter,
             },
             .secret_key = SecretKey{
                 .prf_key = prf_key,
                 .tree = tree_levels,
                 .tree_height = self.params.tree_height,
                 .parameter = self.params,
+                .hash_parameter = parameter,
                 .activation_epoch = activation_epoch,
                 .num_active_epochs = num_active_epochs,
             },
@@ -203,15 +238,23 @@ pub const HashSignatureNative = struct {
 
         const epoch_u32 = @as(u32, @intCast(epoch));
 
+        // Create parameter-ized wots for signing (using secret key's parameter)
+        var param_wots = try WinternitzOTSNative.initWithParameter(
+            allocator,
+            self.params,
+            secret_key.hash_parameter,
+        );
+        defer param_wots.deinit();
+
         // Generate OTS private key for this epoch
-        const ots_sk = try self.wots.generatePrivateKey(allocator, &secret_key.prf_key, epoch_u32);
+        const ots_sk = try param_wots.generatePrivateKey(allocator, &secret_key.prf_key, epoch_u32);
         defer {
             for (ots_sk) |k| allocator.free(k);
             allocator.free(ots_sk);
         }
 
         // Sign message with OTS
-        const ots_signature = try self.wots.sign(allocator, ots_sk, message, epoch_u32);
+        const ots_signature = try param_wots.sign(allocator, ots_sk, message, epoch_u32);
 
         // Get authentication path from tree
         const auth_path = try self.tree.getAuthPath(
@@ -238,20 +281,51 @@ pub const HashSignatureNative = struct {
     ) !bool {
         const epoch_u32 = @as(u32, @intCast(signature.epoch));
 
-        // Recover OTS public key from signature
-        const ots_pk = try self.recoverOTSPublicKey(
+        // Create parameter-ized hash instances for verification
+        var param_wots = try WinternitzOTSNative.initWithParameter(
             allocator,
+            self.params,
+            public_key.hash_parameter,
+        );
+        defer param_wots.deinit();
+
+        var param_tree = try MerkleTreeNative.initWithParameter(
+            allocator,
+            self.params,
+            public_key.hash_parameter,
+        );
+        defer param_tree.deinit();
+
+        // Recover OTS public key from signature
+        const ots_pk = try self.recoverOTSPublicKeyWithParam(
+            allocator,
+            &param_wots,
             message,
             signature.hashes,
             epoch_u32,
         );
         defer allocator.free(ots_pk);
 
-        // Convert to tree leaf (use first element for simplicity)
-        const leaf = ots_pk[0];
+        // Hash OTS public key to produce tree leaf (same as in key generation)
+        const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+            .tree_tweak = .{
+                .level = 0, // Leaf level
+                .pos_in_level = @intCast(signature.epoch),
+            },
+        };
+
+        const leaf_hash = try param_wots.hash.hashFieldElements(
+            allocator,
+            ots_pk,
+            leaf_tweak,
+            1, // Single field element output for tree node
+        );
+        defer allocator.free(leaf_hash);
+
+        const leaf = leaf_hash[0];
 
         // Verify Merkle path
-        return self.tree.verifyAuthPath(
+        return param_tree.verifyAuthPath(
             allocator,
             leaf,
             @intCast(signature.epoch),
@@ -260,22 +334,24 @@ pub const HashSignatureNative = struct {
         );
     }
 
-    /// Helper: Recover OTS public key from signature
-    fn recoverOTSPublicKey(
+    /// Helper: Recover OTS public key from signature (with parameter)
+    fn recoverOTSPublicKeyWithParam(
         self: *HashSignatureNative,
         allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
         message: []const u8,
         signature_hashes: []const []FieldElement,
         epoch: u32,
     ) ![]FieldElement {
+        _ = self; // Now using param_wots instead of self.wots
         // Encode message
-        var encoder = @import("encoding.zig").IncomparableEncoding.init(self.params);
+        var encoder = @import("encoding.zig").IncomparableEncoding.init(param_wots.params);
         const encoded = try encoder.encode(allocator, message);
         defer allocator.free(encoded);
 
         if (signature_hashes.len != encoded.len) return error.SignatureLengthMismatch;
 
-        const chain_len = self.wots.getChainLength();
+        const chain_len = param_wots.getChainLength();
         var recovered_parts = try allocator.alloc([]FieldElement, signature_hashes.len);
         defer {
             for (recovered_parts) |part| allocator.free(part);
@@ -295,7 +371,7 @@ pub const HashSignatureNative = struct {
                     .pos_in_chain = @intCast(pos_in_chain),
                 } };
 
-                const next = try self.wots.hash.hashFieldElements(
+                const next = try param_wots.hash.hashFieldElements(
                     allocator,
                     current,
                     tweak,

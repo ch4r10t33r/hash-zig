@@ -33,6 +33,17 @@ pub const WinternitzOTSNative = struct {
         };
     }
 
+    pub fn initWithParameter(
+        allocator: Allocator,
+        parameters: Parameters,
+        parameter: [5]FieldElement,
+    ) !WinternitzOTSNative {
+        return .{
+            .params = parameters,
+            .hash = try TweakableHash.initWithParameter(allocator, parameters, parameter),
+        };
+    }
+
     pub fn deinit(self: *WinternitzOTSNative) void {
         self.hash.deinit();
     }

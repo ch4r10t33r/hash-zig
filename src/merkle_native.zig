@@ -35,6 +35,19 @@ pub const MerkleTreeNative = struct {
         };
     }
 
+    pub fn initWithParameter(
+        allocator: Allocator,
+        parameters: Parameters,
+        parameter: [5]FieldElement,
+    ) !MerkleTreeNative {
+        return .{
+            .params = parameters,
+            .hash = try TweakableHash.initWithParameter(allocator, parameters, parameter),
+            .height = parameters.tree_height,
+            .allocator = allocator,
+        };
+    }
+
     pub fn deinit(self: *MerkleTreeNative) void {
         self.hash.deinit();
     }
