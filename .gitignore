@@ -36,6 +36,9 @@ temp/
 docs/
 site/
 
+# Investigation and analysis documents
+investigations/
+
 # OS-specific files
 Thumbs.db
 desktop.ini

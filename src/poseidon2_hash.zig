@@ -2,10 +2,16 @@
 ///! Compatible with plonky3's implementation for hash-based signatures
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const poseidon2_core = @import("poseidon2/root.zig");
+
+// Import from external zig-poseidon dependency
+const poseidon = @import("poseidon");
 
 const width = 16;
 const output_len = 8; // 8 field elements = 32 bytes (8 * 4 bytes)
+
+// Helper aliases for easier access
+const field_mod = poseidon.Poseidon2KoalaBear.Field;
+const poseidon2_core_type = poseidon.Poseidon2KoalaBear;
 
 pub const Poseidon2 = struct {
     allocator: Allocator,
@@ -24,9 +30,6 @@ pub const Poseidon2 = struct {
     /// Hash arbitrary bytes to a 32-byte output using Poseidon2
     pub fn hashBytes(self: *Poseidon2, allocator: Allocator, data: []const u8) ![]u8 {
         _ = self;
-
-        const field_mod = poseidon2_core.koalabear_field;
-        const poseidon2_core_type = poseidon2_core.poseidon2_koalabear16;
 
         // Initialize state in Montgomery form
         var state: [width]field_mod.MontFieldElem = undefined;
@@ -81,9 +84,6 @@ pub const Poseidon2 = struct {
     /// Optimized for Winternitz chain generation where all inputs are same size (32 bytes)
     pub fn hashBatch(self: *Poseidon2, allocator: Allocator, inputs: []const []const u8) ![][]u8 {
         _ = self;
-
-        const field_mod = poseidon2_core.koalabear_field;
-        const poseidon2_core_type = poseidon2_core.poseidon2_koalabear16;
 
         var results = try allocator.alloc([]u8, inputs.len);
         errdefer {

@@ -45,8 +45,10 @@ pub const Parameters = struct {
     hash_function: HashFunction,
     encoding_type: EncodingType,
     tree_height: u32,
-    winternitz_w: u32, // Chain length (8 or 16 supported)
-    num_chains: u32, // Number of chains (48 or 64 supported)
+    winternitz_w: u32, // Chunk size in bits (8 for w=8, means base 256)
+    num_message_chains: u32, // Number of chains for message chunks (20 for w=8)
+    num_checksum_chains: u32, // Number of chains for checksum chunks (2 for w=8)
+    num_chains: u32, // Total chains = num_message_chains + num_checksum_chains (22 for w=8)
     hash_output_len: u32,
     key_lifetime: KeyLifetime,
 
@@ -64,8 +66,10 @@ pub const Parameters = struct {
             .hash_function = .poseidon2,
             .encoding_type = .binary,
             .tree_height = tree_height,
-            .winternitz_w = 8, // Chain length (8 to match Rust)
-            .num_chains = 22, // Number of chains (22 to match Rust)
+            .winternitz_w = 8, // Chunk size in bits (8 bits = 1 byte per chunk, base 256)
+            .num_message_chains = 20, // 20 chunks from 160-bit (20-byte) message hash
+            .num_checksum_chains = 2, // 2 chunks for checksum (computed as ceil(log256(20*255)))
+            .num_chains = 22, // Total: 20 message + 2 checksum = 22
             .hash_output_len = 32, // 256-bit output for 128-bit security
             .key_lifetime = key_lifetime,
         };
@@ -81,7 +85,9 @@ pub const Parameters = struct {
             .hash_function = .sha3,
             .encoding_type = .binary,
             .tree_height = tree_height,
-            .winternitz_w = 8, // Chain length (8 matching Rust implementation)
+            .winternitz_w = 8, // Chunk size in bits
+            .num_message_chains = 60, // For SHA3-based parameters
+            .num_checksum_chains = 4,
             .num_chains = 64,
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
@@ -99,8 +105,10 @@ pub const Parameters = struct {
             .hash_function = .poseidon2,
             .encoding_type = .binary,
             .tree_height = tree_height,
-            .winternitz_w = 3, // Chain length 8 (2^3 = 8 as specified in hypercube parameters)
-            .num_chains = 64, // Number of chains (64 as specified in hypercube parameters)
+            .winternitz_w = 3, // Chunk size in bits (3 bits = 8 values per chunk)
+            .num_message_chains = 60, // Hypercube message chains
+            .num_checksum_chains = 4, // Hypercube checksum chains
+            .num_chains = 64, // Total: 60 + 4 = 64
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
         };

@@ -5,12 +5,22 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
 
+    // Get the poseidon dependency
+    const poseidon_dep = b.dependency("poseidon", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const poseidon_mod = poseidon_dep.module("poseidon");
+
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    // Add poseidon module to hash-zig module
+    hash_zig_module.addImport("poseidon", poseidon_mod);
 
     // Library
     const lib = b.addLibrary(.{
@@ -30,25 +40,16 @@ pub fn build(b: *std.Build) void {
         .root_module = hash_zig_module,
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-    
-    // Integration tests
-    const integration_tests = b.addTest(.{
-        .root_source_file = b.path("test/integration_test.zig"),
+
+    // Performance tests (key generation, sign, verify with benchmarks)
+    const performance_tests = b.addTest(.{
+        .root_source_file = b.path("test/performance_test.zig"),
         .target = target,
         .optimize = optimize,
     });
-    integration_tests.root_module.addImport("hash-zig", hash_zig_module);
-    const run_integration_tests = b.addRunArtifact(integration_tests);
-    
-    // Poseidon2 tests
-    const poseidon2_tests = b.addTest(.{
-        .root_source_file = b.path("test/poseidon2_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    poseidon2_tests.root_module.addImport("hash-zig", hash_zig_module);
-    const run_poseidon2_tests = b.addRunArtifact(poseidon2_tests);
-    
+    performance_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_performance_tests = b.addRunArtifact(performance_tests);
+
     // Rust compatibility tests (CRITICAL - must pass)
     const rust_compat_tests = b.addTest(.{
         .root_source_file = b.path("test/rust_compatibility_test.zig"),
@@ -57,14 +58,13 @@ pub fn build(b: *std.Build) void {
     });
     rust_compat_tests.root_module.addImport("hash-zig", hash_zig_module);
     const run_rust_compat_tests = b.addRunArtifact(rust_compat_tests);
-    
+
     // Test step runs all tests
     const test_step = b.step("test", "Run all tests (MUST pass before merge)");
     test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_integration_tests.step);
-    test_step.dependOn(&run_poseidon2_tests.step);
+    test_step.dependOn(&run_performance_tests.step);
     test_step.dependOn(&run_rust_compat_tests.step);
-    
+
     // Rust compatibility test step (for CI)
     const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests (for CI)");
     rust_test_step.dependOn(&run_rust_compat_tests.step);
@@ -109,75 +109,26 @@ pub fn build(b: *std.Build) void {
     const benchmark_step = b.step("benchmark", "Run performance benchmark");
     benchmark_step.dependOn(&run_benchmark.step);
 
-    // Add SIMD modules
-    const simd_winternitz_module = b.addModule("simd_winternitz", .{
-        .root_source_file = b.path("src/simd_winternitz.zig"),
+    // SIMD modules, benchmark, and comparison removed - they depended on the local
+    // poseidon2 implementation which has been replaced with external zig-poseidon
+
+    // Poseidon2 compatibility test
+    const test_p2_module = b.createModule(.{
+        .root_source_file = b.path("test_poseidon2_compat.zig"),
         .target = target,
         .optimize = optimize,
     });
+    test_p2_module.addImport("poseidon", poseidon_mod);
 
-    const simd_poseidon2_module = b.addModule("simd_poseidon2", .{
-        .root_source_file = b.path("src/poseidon2/simd_poseidon2.zig"),
-        .target = target,
-        .optimize = optimize,
+    const test_p2 = b.addExecutable(.{
+        .name = "test-poseidon2-compat",
+        .root_module = test_p2_module,
     });
+    b.installArtifact(test_p2);
 
-    const simd_montgomery_module = b.addModule("simd_montgomery", .{
-        .root_source_file = b.path("src/poseidon2/fields/koalabear/simd_montgomery.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const simd_signature_module = b.addModule("simd_signature", .{
-        .root_source_file = b.path("src/simd_signature.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Set up module dependencies
-    simd_signature_module.addImport("simd_winternitz", simd_winternitz_module);
-    simd_signature_module.addImport("simd_poseidon2", simd_poseidon2_module);
-    simd_signature_module.addImport("hash-zig", hash_zig_module);
-    // Do not add a separate params module; code should use @import("hash-zig").params
-
-    simd_winternitz_module.addImport("simd_montgomery", simd_montgomery_module);
-    simd_winternitz_module.addImport("simd_poseidon2", simd_poseidon2_module);
-
-    simd_poseidon2_module.addImport("simd_montgomery", simd_montgomery_module);
-
-    // SIMD benchmark executable
-    const simd_benchmark = b.addExecutable(.{
-        .name = "hash-zig-simd-benchmark",
-        .root_source_file = b.path("examples/simd_benchmark.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    // Only attach 'hash-zig' as the root module once to avoid duplicate module roots
-    simd_benchmark.root_module.addImport("hash-zig", hash_zig_module);
-    simd_benchmark.root_module.addImport("simd_signature", simd_signature_module);
-    simd_benchmark.root_module.addImport("simd_winternitz", simd_winternitz_module);
-    simd_benchmark.root_module.addImport("simd_poseidon2", simd_poseidon2_module);
-    simd_benchmark.root_module.addImport("simd_montgomery", simd_montgomery_module);
-    b.installArtifact(simd_benchmark);
-
-    const run_simd_benchmark = b.addRunArtifact(simd_benchmark);
-    const simd_benchmark_step = b.step("simd-benchmark", "Run SIMD performance benchmark");
-    simd_benchmark_step.dependOn(&run_simd_benchmark.step);
-
-    // Implementation comparison executable
-    const comparison = b.addExecutable(.{
-        .name = "hash-zig-compare",
-        .root_source_file = b.path("examples/compare_implementations.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    comparison.root_module.addImport("hash-zig", hash_zig_module);
-    comparison.root_module.addImport("simd_signature", simd_signature_module);
-    b.installArtifact(comparison);
-
-    const run_comparison = b.addRunArtifact(comparison);
-    const comparison_step = b.step("compare", "Compare Standard vs SIMD implementations");
-    comparison_step.dependOn(&run_comparison.step);
+    const run_test_p2 = b.addRunArtifact(test_p2);
+    const test_p2_step = b.step("test-p2", "Test Poseidon2 compatibility");
+    test_p2_step.dependOn(&run_test_p2.step);
 
     // Documentation (opt-in to avoid enabling -femit-docs on default builds)
     if (enable_docs) {
