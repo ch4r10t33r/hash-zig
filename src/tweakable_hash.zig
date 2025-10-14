@@ -4,10 +4,12 @@ const std = @import("std");
 const params = @import("params.zig");
 const poseidon2_mod = @import("poseidon2_hash.zig");
 const sha3_mod = @import("sha3.zig");
+const prf_mod = @import("prf.zig");
 const Parameters = params.Parameters;
 const HashFunction = params.HashFunction;
 const Poseidon2 = poseidon2_mod.Poseidon2;
 const Sha3 = sha3_mod.Sha3;
+const ShakePRF = prf_mod.ShakePRF;
 const Allocator = std.mem.Allocator;
 
 const HashImpl = union(enum) {
@@ -61,8 +63,12 @@ pub const TweakableHash = struct {
         };
     }
 
-    pub fn prfHash(self: *TweakableHash, allocator: Allocator, key: []const u8, index: u64) ![]u8 {
-        return self.hash(allocator, key, index);
+    /// PRF-based hash using SHAKE-128 (matching Rust's ShakePRFtoF)
+    /// This generates pseudorandom private keys for Winternitz chains
+    /// Parameters match Rust's PRF::get_domain_element(key, epoch, chain_index)
+    pub fn prfHash(self: *TweakableHash, allocator: Allocator, key: []const u8, epoch: u32, chain_index: usize) ![]u8 {
+        _ = self; // PRF is independent of hash function choice
+        return ShakePRF.getHashOutput(allocator, key, epoch, chain_index);
     }
 
     /// Batch hash multiple inputs with corresponding tweaks

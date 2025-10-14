@@ -28,7 +28,7 @@ pub const WinternitzOTS = struct {
         return @as(u32, 1) << @intCast(self.params.winternitz_w);
     }
 
-    pub fn generatePrivateKey(self: *WinternitzOTS, allocator: Allocator, seed: []const u8, addr: u64) ![][]u8 {
+    pub fn generatePrivateKey(self: *WinternitzOTS, allocator: Allocator, prf_key: []const u8, epoch: u32) ![][]u8 {
         const num_chains = self.params.num_chains;
 
         var private_key = try allocator.alloc([]u8, num_chains);
@@ -37,8 +37,9 @@ pub const WinternitzOTS = struct {
             allocator.free(private_key);
         }
 
-        for (0..num_chains) |i| {
-            private_key[i] = try self.hash.prfHash(allocator, seed, addr + i);
+        for (0..num_chains) |chain_index| {
+            // Pass epoch and chain_index separately (matching Rust's PRF::get_domain_element)
+            private_key[chain_index] = try self.hash.prfHash(allocator, prf_key, epoch, chain_index);
         }
 
         return private_key;
@@ -186,12 +187,19 @@ pub const WinternitzOTS = struct {
     }
 
     pub fn sign(self: *WinternitzOTS, allocator: Allocator, message: []const u8, private_key: [][]u8) ![][]u8 {
+        // Hash the message to get a fixed-length digest
         const msg_hash = try self.hash.hash(allocator, message, 0);
         defer allocator.free(msg_hash);
 
-        const enc = IncomparableEncoding.init(self.params.encoding_type);
-        const encoded = try enc.encode(allocator, msg_hash);
-        defer allocator.free(encoded);
+        // Encode using Winternitz encoding with checksum
+        const enc = IncomparableEncoding.init(self.params);
+        const chunks = try enc.encodeWinternitz(allocator, msg_hash);
+        defer allocator.free(chunks);
+
+        // Verify chunks match number of chains
+        if (chunks.len != self.params.num_chains) {
+            return error.ChunkCountMismatch;
+        }
 
         var signature = try allocator.alloc([]u8, private_key.len);
         errdefer {
@@ -199,10 +207,11 @@ pub const WinternitzOTS = struct {
             allocator.free(signature);
         }
 
+        // For each chain, hash the private key chunks[i] times
         for (private_key, 0..) |pk, i| {
             var current = try allocator.dupe(u8, pk);
 
-            const iterations = if (i < encoded.len) encoded[i] else 0;
+            const iterations = chunks[i]; // Use chunk value as iteration count
             for (0..iterations) |_| {
                 const next = try self.hash.hash(allocator, current, i);
                 allocator.free(current);
@@ -216,12 +225,19 @@ pub const WinternitzOTS = struct {
     }
 
     pub fn verify(self: *WinternitzOTS, allocator: Allocator, message: []const u8, signature: [][]u8, public_key: []const u8) !bool {
+        // Hash the message to get a fixed-length digest
         const msg_hash = try self.hash.hash(allocator, message, 0);
         defer allocator.free(msg_hash);
 
-        const enc = IncomparableEncoding.init(self.params.encoding_type);
-        const encoded = try enc.encode(allocator, msg_hash);
-        defer allocator.free(encoded);
+        // Encode using Winternitz encoding with checksum
+        const enc = IncomparableEncoding.init(self.params);
+        const chunks = try enc.encodeWinternitz(allocator, msg_hash);
+        defer allocator.free(chunks);
+
+        // Verify chunks match number of chains
+        if (chunks.len != self.params.num_chains) {
+            return error.ChunkCountMismatch;
+        }
 
         const chain_len = self.getChainLength();
         const hash_output_len = self.params.hash_output_len;
@@ -232,10 +248,11 @@ pub const WinternitzOTS = struct {
             allocator.free(public_parts);
         }
 
+        // For each chain, hash from signature value to public key
         for (signature, 0..) |sig, i| {
             var current = try allocator.dupe(u8, sig);
 
-            const start_val = if (i < encoded.len) encoded[i] else 0;
+            const start_val = chunks[i]; // Use chunk value as iteration count
             const remaining = chain_len - start_val;
 
             for (0..remaining) |_| {

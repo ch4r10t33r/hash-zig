@@ -6,6 +6,7 @@ const params = @import("params.zig");
 const winternitz = @import("winternitz.zig");
 const merkle = @import("merkle.zig");
 const encoding = @import("encoding.zig");
+const chacha12_rng = @import("chacha12_rng.zig");
 const Parameters = params.Parameters;
 const WinternitzOTS = winternitz.WinternitzOTS;
 const MerkleTree = merkle.MerkleTree;
@@ -49,6 +50,61 @@ pub const HashSignature = struct {
 
         pub fn deinit(self: *PublicKey, allocator: Allocator) void {
             allocator.free(self.root);
+        }
+
+        /// Serialize to match Rust bincode format
+        /// Format: root (32 bytes) + parameters (serialized)
+        pub fn serialize(self: *const PublicKey, allocator: Allocator) ![]u8 {
+            // bincode format for PublicKey struct:
+            // - root: 32 bytes (fixed array in Rust)
+            // - parameter: Parameters struct
+            //
+            // Parameters serialization (bincode compact):
+            // - security_level: u8 (enum discriminant)
+            // - hash_function: u8 (enum discriminant)
+            // - encoding_type: u8 (enum discriminant)
+            // - tree_height: u32 (little-endian)
+            // - winternitz_w: u32 (little-endian)
+            // - num_chains: u32 (little-endian)
+            // - hash_output_len: u32 (little-endian)
+            // - key_lifetime: u8 (enum discriminant)
+            //
+            // Total: 32 + (1 + 1 + 1 + 4 + 4 + 4 + 4 + 1) = 32 + 20 = 52 bytes
+            // But Rust shows 48 bytes, so bincode might use compact encoding
+
+            var buffer = std.ArrayList(u8).init(allocator);
+            errdefer buffer.deinit();
+
+            // 1. Root (32 bytes)
+            try buffer.appendSlice(self.root);
+
+            // 2. Parameters - match bincode enum encoding
+            // Enums in bincode are typically encoded as u8 for small enums
+            try buffer.append(@intFromEnum(self.parameter.security_level)); // u8
+            try buffer.append(@intFromEnum(self.parameter.hash_function)); // u8
+            try buffer.append(@intFromEnum(self.parameter.encoding_type)); // u8
+
+            // 3. Numeric fields (little-endian u32)
+            var temp: [4]u8 = undefined;
+
+            std.mem.writeInt(u32, &temp, self.parameter.tree_height, .little);
+            try buffer.appendSlice(&temp);
+
+            std.mem.writeInt(u32, &temp, self.parameter.winternitz_w, .little);
+            try buffer.appendSlice(&temp);
+
+            std.mem.writeInt(u32, &temp, self.parameter.num_chains, .little);
+            try buffer.appendSlice(&temp);
+
+            std.mem.writeInt(u32, &temp, self.parameter.hash_output_len, .little);
+            try buffer.appendSlice(&temp);
+
+            // 4. Key lifetime enum
+            try buffer.append(@intFromEnum(self.parameter.key_lifetime)); // u8
+
+            // Total: 32 (root) + 3 (enums) + 16 (4×u32) + 1 (enum) = 52 bytes ✓
+
+            return buffer.toOwnedSlice();
         }
     };
 
@@ -112,7 +168,7 @@ pub const HashSignature = struct {
     const WorkerCtx = struct {
         hash_sig: *HashSignature,
         allocator: Allocator,
-        seed: []const u8,
+        prf_key: []const u8, // Changed from seed to prf_key
         leaves: [][]u8,
         leaf_secret_keys: [][][]u8,
         queue: *LeafQueue,
@@ -135,7 +191,8 @@ pub const HashSignature = struct {
                 const epoch = @as(u32, @intCast(i)); // Use epoch directly
 
                 // Generate keys using arena allocator for intermediate allocations
-                const sk_temp = ctx.hash_sig.wots.generatePrivateKey(arena_allocator, ctx.seed, epoch) catch {
+                // Use prf_key (not seed) to derive private keys, matching Rust
+                const sk_temp = ctx.hash_sig.wots.generatePrivateKey(arena_allocator, ctx.prf_key, epoch) catch {
                     ctx.error_flag.store(true, .monotonic);
                     return;
                 };
@@ -198,6 +255,13 @@ pub const HashSignature = struct {
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
 
+        // CRITICAL: Generate PRF key from RNG FIRST (before generating leaves)
+        // In Rust: let prf_key = PRF::key_gen(rng); which calls rng.random()
+        // Use ChaCha12 to match Rust's StdRng (rand crate 0.9.x uses ChaCha12)
+        var prf_key: [32]u8 = undefined;
+        var rng = chacha12_rng.init(seed[0..32].*);
+        rng.fill(&prf_key);
+
         // Allocate arrays for leaves and secret keys
         var leaves = try allocator.alloc([]u8, num_leaves);
         var leaf_secret_keys = try allocator.alloc([][]u8, num_leaves);
@@ -234,7 +298,8 @@ pub const HashSignature = struct {
                 const epoch = @as(u32, @intCast(i)); // Use epoch directly, not i * 1000
 
                 // Generate using arena allocator for intermediate allocations
-                const sk_temp = try self.wots.generatePrivateKey(arena_allocator, seed, epoch);
+                // Use prf_key (not seed) to derive private keys, matching Rust
+                const sk_temp = try self.wots.generatePrivateKey(arena_allocator, &prf_key, epoch);
                 const pk_temp = try self.wots.generatePublicKey(arena_allocator, sk_temp);
 
                 // Copy final results to parent allocator
@@ -288,7 +353,7 @@ pub const HashSignature = struct {
                 ctxs[t] = .{
                     .hash_sig = self,
                     .allocator = allocator,
-                    .seed = seed,
+                    .prf_key = &prf_key, // Use prf_key instead of seed
                     .leaves = leaves,
                     .leaf_secret_keys = leaf_secret_keys,
                     .queue = &queue,
@@ -305,10 +370,6 @@ pub const HashSignature = struct {
         // Build full Merkle tree structure (bottom-up, level by level)
         const tree_nodes = try self.buildFullMerkleTree(allocator, leaves);
         const merkle_root = try allocator.dupe(u8, tree_nodes[tree_nodes.len - 1]); // Root is last node
-
-        // Use the provided seed as the PRF key (in Rust this would be PRF::key_gen(rng))
-        var prf_key: [32]u8 = undefined;
-        @memcpy(&prf_key, seed);
 
         // Cache the leaves for future signing operations (needed for auth path generation)
         // We MUST duplicate to ensure memory safety with Arena allocators
@@ -436,11 +497,12 @@ pub const HashSignature = struct {
         }
 
         for (0..num_chains) |chain_idx| {
-            // PRF: hash(prf_key, epoch + chain_idx)
+            // PRF: hash(prf_key, epoch, chain_idx) - passed separately, not added
             private_key[chain_idx] = try self.wots.hash.prfHash(
                 allocator,
                 &secret_key.prf_key,
-                epoch + chain_idx,
+                @intCast(epoch),
+                chain_idx,
             );
         }
 
@@ -473,9 +535,10 @@ pub const HashSignature = struct {
         const msg_hash = try self.wots.hash.hash(allocator, message, 0);
         defer allocator.free(msg_hash);
 
-        const enc = IncomparableEncoding.init(self.params.encoding_type);
-        const encoded = try enc.encode(allocator, msg_hash);
-        defer allocator.free(encoded);
+        // Use Winternitz encoding with checksum
+        const enc = IncomparableEncoding.init(self.params);
+        const chunks = try enc.encodeWinternitz(allocator, msg_hash);
+        defer allocator.free(chunks);
 
         const chain_len = self.wots.getChainLength();
         const hash_output_len = self.params.hash_output_len;
@@ -490,7 +553,7 @@ pub const HashSignature = struct {
         for (signature.hashes, 0..) |sig, i| {
             var current = try allocator.dupe(u8, sig);
 
-            const start_val = if (i < encoded.len) encoded[i] else 0;
+            const start_val = chunks[i]; // Use chunk value as iteration count
             const remaining = chain_len - start_val;
 
             for (0..remaining) |_| {

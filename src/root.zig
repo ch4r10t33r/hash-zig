@@ -7,9 +7,8 @@
 // Re-export all public APIs
 pub const params = @import("params.zig");
 pub const poseidon2_hash = @import("poseidon2_hash.zig");
-pub const poseidon2_core = @import("poseidon2/root.zig");
-pub const poseidon2 = @import("poseidon2/poseidon2.zig");
 pub const sha3 = @import("sha3.zig");
+pub const prf = @import("prf.zig");
 pub const encoding = @import("encoding.zig");
 pub const tweakable_hash = @import("tweakable_hash.zig");
 pub const winternitz = @import("winternitz.zig");
@@ -29,14 +28,16 @@ pub const EncodingType = params.EncodingType;
 
 // Primary hash implementations
 pub const Poseidon2 = poseidon2_hash.Poseidon2;
-pub const poseidon2_koalabear16 = poseidon2_core.poseidon2_koalabear16;
-pub const koalabear_field = poseidon2_core.koalabear_field;
 pub const Sha3 = sha3.Sha3;
+pub const ShakePRF = prf.ShakePRF;
 pub const IncomparableEncoding = encoding.IncomparableEncoding;
 pub const TweakableHash = tweakable_hash.TweakableHash;
 pub const WinternitzOTS = winternitz.WinternitzOTS;
 pub const MerkleTree = merkle.MerkleTree;
 pub const HashSignature = signature.HashSignature;
+
+// Export modules for testing
+pub const chacha12_rng = @import("chacha12_rng.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

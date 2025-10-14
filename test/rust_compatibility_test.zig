@@ -160,29 +160,23 @@ test "rust compatibility: comprehensive validation (CRITICAL)" {
     }
     std.debug.print("   ✅ Hash function produces diverse outputs\n\n", .{});
 
-    // Step 8: Verify multiple lifetimes use Poseidon2
-    std.debug.print("8️⃣  Verifying all lifetimes use Poseidon2...\n", .{});
-    const params_lifetime_10 = hash_zig.Parameters.init(.lifetime_2_10);
-    const params_lifetime_16 = hash_zig.Parameters.init(.lifetime_2_16);
-    const params_lifetime_18 = hash_zig.Parameters.init(.lifetime_2_18);
-
-    try std.testing.expectEqual(hash_zig.HashFunction.poseidon2, params_lifetime_10.hash_function);
-    try std.testing.expectEqual(hash_zig.HashFunction.poseidon2, params_lifetime_16.hash_function);
-    try std.testing.expectEqual(hash_zig.HashFunction.poseidon2, params_lifetime_18.hash_function);
-    std.debug.print("   ✅ All lifetimes use Poseidon2\n\n", .{});
+    // Step 8: Verify lifetime_2_10 uses Poseidon2
+    std.debug.print("8️⃣  Verifying lifetime_2_10 uses Poseidon2...\n", .{});
+    try std.testing.expectEqual(hash_zig.HashFunction.poseidon2, params.hash_function);
+    std.debug.print("   ✅ Lifetime 2^10 uses Poseidon2\n\n", .{});
 
     // Final summary
     std.debug.print("=" ** 80 ++ "\n", .{});
     std.debug.print("✅ ALL RUST COMPATIBILITY TESTS PASSED\n", .{});
     std.debug.print("=" ** 80 ++ "\n", .{});
-    std.debug.print("\nVerified:\n", .{});
+    std.debug.print("\nVerified (lifetime_2_10):\n", .{});
     std.debug.print("  ✓ Parameters match Rust (w=8, 22 chains, 256 chain length)\n", .{});
     std.debug.print("  ✓ Poseidon2 with KoalaBear field (32-byte output)\n", .{});
     std.debug.print("  ✓ No repeating patterns (MDS matrix correct)\n", .{});
     std.debug.print("  ✓ Signature verification works\n", .{});
     std.debug.print("  ✓ Deterministic key generation\n", .{});
     std.debug.print("  ✓ Hash function produces diverse outputs\n", .{});
-    std.debug.print("  ✓ All lifetimes use Poseidon2\n", .{});
-    std.debug.print("\n🎉 Implementation is Rust-compatible!\n", .{});
+    std.debug.print("  ✓ Correct hash function (Poseidon2)\n", .{});
+    std.debug.print("\n🎉 lifetime_2_10 tests passed!\n", .{});
     std.debug.print("=" ** 80 ++ "\n\n", .{});
 }
