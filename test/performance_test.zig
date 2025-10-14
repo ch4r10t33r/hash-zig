@@ -428,7 +428,7 @@ test "epoch range validation" {
 
     // Test signing within valid range
     std.debug.print("Signing at epoch 105 (valid)...", .{});
-    const sig_valid = try sig_scheme.sign(allocator, test_message, &keypair.secret_key, 105, &rng_seed);
+    var sig_valid = try sig_scheme.sign(allocator, test_message, &keypair.secret_key, 105, &rng_seed);
     defer sig_valid.deinit(allocator);
     std.debug.print(" ✅\n", .{});
 

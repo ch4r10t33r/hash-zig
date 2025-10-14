@@ -111,24 +111,7 @@ pub fn build(b: *std.Build) void {
 
     // SIMD modules, benchmark, and comparison removed - they depended on the local
     // poseidon2 implementation which has been replaced with external zig-poseidon
-
-    // Poseidon2 compatibility test
-    const test_p2_module = b.createModule(.{
-        .root_source_file = b.path("test_poseidon2_compat.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_p2_module.addImport("poseidon", poseidon_mod);
-
-    const test_p2 = b.addExecutable(.{
-        .name = "test-poseidon2-compat",
-        .root_module = test_p2_module,
-    });
-    b.installArtifact(test_p2);
-
-    const run_test_p2 = b.addRunArtifact(test_p2);
-    const test_p2_step = b.step("test-p2", "Test Poseidon2 compatibility");
-    test_p2_step.dependOn(&run_test_p2.step);
+    // Poseidon2 test files moved to investigations/ directory
 
     // Documentation (opt-in to avoid enabling -femit-docs on default builds)
     if (enable_docs) {
