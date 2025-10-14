@@ -1,454 +1,161 @@
-name: Automatic Release on Master
+name: Auto Release on Release Branch
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
-      - master
-      - main
-  workflow_dispatch:
-    inputs:
-      version_bump:
-        description: 'Version bump type'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
+      - release
+
+permissions:
+  contents: write
 
 jobs:
-  determine-release:
-    name: Determine Release Version
+  auto-release:
+    # Only run if PR was merged to release branch (not just closed)
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    outputs:
-      should_release: ${{ steps.check.outputs.should_release }}
-      new_version: ${{ steps.version.outputs.new_version }}
-      version_no_v: ${{ steps.version.outputs.version_no_v }}
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Get latest tag
-        id: get_tag
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
-          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          echo "📌 Latest tag: $LATEST_TAG"
-
-      - name: Check if should release
-        id: check
-        run: |
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          echo "📝 Commit message: $COMMIT_MSG"
-          
-          SHOULD_RELEASE="false"
-          
-          # Release conditions:
-          # 1. Manual workflow dispatch
-          # 2. Commit message contains [release], [major], [minor], or [patch]
-          # 3. Merge commit
-          # 4. Skip if commit contains [skip release] or [no release]
-          
-          if echo "$COMMIT_MSG" | grep -qiE '\[(skip release|no release|skip ci)\]'; then
-            echo "⏭️  Skipping release (skip keyword found)"
-            SHOULD_RELEASE="false"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            SHOULD_RELEASE="true"
-            echo "🎯 Manual workflow dispatch - will release"
-          elif echo "$COMMIT_MSG" | grep -qiE '\[(release|major|minor|patch)\]'; then
-            SHOULD_RELEASE="true"
-            echo "🚀 Release keyword found in commit message"
-          elif echo "$COMMIT_MSG" | grep -qiE '^Merge pull request'; then
-            SHOULD_RELEASE="true"
-            echo "🔀 Merge commit detected - will release"
-          else
-            echo "ℹ️  No release trigger detected"
-          fi
-          
-          echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
-
-      - name: Determine version bump
-        id: version
-        if: steps.check.outputs.should_release == 'true'
-        run: |
-          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          
-          # Parse current version
-          VERSION=${LATEST_TAG#v}
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-          
-          # Determine bump type
-          BUMP_TYPE="patch"
-          
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            BUMP_TYPE="${{ inputs.version_bump }}"
-          elif echo "$COMMIT_MSG" | grep -qiE '\[major\]|BREAKING CHANGE:'; then
-            BUMP_TYPE="major"
-          elif echo "$COMMIT_MSG" | grep -qiE '\[minor\]|^feat:|^feature:'; then
-            BUMP_TYPE="minor"
-          elif echo "$COMMIT_MSG" | grep -qiE '\[patch\]|^fix:|^bugfix:'; then
-            BUMP_TYPE="patch"
-          fi
-          
-          echo "📊 Bump type: $BUMP_TYPE"
-          
-          # Calculate new version
-          case $BUMP_TYPE in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-          
-          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
-          VERSION_NO_V="${MAJOR}.${MINOR}.${PATCH}"
-          
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "version_no_v=$VERSION_NO_V" >> $GITHUB_OUTPUT
-          echo "🎉 New version: $NEW_VERSION"
-
-  create-tag:
-    name: Create Git Tag
-    needs: determine-release
-    if: needs.determine-release.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
-          echo "## 📋 Changelog" > /tmp/changelog.md
-          echo "" >> /tmp/changelog.md
-          
-          if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "v0.0.0" || "$LATEST_TAG" == "v0.1.0" ]]; then
-            echo "### Initial Release" >> /tmp/changelog.md
-            echo "" >> /tmp/changelog.md
-            git log --pretty=format:"- %s (%h)" --no-merges | head -20 >> /tmp/changelog.md
-          else
-            echo "### Changes since $LATEST_TAG" >> /tmp/changelog.md
-            echo "" >> /tmp/changelog.md
-            git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> /tmp/changelog.md
-          fi
-          
-          echo "" >> /tmp/changelog.md
-          echo "" >> /tmp/changelog.md
-          echo "## 🚀 Project Status" >> /tmp/changelog.md
-          echo "- ✅ High-performance hash-based signature implementation in Zig" >> /tmp/changelog.md
-          echo "- ✅ Rust-compatible Poseidon2 hashing" >> /tmp/changelog.md
-          echo "- ✅ SIMD optimizations for performance" >> /tmp/changelog.md
-          echo "- ✅ Multiple implementation variants (Optimized V2, SIMD)" >> /tmp/changelog.md
-          
-          cat /tmp/changelog.md
-
-      - name: Update version in build.zig.zon
-        run: |
-          VERSION="${{ needs.determine-release.outputs.version_no_v }}"
-          
-          sed -i "s/\.version = \"[^\"]*\"/\.version = \"$VERSION\"/" build.zig.zon
-          
-          echo "✅ Updated version to $VERSION in build.zig.zon"
-          
-          git diff build.zig.zon
-
-      - name: Commit and push version update
-        run: |
-          NEW_VERSION="${{ needs.determine-release.outputs.new_version }}"
-          
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add build.zig.zon
-          if git diff --staged --quiet; then
-            echo "ℹ️  No version changes to commit"
-          else
-            git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-            git push
-          fi
-
-      - name: Create and push tag
-        run: |
-          NEW_VERSION="${{ needs.determine-release.outputs.new_version }}"
-          
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Create annotated tag
-          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION" -m "$(cat /tmp/changelog.md)"
-          git push origin "$NEW_VERSION"
-          
-          echo "✅ Created and pushed tag $NEW_VERSION"
-
-  build-release:
-    name: Build Release (${{ matrix.os }})
-    needs: [determine-release, create-tag]
-    if: needs.determine-release.outputs.should_release == 'true'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-linux
-            artifact: hash-zig-linux-x86_64.tar.gz
-          
-          - os: ubuntu-latest
-            target: aarch64-linux
-            artifact: hash-zig-linux-aarch64.tar.gz
-          
-          - os: macos-latest
-            target: x86_64-macos
-            artifact: hash-zig-macos-x86_64.tar.gz
-          
-          - os: macos-latest
-            target: aarch64-macos
-            artifact: hash-zig-macos-aarch64.tar.gz
-          
-          - os: windows-latest
-            target: x86_64-windows
-            artifact: hash-zig-windows-x86_64.zip
-
-    env:
-      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache/global
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.determine-release.outputs.new_version }}
-
+          fetch-depth: 0  # Fetch all history for versioning
+      
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.1
-
-      - name: Create cache directories (Unix)
-        if: runner.os != 'Windows'
-        run: mkdir -p .zig-cache/global
-
-      - name: Create cache directories (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: New-Item -Path ".zig-cache/global" -ItemType Directory -Force
-
-      - name: Cache Zig artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            .zig-cache
-            ~/.cache/zig
-          key: ${{ runner.os }}-zig-release-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-release-
-
-      - name: Build Release
-        run: zig build -Doptimize=ReleaseFast
-
-      - name: Quick Validation (Rust compatibility only)
-        run: zig build test-rust-compat -Doptimize=ReleaseFast
-
-      - name: Create Archive (Unix)
-        if: runner.os != 'Windows'
+      
+      - name: Read VERSION file
+        id: get_version
         run: |
-          cd zig-out
-          tar czf ../${{ matrix.artifact }} lib/
-          cd ..
-          echo "📦 Created ${{ matrix.artifact }}"
-          ls -lh ${{ matrix.artifact }}
-
-      - name: Create Archive (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
+          VERSION=$(cat VERSION)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Check if tag exists
+        id: check_tag
         run: |
-          cd zig-out
-          Compress-Archive -Path lib/ -DestinationPath ../${{ matrix.artifact }}
-          cd ..
-          Write-Host "📦 Created ${{ matrix.artifact }}"
-          Get-Item ${{ matrix.artifact }} | Format-List
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-          retention-days: 90
-
-  create-github-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [determine-release, create-tag, build-release]
-    if: needs.determine-release.outputs.should_release == 'true'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.determine-release.outputs.new_version }}
-          fetch-depth: 0
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display artifacts
-        run: |
-          echo "📦 Downloaded artifacts:"
-          ls -R artifacts/
-          
-          # Move artifacts to root for easier access
-          # actions/download-artifact@v4 creates subdirectories for each artifact
-          for dir in artifacts/*/; do
-            if [ -d "$dir" ]; then
-              # Find files in each artifact directory
-              find "$dir" -maxdepth 1 -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
-            fi
-          done
-          
-          echo ""
-          echo "📦 Release artifacts:"
-          ls -lh *.tar.gz *.zip 2>/dev/null || true
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          NEW_VERSION="${{ needs.determine-release.outputs.new_version }}"
-          LATEST_TAG=$(git describe --tags --abbrev=0 $NEW_VERSION^ 2>/dev/null || echo "")
-          
-          cat > release_notes.md << 'NOTES'
-          # 🚀 hash-zig ${{ needs.determine-release.outputs.new_version }}
-          
-          High-performance hash-based signatures for Zig
-          
-          ## 📋 What's Changed
-          
-          NOTES
-          
-          if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "v0.0.0" || "$LATEST_TAG" == "v0.1.0" ]]; then
-            echo "### 🚀 Initial Release" >> release_notes.md
-            echo "" >> release_notes.md
-            git log --pretty=format:"- %s (%h)" --no-merges | head -30 >> release_notes.md
+          if git rev-parse "v${{ steps.get_version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Tag v${{ steps.get_version.outputs.version }} already exists"
           else
-            git log ${LATEST_TAG}..${NEW_VERSION} --pretty=format:"- %s (%h)" --no-merges >> release_notes.md
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Tag v${{ steps.get_version.outputs.version }} does not exist"
+          fi
+      
+      - name: Run tests
+        if: steps.check_tag.outputs.exists == 'false'
+        run: zig build test
+      
+      - name: Build library
+        if: steps.check_tag.outputs.exists == 'false'
+        run: zig build
+      
+      - name: Update build.zig.zon version
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          sed -i "s/\.version = \".*\"/\.version = \"$VERSION\"/" build.zig.zon
+      
+      - name: Generate changelog
+        if: steps.check_tag.outputs.exists == 'false'
+        id: changelog
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            echo "## 🎉 Initial Release" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "First release of hash-zig - A Zig implementation of hash-based signatures using Poseidon2." >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "### Features" >> CHANGELOG.md
+            echo "- Winternitz One-Time Signatures with checksum protection" >> CHANGELOG.md
+            echo "- SHAKE-128 PRF for key derivation" >> CHANGELOG.md
+            echo "- ChaCha12 RNG matching Rust's StdRng" >> CHANGELOG.md
+            echo "- Poseidon2 hash with KoalaBear field (via zig-poseidon)" >> CHANGELOG.md
+            echo "- Generalized XMSS-like signatures" >> CHANGELOG.md
+            echo "- Support for lifetimes: 2^10, 2^16, 2^18, 2^20, 2^28, 2^32" >> CHANGELOG.md
+            echo "- Comprehensive test suite" >> CHANGELOG.md
+          else
+            echo "## Changes since $PREV_TAG" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log "$PREV_TAG"..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md
           fi
           
-          cat >> release_notes.md << 'NOTES'
-          
-          ## ✨ Features
-          
-          ### Hash-Based Signatures
-          - **Winternitz OTS+**: Optimized one-time signature scheme
-          - **Hypercube Parameters**: 64 chains of length 8 (w=3)
-          - **SIMD Optimizations**: Performance-critical operations
-          - **Multiple Implementations**: Optimized V2 and SIMD variants
-          
-          ### Poseidon2 Hashing
-          - **Rust-Compatible**: width=16, external_rounds=8, internal_rounds=20
-          - **KoalaBear Field**: Prime: 2^31 - 2^24 + 1
-          - **SIMD Support**: Montgomery form with AVX2/NEON optimizations
-          
-          ### Merkle Tree
-          - **Sparse Merkle Tree**: Optimized for hash-based signatures
-          - **Efficient Proofs**: Compact authentication paths
-          - **Arena Allocator**: Fast memory management
-          
-          ## 📦 Installation
-          
-          Add to your `build.zig.zon`:
-          
-          ```zig
-          .dependencies = .{
-              .@"hash-zig" = .{
-                  .url = "https://github.com/ch4r10t33r/hash-zig/archive/${{ needs.determine-release.outputs.new_version }}.tar.gz",
-                  .hash = "...", // zig will provide this
-              },
-          },
-          ```
-          
-          ## 🚀 Quick Start
-          
-          ```zig
-          const hash_zig = @import("hash-zig");
-          
-          // Generate a keypair
-          var keypair = try hash_zig.Keypair.generate(allocator);
-          defer keypair.deinit();
-          
-          // Sign a message
-          const message = "Hello, World!";
-          const signature = try keypair.sign(message);
-          
-          // Verify signature
-          const valid = try keypair.verify(message, signature);
-          ```
-          
-          ## 📊 Performance
-          
-          Benchmarked against Rust implementations with identical parameters:
-          
-          | Operation | hash-zig (Optimized V2) | hash-zig (SIMD) | Rust |
-          |-----------|------------------------|-----------------|------|
-          | Key Generation | ~100ms | ~80ms | ~90ms |
-          | Signing | ~50ms | ~40ms | ~45ms |
-          | Verification | ~45ms | ~35ms | ~40ms |
-          
-          *Benchmarks on Apple M1 Pro*
-          
-          ## 🧪 Testing
-          
-          All tests pass:
-          ```bash
-          zig build test
-          ```
-          
-          ## 📚 Examples
-          
-          - `examples/basic_usage.zig` - Simple key generation and signing
-          - `examples/compare_implementations.zig` - Compare different implementations
-          - `examples/simd_benchmark.zig` - Performance benchmarks
-          
-          ## 🔗 Links
-          
-          - **Repository**: https://github.com/ch4r10t33r/hash-zig
-          - **Issues**: https://github.com/ch4r10t33r/hash-zig/issues
-          - **Benchmarks**: https://github.com/ch4r10t33r/hash-sig-benchmarks
-          NOTES
-          
-          cat release_notes.md
-
+          cat CHANGELOG.md
+      
+      - name: Create Git tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.get_version.outputs.tag }}" -m "Release ${{ steps.get_version.outputs.tag }}"
+          git push origin "${{ steps.get_version.outputs.tag }}"
+      
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.determine-release.outputs.new_version }}
-          name: Release ${{ needs.determine-release.outputs.new_version }}
-          body_path: release_notes.md
+          tag_name: ${{ steps.get_version.outputs.tag }}
+          name: Release ${{ steps.get_version.outputs.tag }}
+          body_path: CHANGELOG.md
           draft: false
           prerelease: false
-          files: |
-            *.tar.gz
-            *.zip
-          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      
+      - name: Calculate tarball hash
+        if: steps.check_tag.outputs.exists == 'false'
+        id: tarball_hash
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          TARBALL_URL="https://github.com/${{ github.repository }}/archive/v${VERSION}.tar.gz"
+          
+          # Download and calculate hash
+          curl -L "$TARBALL_URL" -o release.tar.gz
+          HASH=$(zig fetch release.tar.gz 2>&1 | grep -o '12[0-9a-f]*' || echo "")
+          
+          if [ -z "$HASH" ]; then
+            echo "⚠️ Could not calculate hash automatically"
+            echo "📦 Users can get the hash by running:"
+            echo "   zig fetch --save $TARBALL_URL"
+          else
+            echo "hash=$HASH" >> $GITHUB_OUTPUT
+            echo "📦 Tarball hash: $HASH"
+          fi
+      
+      - name: Post release information
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎉 Release ${{ steps.get_version.outputs.tag }} created successfully!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📦 To use this release in your project's build.zig.zon:"
+          echo ""
+          echo ".dependencies = .{"
+          echo "    .hash_zig = .{"
+          echo "        .url = \"https://github.com/${{ github.repository }}/archive/${{ steps.get_version.outputs.tag }}.tar.gz\","
+          echo "        .hash = \"${{ steps.tarball_hash.outputs.hash }}\","
+          echo "    },"
+          echo "},"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      - name: Skip release (tag exists)
+        if: steps.check_tag.outputs.exists == 'true'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⚠️  Skipping release - tag ${{ steps.get_version.outputs.tag }} already exists"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "To create a new release:"
+          echo "1. Update the VERSION file with a new version number"
+          echo "2. Commit the change"
+          echo "3. Create and merge a PR to the release branch"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
