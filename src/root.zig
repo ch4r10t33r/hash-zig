@@ -6,6 +6,8 @@
 
 // Re-export all public APIs
 pub const params = @import("params.zig");
+pub const field = @import("field.zig");
+pub const tweak = @import("tweak.zig");
 pub const poseidon2_hash = @import("poseidon2_hash.zig");
 pub const sha3 = @import("sha3.zig");
 pub const prf = @import("prf.zig");
@@ -25,6 +27,9 @@ pub const SecurityLevel = params.SecurityLevel;
 pub const Parameters = params.Parameters;
 pub const HashFunction = params.HashFunction;
 pub const EncodingType = params.EncodingType;
+pub const FieldElement = field.FieldElement;
+pub const KoalaBearField = field.KoalaBearField;
+pub const PoseidonTweak = tweak.PoseidonTweak;
 
 // Primary hash implementations
 pub const Poseidon2 = poseidon2_hash.Poseidon2;
