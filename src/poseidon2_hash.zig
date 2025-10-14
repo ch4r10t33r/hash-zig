@@ -6,6 +6,10 @@ const Allocator = std.mem.Allocator;
 // Import from external zig-poseidon dependency
 const poseidon = @import("poseidon");
 
+// Import field types for field-native operations
+const field_types = @import("field.zig");
+const FieldElement = field_types.FieldElement;
+
 const width = 16;
 const output_len = 8; // 8 field elements = 32 bytes (8 * 4 bytes)
 
@@ -237,6 +241,128 @@ pub const Poseidon2 = struct {
 
         return current;
     }
+
+    // ========================================================================
+    // Field-Native Operations (for Rust compatibility)
+    // ========================================================================
+
+    /// Hash field elements directly, returning field elements
+    /// This is the field-native version matching Rust's implementation
+    /// Input: array of field elements
+    /// Output: array of field elements (default 7 elements for HASH_LEN_FE)
+    pub fn hashFieldElements(
+        self: *Poseidon2,
+        allocator: Allocator,
+        input: []const FieldElement,
+        comptime output_len_fe: usize,
+    ) ![]FieldElement {
+        _ = self;
+
+        // Convert field elements to u32 array
+        var state: [width]u32 = std.mem.zeroes([width]u32);
+        
+        // Copy input field elements to state (up to width)
+        const input_len = @min(input.len, width);
+        for (0..input_len) |i| {
+            state[i] = input[i].toU32();
+        }
+
+        // Convert to Montgomery form
+        var state_mont: [width]field_mod.MontFieldElem = undefined;
+        for (0..width) |i| {
+            field_mod.toMontgomery(&state_mont[i], state[i]);
+        }
+
+        // Apply permutation
+        poseidon2_core_type.permutation(&state_mont);
+
+        // Convert back to field elements (not Montgomery)
+        var result = try allocator.alloc(FieldElement, output_len_fe);
+        for (0..output_len_fe) |i| {
+            const val = field_mod.toNormal(state_mont[i]);
+            result[i] = FieldElement.fromU32(val);
+        }
+
+        return result;
+    }
+
+    /// Poseidon compression function: permute and add original input
+    /// Matches Rust's poseidon_compress function
+    /// Output length must be <= input length and <= width
+    pub fn compress(
+        self: *Poseidon2,
+        allocator: Allocator,
+        input: []const FieldElement,
+        comptime output_len_fe: usize,
+    ) ![]FieldElement {
+        _ = self;
+
+        if (input.len < output_len_fe) return error.InputTooShort;
+        if (output_len_fe > width) return error.OutputTooLarge;
+
+        // Save original input (first output_len_fe elements)
+        var original: [output_len_fe]u32 = undefined;
+        for (0..output_len_fe) |i| {
+            original[i] = input[i].toU32();
+        }
+
+        // Convert input to state (pad with zeros)
+        var state: [width]u32 = std.mem.zeroes([width]u32);
+        for (0..@min(input.len, width)) |i| {
+            state[i] = input[i].toU32();
+        }
+
+        // Convert to Montgomery form
+        var state_mont: [width]field_mod.MontFieldElem = undefined;
+        for (0..width) |i| {
+            field_mod.toMontgomery(&state_mont[i], state[i]);
+        }
+
+        // Apply permutation
+        poseidon2_core_type.permutation(&state_mont);
+
+        // Convert back and add original (feed-forward)
+        var result = try allocator.alloc(FieldElement, output_len_fe);
+        for (0..output_len_fe) |i| {
+            const permuted = field_mod.toNormal(state_mont[i]);
+            // Add original input (mod p)
+            const sum = (@as(u64, permuted) + @as(u64, original[i])) % FieldElement.PRIME;
+            result[i] = FieldElement.fromU64(sum);
+        }
+
+        return result;
+    }
+
+    /// Direct permutation on field elements (no compression)
+    pub fn permute(
+        self: *Poseidon2,
+        input: []const FieldElement,
+    ) [width]FieldElement {
+        _ = self;
+
+        // Convert to u32 state
+        var state: [width]u32 = std.mem.zeroes([width]u32);
+        for (0..@min(input.len, width)) |i| {
+            state[i] = input[i].toU32();
+        }
+
+        // Convert to Montgomery and permute
+        var state_mont: [width]field_mod.MontFieldElem = undefined;
+        for (0..width) |i| {
+            field_mod.toMontgomery(&state_mont[i], state[i]);
+        }
+
+        poseidon2_core_type.permutation(&state_mont);
+
+        // Convert back to field elements
+        var result: [width]FieldElement = undefined;
+        for (0..width) |i| {
+            const val = field_mod.toNormal(state_mont[i]);
+            result[i] = FieldElement.fromU32(val);
+        }
+
+        return result;
+    }
 };
 
 test "poseidon2 basic" {
@@ -299,4 +425,104 @@ test "poseidon2 chain" {
     defer allocator.free(result);
 
     try std.testing.expect(result.len == 32);
+}
+
+test "poseidon2 field-native: hash field elements" {
+    const allocator = std.testing.allocator;
+    var hasher = try Poseidon2.init(allocator);
+    defer hasher.deinit();
+
+    // Create test input (7 field elements)
+    var input: [7]FieldElement = undefined;
+    for (0..7) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i + 1));
+    }
+
+    // Hash to 7 output field elements
+    const result = try hasher.hashFieldElements(allocator, &input, 7);
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 7), result.len);
+
+    // Output should be different from input
+    var different = false;
+    for (input, result) |inp, res| {
+        if (!inp.eql(res)) {
+            different = true;
+            break;
+        }
+    }
+    try std.testing.expect(different);
+}
+
+test "poseidon2 field-native: compress" {
+    const allocator = std.testing.allocator;
+    var hasher = try Poseidon2.init(allocator);
+    defer hasher.deinit();
+
+    // Create test input
+    var input: [10]FieldElement = undefined;
+    for (0..10) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i * 100));
+    }
+
+    // Compress to 7 elements
+    const result = try hasher.compress(allocator, &input, 7);
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 7), result.len);
+
+    // All output elements should be valid field elements
+    for (result) |elem| {
+        try std.testing.expect(elem.toU32() < @as(u32, @intCast(FieldElement.PRIME)));
+    }
+}
+
+test "poseidon2 field-native: permute" {
+    const allocator = std.testing.allocator;
+    var hasher = try Poseidon2.init(allocator);
+    defer hasher.deinit();
+
+    // Create test input
+    var input: [10]FieldElement = undefined;
+    for (0..10) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i + 42));
+    }
+
+    const result = hasher.permute(&input);
+
+    // Should return width (16) field elements
+    try std.testing.expectEqual(@as(usize, 16), result.len);
+
+    // Output should be different from input
+    var different = false;
+    for (0..@min(input.len, result.len)) |i| {
+        if (!input[i].eql(result[i])) {
+            different = true;
+            break;
+        }
+    }
+    try std.testing.expect(different);
+}
+
+test "poseidon2 field-native: deterministic" {
+    const allocator = std.testing.allocator;
+    var hasher = try Poseidon2.init(allocator);
+    defer hasher.deinit();
+
+    var input: [7]FieldElement = undefined;
+    for (0..7) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i * 123));
+    }
+
+    const result1 = try hasher.hashFieldElements(allocator, &input, 7);
+    defer allocator.free(result1);
+
+    const result2 = try hasher.hashFieldElements(allocator, &input, 7);
+    defer allocator.free(result2);
+
+    // Same input should produce same output
+    for (result1, result2) |r1, r2| {
+        try std.testing.expect(r1.eql(r2));
+    }
 }
