@@ -260,7 +260,7 @@ pub const Poseidon2 = struct {
 
         // Convert field elements to u32 array
         var state: [width]u32 = std.mem.zeroes([width]u32);
-        
+
         // Copy input field elements to state (up to width)
         const input_len = @min(input.len, width);
         for (0..input_len) |i| {

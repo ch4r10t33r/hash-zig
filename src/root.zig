@@ -14,8 +14,11 @@ pub const prf = @import("prf.zig");
 pub const encoding = @import("encoding.zig");
 pub const tweakable_hash = @import("tweakable_hash.zig");
 pub const winternitz = @import("winternitz.zig");
+pub const winternitz_native = @import("winternitz_native.zig");
 pub const merkle = @import("merkle.zig");
+pub const merkle_native = @import("merkle_native.zig");
 pub const signature = @import("signature.zig");
+pub const signature_native = @import("signature_native.zig");
 
 // Note: SIMD implementations (simd_signature, simd_winternitz, etc.) are available
 // as separate modules in build.zig. Access them via:
@@ -38,8 +41,11 @@ pub const ShakePRF = prf.ShakePRF;
 pub const IncomparableEncoding = encoding.IncomparableEncoding;
 pub const TweakableHash = tweakable_hash.TweakableHash;
 pub const WinternitzOTS = winternitz.WinternitzOTS;
+pub const WinternitzOTSNative = winternitz_native.WinternitzOTSNative;
 pub const MerkleTree = merkle.MerkleTree;
+pub const MerkleTreeNative = merkle_native.MerkleTreeNative;
 pub const HashSignature = signature.HashSignature;
+pub const HashSignatureNative = signature_native.HashSignatureNative;
 
 // Export modules for testing
 pub const chacha12_rng = @import("chacha12_rng.zig");

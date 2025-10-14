@@ -52,6 +52,10 @@ pub const Parameters = struct {
     hash_output_len: u32,
     key_lifetime: KeyLifetime,
 
+    // Field-native parameters (for Rust compatibility)
+    chain_hash_output_len_fe: usize, // Number of field elements in chain hash output (7 for KoalaBear)
+    tree_hash_output_len_fe: usize, // Number of field elements in tree hash output (1 for KoalaBear)
+
     /// Initialize with Poseidon2 hash function (default)
     /// Parameters to match Rust hash-sig implementation:
     /// - 22 chains of length 256 (w=8) for 128-bit security
@@ -72,6 +76,9 @@ pub const Parameters = struct {
             .num_chains = 22, // Total: 20 message + 2 checksum = 22
             .hash_output_len = 32, // 256-bit output for 128-bit security
             .key_lifetime = key_lifetime,
+            // Field-native parameters (matching Rust hash-sig)
+            .chain_hash_output_len_fe = 7, // 7 KoalaBear field elements for chain hashes
+            .tree_hash_output_len_fe = 1, // 1 KoalaBear field element for tree hashes
         };
     }
 
@@ -91,6 +98,9 @@ pub const Parameters = struct {
             .num_chains = 64,
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
+            // Field-native parameters (not used for SHA3)
+            .chain_hash_output_len_fe = 0,
+            .tree_hash_output_len_fe = 0,
         };
     }
 
@@ -111,6 +121,9 @@ pub const Parameters = struct {
             .num_chains = 64, // Total: 60 + 4 = 64
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
+            // Field-native parameters (for Poseidon2)
+            .chain_hash_output_len_fe = 7,
+            .tree_hash_output_len_fe = 1,
         };
     }
 

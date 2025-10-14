@@ -17,15 +17,15 @@ pub const PoseidonTweak = union(enum) {
 
     /// Tweak for Merkle tree node hashing
     pub const TreeTweak = struct {
-        level: u8,           // Level in the tree (0 = leaves, height = root)
-        pos_in_level: u32,   // Position within the level
+        level: u8, // Level in the tree (0 = leaves, height = root)
+        pos_in_level: u32, // Position within the level
     };
 
     /// Tweak for Winternitz hash chain iteration
     pub const ChainTweak = struct {
-        epoch: u32,          // Which signature (leaf index)
-        chain_index: u8,     // Which chain (0..21 for w=8)
-        pos_in_chain: u8,    // Position in the chain (0..255 for w=8)
+        epoch: u32, // Which signature (leaf index)
+        chain_index: u8, // Which chain (0..21 for w=8)
+        pos_in_chain: u8, // Position in the chain (0..255 for w=8)
     };
 
     /// Convert tweak to field elements
@@ -63,7 +63,7 @@ pub const PoseidonTweak = union(enum) {
 
         for (&result) |*fe| {
             const digit = remaining % FieldElement.PRIME;
-            fe.* = FieldElement.fromU64(digit);
+            fe.* = FieldElement.fromU64(@intCast(digit));
             remaining /= FieldElement.PRIME;
         }
 
@@ -211,4 +211,3 @@ test "tweak: different positions produce different tweaks" {
     // Different positions should produce different field elements
     try std.testing.expect(!fes0[0].eql(fes1[0]) or !fes0[1].eql(fes1[1]));
 }
-
