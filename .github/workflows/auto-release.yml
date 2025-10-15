@@ -26,6 +26,13 @@ jobs:
         with:
           version: 0.14.1
       
+      - name: Clear Zig cache and fetch dependencies
+        run: |
+          echo "Clearing Zig cache and fetching dependencies..."
+          rm -rf ~/.cache/zig
+          zig fetch --save https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          echo "Dependencies fetched successfully"
+      
       - name: Read VERSION file
         id: get_version
         run: |

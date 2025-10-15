@@ -25,6 +25,13 @@ jobs:
       - name: Verify Zig installation
         run: zig version
       
+      - name: Clear Zig cache and fetch dependencies
+        run: |
+          echo "Clearing Zig cache and fetching dependencies..."
+          rm -rf ~/.cache/zig
+          zig fetch --save https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          echo "Dependencies fetched successfully"
+      
       - name: Build with optimizations
         run: |
           echo "Building with ReleaseFast optimizations..."
