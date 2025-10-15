@@ -33,7 +33,8 @@ jobs:
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
           rm -rf ~/.cache/zig
-          zig fetch --save https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          rm -rf .zig-cache
+          zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
           echo "Dependencies fetched successfully"
       
       - name: Run lint (zig fmt --check)
@@ -89,7 +90,8 @@ jobs:
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
           rm -rf ~/.cache/zig
-          zig fetch --save https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          rm -rf .zig-cache
+          zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
           echo "Dependencies fetched successfully"
       
       - name: Run Rust compatibility tests (CRITICAL)
@@ -130,7 +132,8 @@ jobs:
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
           rm -rf ~/.cache/zig
-          zig fetch --save https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          rm -rf .zig-cache
+          zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
           echo "Dependencies fetched successfully"
       
       - name: Build library (verify cross-platform compilation)
@@ -155,7 +158,8 @@ jobs:
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
           rm -rf ~/.cache/zig
-          zig fetch --save https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          rm -rf .zig-cache
+          zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
           echo "Dependencies fetched successfully"
       
       - name: Build library
