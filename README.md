@@ -162,15 +162,6 @@ The hash-zig library includes several built-in programs for demonstration, testi
 **Command**: `zig build benchmark`
 **Description**: Runs standardized performance tests across different key lifetimes (2^10 and 2^16). Measures key generation (with on-demand key derivation from PRF), signing (with encoding randomness), and verification times with detailed metrics. Outputs results in CI-friendly format for automated testing. Uses the Rust-compatible implementation.
 
-### SIMD Benchmark (`hash-zig-simd-benchmark`)
-**Purpose**: Tests SIMD-optimized implementations
-**Command**: `zig build simd-benchmark`
-**Description**: Benchmarks SIMD-optimized versions of the hash-based signature scheme. Tests both 2^10 and 2^16 lifetimes with SIMD acceleration. Useful for measuring performance with vectorization. Uses the same Rust-compatible architecture as the standard implementation but with SIMD optimizations.
-
-### Implementation Comparison (`hash-zig-compare`)
-**Purpose**: Compare Standard vs SIMD implementations
-**Command**: `zig build compare`
-**Description**: Compares the performance and correctness of the standard (scalar) vs SIMD implementations. Both use identical Rust-compatible architecture (PRF-based key derivation, epoch management, encoding randomness) and hypercube parameters (64 chains × 8 length). Shows performance speedups from SIMD optimizations and verifies public key consistency.
 
 ### Building All Programs
 ```bash
@@ -178,10 +169,9 @@ The hash-zig library includes several built-in programs for demonstration, testi
 zig build
 
 # Run specific programs
-zig build example         # Basic usage demo (Rust-compatible)
+zig build example         # Basic usage demo (byte-based)
+zig build example-native  # Field-native (Rust-compatible) demo
 zig build benchmark       # Standard benchmark
-zig build simd-benchmark  # SIMD benchmark
-zig build compare         # Compare Standard vs SIMD
 ```
 
 ### Program Outputs
@@ -346,27 +336,43 @@ Both hash functions provide 128-bit post-quantum security with 32-byte (256-bit)
 ```
 hash-zig/
 ├── src/
-│   ├── root.zig              # Main module entry point
-│   ├── params.zig            # Configuration and parameters
-│   ├── poseidon2/
-│   │   ├── fields/
-│   │   │   ├── generic_montgomery.zig   # Generic 31-bit Montgomery arithmetic
-│   │   │   └── koalabear/montgomery.zig # KoalaBear field instance
-│   │   ├── instances/koalabear16.zig    # Width-16 Poseidon2 instance (plonky3 constants)
-│   │   ├── poseidon2.zig                # Rust-compatible Poseidon2 implementation
-│   │   └── generic_poseidon2.zig        # Generic Poseidon2 constructor (Montgomery)
-│   ├── sha3.zig              # SHA3 hash implementation
-│   ├── encoding.zig          # Incomparable encodings
-│   ├── tweakable_hash.zig    # Domain-separated hashing
-│   ├── winternitz.zig        # Winternitz OTS
-│   ├── merkle.zig            # Merkle tree construction
-│   └── signature.zig         # Main signature scheme
+│   ├── root.zig                  # Main module entry point (public API)
+│   ├── core/                     # Core types and parameters
+│   │   ├── params.zig
+│   │   ├── field.zig
+│   │   └── mod.zig
+│   ├── hash/                     # Hash functions and tweaks
+│   │   ├── poseidon2_hash.zig    # Uses external zig-poseidon dependency
+│   │   ├── sha3.zig
+│   │   ├── tweak.zig
+│   │   ├── tweakable_hash.zig
+│   │   └── mod.zig
+│   ├── prf/                      # PRF and RNG
+│   │   ├── prf.zig
+│   │   ├── chacha12_rng.zig
+│   │   └── mod.zig
+│   ├── encoding/                 # Encodings
+│   │   ├── encoding.zig
+│   │   └── mod.zig
+│   ├── merkle/                   # Merkle trees (byte- and field-native)
+│   │   ├── merkle.zig
+│   │   ├── merkle_native.zig
+│   │   └── mod.zig
+│   ├── wots/                     # Winternitz OTS (byte- and field-native)
+│   │   ├── winternitz.zig
+│   │   ├── winternitz_native.zig
+│   │   └── mod.zig
+│   └── signature/                # Signature schemes (byte- and field-native)
+│       ├── signature.zig
+│       ├── signature_native.zig
+│       └── mod.zig
 ├── examples/
-│   └── basic_usage.zig
-├── test/
-│   └── integration_test.zig
+│   ├── basic_usage.zig
+│   └── basic_usage_native.zig
 └── build.zig
 ```
+
+Note: Poseidon2 is provided by the external dependency `zig-poseidon`. There is no longer a local `poseidon2/` directory in this repository.
 
 ### Key Components (Matching Rust Implementation)
 
