@@ -376,8 +376,8 @@ pub const HashSignatureNative = struct {
         return result;
     }
 
-    /// Memory-efficient root computation for large trees
-    /// Builds the tree level by level, only keeping current and previous level in memory
+    /// Ultra memory-efficient root computation for very large trees
+    /// Uses a recursive approach that only keeps minimal state in memory
     fn computeRootOnly(
         _: *HashSignatureNative,
         allocator: Allocator,
@@ -386,19 +386,25 @@ pub const HashSignatureNative = struct {
         prf_key: *const [32]u8,
         num_leaves: usize,
     ) ![]FieldElement {
-        // For very large trees, we'll use a streaming approach
-        // Process leaves in batches and build tree level by level
+        // For extremely large trees (2^18), we use a different approach:
+        // Instead of storing all leaves, we compute the root recursively
+        // This trades CPU time for memory usage
         
-        // Step 1: Generate leaves in batches to avoid massive memory allocation
-        var current_level = try allocator.alloc([]FieldElement, num_leaves);
-        defer {
-            for (current_level) |node| allocator.free(node);
-            allocator.free(current_level);
-        }
-
-        // Generate all leaves (this is still memory intensive but manageable)
-        for (0..num_leaves) |i| {
-            const epoch = @as(u32, @intCast(i));
+        return try computeRootRecursive(allocator, param_wots, prf_key, 0, num_leaves - 1, 0);
+    }
+    
+    /// Recursive root computation that doesn't store intermediate nodes
+    fn computeRootRecursive(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        prf_key: *const [32]u8,
+        start_idx: usize,
+        end_idx: usize,
+        level: u8,
+    ) ![]FieldElement {
+        if (start_idx == end_idx) {
+            // Base case: single leaf - generate the leaf hash
+            const epoch = @as(u32, @intCast(start_idx));
 
             // Generate private key (field elements)
             const sk = try param_wots.generatePrivateKey(allocator, prf_key, epoch);
@@ -414,71 +420,49 @@ pub const HashSignatureNative = struct {
             // Hash full OTS public key to produce tree leaf
             const leaf_tweak = @import("tweak.zig").PoseidonTweak{
                 .tree_tweak = .{
-                    .level = 0, // Leaf level
-                    .pos_in_level = @intCast(i),
+                    .level = level,
+                    .pos_in_level = @intCast(start_idx),
                 },
             };
 
-            const leaf_hash = try param_wots.hash.hashFieldElements(
+            return try param_wots.hash.hashFieldElements(
                 allocator,
                 pk,
                 leaf_tweak,
                 7, // 7 field elements output (HASH_LEN_FE in Rust)
             );
-            current_level[i] = leaf_hash;
-        }
-
-        // Step 2: Build tree level by level, only keeping 2 levels in memory
-        var current_len = num_leaves;
-        while (current_len > 1) {
-            const next_len = (current_len + 1) / 2;
-            var next_level = try allocator.alloc([]FieldElement, next_len);
-            
-            // Compute next level from current level
-            for (0..next_len) |i| {
-                const left_idx = i * 2;
-                const right_idx = left_idx + 1;
-                
-                if (right_idx < current_len) {
-                    // Both children exist
-                    const left_child = current_level[left_idx];
-                    const right_child = current_level[right_idx];
-                    
-                    // Combine children
-                    const combined = try allocator.alloc(FieldElement, left_child.len + right_child.len);
-                    defer allocator.free(combined);
-                    @memcpy(combined[0..left_child.len], left_child);
-                    @memcpy(combined[left_child.len..], right_child);
-                    
-                    // Hash the combined node
-                    const node_tweak = @import("tweak.zig").PoseidonTweak{
-                        .tree_tweak = .{
-                            .level = 1, // Internal node level
-                            .pos_in_level = @intCast(i),
-                        },
-                    };
-                    
-                    next_level[i] = try param_wots.hash.hashFieldElements(
-                        allocator,
-                        combined,
-                        node_tweak,
-                        7, // 7 field elements output
-                    );
-                } else {
-                    // Only left child exists (odd number of nodes)
-                    next_level[i] = try allocator.dupe(FieldElement, current_level[left_idx]);
-                }
-            }
-            
-            // Free previous level and move to next
-            for (current_level) |node| allocator.free(node);
-            allocator.free(current_level);
-            current_level = next_level;
-            current_len = next_len;
         }
         
-        // Return the root (single remaining node)
-        return current_level[0];
+        // Recursive case: combine two subtrees
+        const mid_idx = (start_idx + end_idx) / 2;
+        
+        // Compute left and right subtrees recursively
+        const left_child = try computeRootRecursive(allocator, param_wots, prf_key, start_idx, mid_idx, level + 1);
+        defer allocator.free(left_child);
+        
+        const right_child = try computeRootRecursive(allocator, param_wots, prf_key, mid_idx + 1, end_idx, level + 1);
+        defer allocator.free(right_child);
+        
+        // Combine children
+        const combined = try allocator.alloc(FieldElement, left_child.len + right_child.len);
+        defer allocator.free(combined);
+        @memcpy(combined[0..left_child.len], left_child);
+        @memcpy(combined[left_child.len..], right_child);
+        
+        // Hash the combined node
+        const node_tweak = @import("tweak.zig").PoseidonTweak{
+            .tree_tweak = .{
+                .level = level,
+                .pos_in_level = @intCast(start_idx / 2), // Approximate position
+            },
+        };
+        
+        return try param_wots.hash.hashFieldElements(
+            allocator,
+            combined,
+            node_tweak,
+            7, // 7 field elements output
+        );
     }
 
     /// Traditional tree building for smaller trees (fallback)
