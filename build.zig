@@ -159,42 +159,9 @@ pub fn build(b: *std.Build) void {
     const debug_native_full_exe_step = b.step("debug-native-full", "Full debug output for native implementation");
     debug_native_full_exe_step.dependOn(&run_debug_native_full_exe.step);
 
-    // Test Poseidon2 raw executable module
-    const test_poseidon2_raw_module = b.createModule(.{
-        .root_source_file = b.path("examples/test_poseidon2_raw.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_poseidon2_raw_module.addImport("hash-zig", hash_zig_module);
-    test_poseidon2_raw_module.addImport("poseidon", poseidon_mod);
+    // Test Poseidon2 raw executable module - REMOVED (file doesn't exist)
 
-    const test_poseidon2_raw_exe = b.addExecutable(.{
-        .name = "test-poseidon2-raw",
-        .root_module = test_poseidon2_raw_module,
-    });
-    b.installArtifact(test_poseidon2_raw_exe);
-
-    const run_test_poseidon2_raw_exe = b.addRunArtifact(test_poseidon2_raw_exe);
-    const test_poseidon2_raw_exe_step = b.step("test-poseidon2-raw", "Test raw Poseidon2 permutation");
-    test_poseidon2_raw_exe_step.dependOn(&run_test_poseidon2_raw_exe.step);
-
-    // Test parameter generation executable module
-    const test_param_gen_module = b.createModule(.{
-        .root_source_file = b.path("examples/test_parameter_gen.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_param_gen_module.addImport("hash-zig", hash_zig_module);
-
-    const test_param_gen_exe = b.addExecutable(.{
-        .name = "test-parameter-gen",
-        .root_module = test_param_gen_module,
-    });
-    b.installArtifact(test_param_gen_exe);
-
-    const run_test_param_gen_exe = b.addRunArtifact(test_param_gen_exe);
-    const test_param_gen_exe_step = b.step("test-parameter-gen", "Test parameter generation");
-    test_param_gen_exe_step.dependOn(&run_test_param_gen_exe.step);
+    // Test parameter generation executable module - REMOVED (file doesn't exist)
 
     // Quick compat test (lifetime 2^10)
     const quick_compat_module = b.createModule(.{
@@ -232,23 +199,7 @@ pub fn build(b: *std.Build) void {
     const verify_p2_24_exe_step = b.step("verify-p2-24", "Verify Poseidon2-24 against plonky3");
     verify_p2_24_exe_step.dependOn(&run_verify_p2_24_exe.step);
 
-    // Test P2-24 basic executable module
-    const test_p2_24_basic_module = b.createModule(.{
-        .root_source_file = b.path("examples/test_p2_24_basic.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_p2_24_basic_module.addImport("poseidon", poseidon_mod);
-
-    const test_p2_24_basic_exe = b.addExecutable(.{
-        .name = "test-p2-24-basic",
-        .root_module = test_p2_24_basic_module,
-    });
-    b.installArtifact(test_p2_24_basic_exe);
-
-    const run_test_p2_24_basic_exe = b.addRunArtifact(test_p2_24_basic_exe);
-    const test_p2_24_basic_exe_step = b.step("test-p2-24-basic", "Test Poseidon2-24 basic functionality");
-    test_p2_24_basic_exe_step.dependOn(&run_test_p2_24_basic_exe.step);
+    // Test P2-24 basic executable module - REMOVED (file doesn't exist)
 
     // Simple debug executable module
     const simple_debug_module = b.createModule(.{
@@ -286,23 +237,7 @@ pub fn build(b: *std.Build) void {
     const trace_keygen_exe_step = b.step("trace-keygen", "Complete key generation trace");
     trace_keygen_exe_step.dependOn(&run_trace_keygen_exe.step);
 
-    // Test domain separator executable module
-    const test_domain_sep_module = b.createModule(.{
-        .root_source_file = b.path("examples/test_domain_sep.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_domain_sep_module.addImport("hash-zig", hash_zig_module);
-
-    const test_domain_sep_exe = b.addExecutable(.{
-        .name = "test-domain-sep",
-        .root_module = test_domain_sep_module,
-    });
-    b.installArtifact(test_domain_sep_exe);
-
-    const run_test_domain_sep_exe = b.addRunArtifact(test_domain_sep_exe);
-    const test_domain_sep_exe_step = b.step("test-domain-sep", "Test domain separator computation");
-    test_domain_sep_exe_step.dependOn(&run_test_domain_sep_exe.step);
+    // Test domain separator executable module - REMOVED (file doesn't exist)
 
     // Run step (alias for example)
     const run_step = b.step("run", "Run the example application");
