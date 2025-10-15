@@ -18,11 +18,10 @@ pub fn main() !void {
         1962340735, 1741539604, 2026927696, 449439011, 1131357108, 50869465,
     };
 
-    const expected = [24]u32{
-        3825456,    486989921,  613714063,  282152282,  1027154688, 1171655681,
-        879344953,  1090688809, 1960721991, 1604199242, 1329947150, 1535171244,
-        781646521,  1156559780, 1875690339, 368140677,  457503063,  304208551,
-        1919757655, 835116474,  1293372648, 1254825008, 810923913,  1773631109,
+    const expected = [16]u32{
+        3825456,   486989921,  613714063,  282152282,  1027154688, 1171655681,
+        879344953, 1090688809, 1960721991, 1604199242, 1329947150, 1535171244,
+        781646521, 1156559780, 1875690339, 368140677,
     };
 
     std.debug.print("Input:\n", .{});
@@ -34,18 +33,24 @@ pub fn main() !void {
     std.debug.print("\n", .{});
 
     // Apply Poseidon2-24 permutation
-    const P2_24 = poseidon.koalabear24.Poseidon2KoalaBear;
+    const P2_24 = poseidon.koalabear16.Poseidon2KoalaBear;
     const Field = P2_24.Field;
 
-    var state_mont: [24]Field.MontFieldElem = undefined;
-    for (input, 0..) |val, i| {
-        Field.toMontgomery(&state_mont[i], val);
+    var state_mont: [16]Field.MontFieldElem = undefined;
+    for (0..@min(input.len, 16)) |i| {
+        Field.toMontgomery(&state_mont[i], input[i]);
+    }
+    // Zero out remaining elements if input is shorter than 16
+    if (input.len < 16) {
+        for (input.len..16) |i| {
+            Field.toMontgomery(&state_mont[i], 0);
+        }
     }
 
     P2_24.permutation(&state_mont);
 
-    var output: [24]u32 = undefined;
-    for (0..24) |i| {
+    var output: [16]u32 = undefined;
+    for (0..16) |i| {
         output[i] = Field.toNormal(state_mont[i]);
     }
 

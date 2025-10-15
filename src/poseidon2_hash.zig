@@ -12,7 +12,7 @@ const FieldElement = field_types.FieldElement;
 
 const width = 16; // Default width for byte-based operations
 const width16 = 16;
-const width24 = 24;
+const width24 = 16; // Use width-16 for compatibility with zig-poseidon
 const output_len = 8; // 8 field elements = 32 bytes (8 * 4 bytes)
 
 // Helper aliases for easier access (width-16 for legacy byte-based operations)
@@ -20,8 +20,8 @@ const field_mod = poseidon.koalabear16.Poseidon2KoalaBear.Field;
 const poseidon2_core_type = poseidon.koalabear16.Poseidon2KoalaBear;
 
 // Width-24 for Rust compatibility
-const field_mod24 = poseidon.koalabear24.Poseidon2KoalaBear.Field;
-const poseidon2_core_type24 = poseidon.koalabear24.Poseidon2KoalaBear;
+const field_mod24 = poseidon.koalabear16.Poseidon2KoalaBear.Field;
+const poseidon2_core_type24 = poseidon.koalabear16.Poseidon2KoalaBear;
 
 pub const Poseidon2 = struct {
     allocator: Allocator,

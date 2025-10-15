@@ -5,12 +5,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
 
-    // Get the poseidon dependency
-    const poseidon_dep = b.dependency("poseidon", .{
+    // Get the zig-poseidon dependency
+    const zig_poseidon_dep = b.dependency("zig_poseidon", .{
         .target = target,
         .optimize = optimize,
     });
-    const poseidon_mod = poseidon_dep.module("poseidon");
+    const poseidon_mod = zig_poseidon_dep.module("poseidon");
 
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
