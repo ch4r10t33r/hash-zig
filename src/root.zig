@@ -4,21 +4,14 @@
 //! and incomparable encodings, based on the framework from
 //! https://eprint.iacr.org/2025/055.pdf
 
-// Re-export all public APIs
-pub const params = @import("params.zig");
-pub const field = @import("field.zig");
-pub const tweak = @import("tweak.zig");
-pub const poseidon2_hash = @import("poseidon2_hash.zig");
-pub const sha3 = @import("sha3.zig");
-pub const prf = @import("prf.zig");
-pub const encoding = @import("encoding.zig");
-pub const tweakable_hash = @import("tweakable_hash.zig");
-pub const winternitz = @import("winternitz.zig");
-pub const winternitz_native = @import("winternitz_native.zig");
-pub const merkle = @import("merkle.zig");
-pub const merkle_native = @import("merkle_native.zig");
-pub const signature = @import("signature.zig");
-pub const signature_native = @import("signature_native.zig");
+// Re-export all public APIs via submodules
+pub const core = @import("core/mod.zig");
+pub const hash = @import("hash/mod.zig");
+pub const prf = @import("prf/mod.zig");
+pub const encoding = @import("encoding/mod.zig");
+pub const wots = @import("wots/mod.zig");
+pub const merkle = @import("merkle/mod.zig");
+pub const signature = @import("signature/mod.zig");
 
 // Note: SIMD implementations (simd_signature, simd_winternitz, etc.) are available
 // as separate modules in build.zig. Access them via:
@@ -26,29 +19,29 @@ pub const signature_native = @import("signature_native.zig");
 // They are not re-exported here to avoid module conflicts.
 
 // Convenience exports
-pub const SecurityLevel = params.SecurityLevel;
-pub const Parameters = params.Parameters;
-pub const HashFunction = params.HashFunction;
-pub const EncodingType = params.EncodingType;
-pub const FieldElement = field.FieldElement;
-pub const KoalaBearField = field.KoalaBearField;
-pub const PoseidonTweak = tweak.PoseidonTweak;
+pub const SecurityLevel = core.SecurityLevel;
+pub const Parameters = core.Parameters;
+pub const HashFunction = core.HashFunction;
+pub const EncodingType = core.EncodingType;
+pub const FieldElement = core.FieldElement;
+pub const KoalaBearField = core.KoalaBearField;
+pub const PoseidonTweak = hash.PoseidonTweak;
 
 // Primary hash implementations
-pub const Poseidon2 = poseidon2_hash.Poseidon2;
-pub const Sha3 = sha3.Sha3;
+pub const Poseidon2 = hash.Poseidon2;
+pub const Sha3 = hash.Sha3;
 pub const ShakePRF = prf.ShakePRF;
 pub const IncomparableEncoding = encoding.IncomparableEncoding;
-pub const TweakableHash = tweakable_hash.TweakableHash;
-pub const WinternitzOTS = winternitz.WinternitzOTS;
-pub const WinternitzOTSNative = winternitz_native.WinternitzOTSNative;
+pub const TweakableHash = hash.TweakableHash;
+pub const WinternitzOTS = wots.WinternitzOTS;
+pub const WinternitzOTSNative = wots.WinternitzOTSNative;
 pub const MerkleTree = merkle.MerkleTree;
-pub const MerkleTreeNative = merkle_native.MerkleTreeNative;
+pub const MerkleTreeNative = merkle.MerkleTreeNative;
 pub const HashSignature = signature.HashSignature;
-pub const HashSignatureNative = signature_native.HashSignatureNative;
+pub const HashSignatureNative = signature.HashSignatureNative;
 
 // Export modules for testing
-pub const chacha12_rng = @import("chacha12_rng.zig");
+pub const chacha12_rng = @import("prf/chacha12_rng.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
