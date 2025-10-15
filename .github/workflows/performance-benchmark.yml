@@ -28,9 +28,14 @@ jobs:
       - name: Clear Zig cache and fetch dependencies
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
+          # Clear all possible cache locations
           rm -rf ~/.cache/zig
           rm -rf .zig-cache
+          rm -rf /tmp/zig-*
+          # Force fetch with explicit name
           zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          # Verify the dependency was fetched
+          ls -la ~/.cache/zig/p/ || echo "No cache directory found"
           echo "Dependencies fetched successfully"
       
       - name: Build with optimizations
