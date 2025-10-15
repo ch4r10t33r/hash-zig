@@ -63,6 +63,8 @@ Add to your `build.zig.zon`:
 }
 ```
 
+**Note**: hash-zig depends on [zig-poseidon v0.2.0](https://github.com/blockblaz/zig-poseidon) for Poseidon2 hash function implementation.
+
 In your `build.zig`:
 
 ```zig
@@ -82,6 +84,25 @@ cd hash-zig
 zig build test
 ```
 
+## 🎯 Recommended Implementation
+
+**For maximum compatibility and portability with Rust implementations, use the field-native version:**
+
+```zig
+// ✅ RECOMMENDED: Field-native implementation (Rust-compatible)
+const params = hash_zig.Parameters.init(.lifetime_2_10);
+var sig_scheme = try hash_zig.HashSignatureNative.init(allocator, params);
+```
+
+**Why field-native?**
+- ✅ **100% Rust Compatibility**: Matches [hash-sig](https://github.com/b-wagn/hash-sig) byte-for-byte
+- ✅ **Cross-Implementation Interop**: Signatures can be verified by Rust implementations
+- ✅ **Derandomized Signing**: Compatible with latest hash-sig changes (PR #87)
+- ✅ **7-FE Merkle Trees**: Uses same tree structure as Rust (7 field elements per node)
+- ✅ **Future-Proof**: Automatically compatible with Rust updates
+
+**Legacy byte-based implementation** is available for Zig-specific use cases but lacks Rust compatibility.
+
 ## ⚡ Quick Start
 
 ```zig
@@ -93,10 +114,10 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Initialize with medium lifetime (2^16 signatures)
+    // Initialize with Poseidon2 parameters (Rust-compatible, field-native)
     // Only 128-bit security is supported
-    const params = hash_zig.Parameters.initHypercube(.lifetime_2_16);
-    var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
+    const params = hash_zig.Parameters.init(.lifetime_2_10);
+    var sig_scheme = try hash_zig.HashSignatureNative.init(allocator, params);
     defer sig_scheme.deinit();
 
     // Generate a random seed for key generation (32 bytes required)
@@ -112,15 +133,12 @@ pub fn main() !void {
     const message = "Hello, hash-based signatures!";
     const epoch: u64 = 0; // YOUR APP must track this and never reuse!
     
-    // RNG seed for encoding randomness (rho)
-    var rng_seed: [32]u8 = undefined;
-    std.crypto.random.bytes(&rng_seed);
-    
-    var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, epoch, &rng_seed);
-defer signature.deinit(allocator);
+    // Field-native implementation uses derandomized signing (no rng_seed needed)
+    var signature = try sig_scheme.sign(allocator, &keypair.secret_key, message, epoch);
+    defer signature.deinit(allocator);
 
     // Verify signature
-    const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
+    const is_valid = try sig_scheme.verify(allocator, &keypair.public_key, message, &signature);
     std.debug.print("Signature valid: {}\n", .{is_valid});
 }
 ```
@@ -130,9 +148,14 @@ defer signature.deinit(allocator);
 The hash-zig library includes several built-in programs for demonstration, testing, and performance analysis:
 
 ### Basic Example (`hash-zig-example`)
-**Purpose**: Demonstrates basic usage of the hash-zig library
+**Purpose**: Demonstrates basic usage of the hash-zig library (byte-based)
 **Command**: `zig build example` or `zig build run`
-**Description**: Shows how to generate keypairs, sign messages, and verify signatures using the Rust-compatible implementation. Includes timing measurements, displays key information (PRF key, tree structure, epoch management), and demonstrates encoding randomness. Perfect for understanding the library's core functionality.
+**Description**: Shows how to generate keypairs, sign messages, and verify signatures using the byte-based implementation. Includes timing measurements, displays key information (PRF key, tree structure, epoch management), and demonstrates encoding randomness.
+
+### Field-Native Example (`hash-zig-example-native`)
+**Purpose**: Demonstrates Rust-compatible field-native implementation
+**Command**: `zig build example-native`
+**Description**: Shows how to generate keypairs, sign messages, and verify signatures using the field-native implementation with 7-FE Merkle trees. This is the **recommended implementation** for Rust compatibility and cross-implementation interoperability.
 
 ### Performance Benchmark (`hash-zig-benchmark`)
 **Purpose**: Comprehensive performance benchmarking
@@ -714,6 +737,23 @@ See `.github/workflows/ci.yml` for details.
 
 **Note:** The project currently requires Zig 0.14.1 because zlinter only supports the 0.14.x branch. Once zlinter adds support for Zig 0.15+, we'll update to the latest version.
 
+## 🔄 Recent Updates
+
+### v0.1.0 - 100% Rust Compatibility Achieved ✅
+
+**Major Changes:**
+- **7-FE Merkle Trees**: Migrated to 7 field elements per tree node (matching Rust's `HASH_LEN_FE`)
+- **Derandomized Signing**: Field-native implementation compatible with [hash-sig PR #87](https://github.com/b-wagn/hash-sig/pull/87)
+- **zig-poseidon v0.2.0**: Updated to latest Poseidon2 implementation with KoalaBear field support
+- **3D Tree Structure**: Full tree storage as `[][][]FieldElement` (levels → nodes → elements)
+- **Cross-Implementation Verified**: All primitives match Rust hash-sig byte-for-byte
+
+**Compatibility Status:**
+- ✅ **Field-native implementation**: 100% compatible with latest hash-sig
+- ⚠️ **Byte-based implementation**: Legacy support, not compatible with PR #87
+
+**Recommendation**: Use `HashSignatureNative` for all new projects requiring Rust compatibility.
+
 ## 🐛 Known Issues
 
 - Large tree generation (2^28+) requires significant time and memory resources
@@ -727,6 +767,7 @@ Apache License 2.0 - see [LICENSE](LICENSE) file.
 ## 🙏 Acknowledgments
 - Inspired by [Rust implementation](https://github.com/b-wagn/hash-sig)
 - Framework from [hash-sig paper](https://eprint.iacr.org/2025/055.pdf)
+- Poseidon2 implementation from [zig-poseidon](https://github.com/blockblaz/zig-poseidon)
 - Poseidon2 spec from [Poseidon2 paper](https://eprint.iacr.org/2023/323.pdf)
 
 ## 📧 Contact
