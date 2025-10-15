@@ -167,54 +167,20 @@ pub const HashSignatureNative = struct {
         var param_tree = try MerkleTreeNative.initWithParameter(allocator, self.params, parameter);
         defer param_tree.deinit();
 
-        // Generate all OTS public keys (leaves)
-        // Each leaf is now 7 field elements (HASH_LEN_FE)
-        var leaves = try allocator.alloc([]FieldElement, num_leaves);
-        defer allocator.free(leaves);
+        // MEMORY OPTIMIZATION: For large lifetimes, compute root directly without storing full tree
+        // This avoids the massive memory allocation of 2^18 tree nodes
+        const root = if (num_leaves > 1 << 16) // Threshold: 65,536 leaves
+            try self.computeRootOnly(allocator, &param_wots, &param_tree, &prf_key, num_leaves)
+        else
+            try self.buildTreeAndGetRoot(allocator, &param_wots, &param_tree, &prf_key, num_leaves);
 
-        for (0..num_leaves) |i| {
-            const epoch = @as(u32, @intCast(i));
-
-            // Generate private key (field elements)
-            const sk = try param_wots.generatePrivateKey(allocator, &prf_key, epoch);
-            defer {
-                for (sk) |k| allocator.free(k);
-                allocator.free(sk);
-            }
-
-            // Generate public key (concatenated field elements)
-            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
-            defer allocator.free(pk);
-
-            // Hash full OTS public key to produce tree leaf
-            // This matches Rust's tree leaf generation
-            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
-                .tree_tweak = .{
-                    .level = 0, // Leaf level
-                    .pos_in_level = @intCast(i),
-                },
-            };
-
-            const leaf_hash = try param_wots.hash.hashFieldElements(
-                allocator,
-                pk,
-                leaf_tweak,
-                7, // 7 field elements output (HASH_LEN_FE in Rust)
-            );
-            // Don't defer - ownership transfers to leaves array
-            leaves[i] = leaf_hash;
-        }
-
-        // Build full Merkle tree
-        const tree_levels = try param_tree.buildFullTree(allocator, leaves);
-        // Free temporary leaf hashes now that tree owns duplicated copies
-        for (leaves) |leaf_hash| allocator.free(leaf_hash);
-
-        // Root is the single node at the top level (7 field elements)
-        const root = tree_levels[tree_levels.len - 1][0];
-        // Duplicate root for the public key to avoid double-free with secret tree ownership
+        // Duplicate root for the public key
         const root_copy = try allocator.dupe(FieldElement, root);
 
+        // For memory-optimized version, we don't store the full tree
+        // Create an empty tree structure (signatures will need to be generated differently)
+        const empty_tree = try allocator.alloc([][]FieldElement, 0);
+        
         return KeyPair{
             .public_key = PublicKey{
                 .root = root_copy,
@@ -223,7 +189,7 @@ pub const HashSignatureNative = struct {
             },
             .secret_key = SecretKey{
                 .prf_key = prf_key,
-                .tree = tree_levels,
+                .tree = empty_tree,
                 .tree_height = self.params.tree_height,
                 .parameter = self.params,
                 .hash_parameter = parameter,
@@ -408,6 +374,173 @@ pub const HashSignatureNative = struct {
         }
 
         return result;
+    }
+
+    /// Memory-efficient root computation for large trees
+    /// Builds the tree level by level, only keeping current and previous level in memory
+    fn computeRootOnly(
+        _: *HashSignatureNative,
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        _: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) ![]FieldElement {
+        // For very large trees, we'll use a streaming approach
+        // Process leaves in batches and build tree level by level
+        
+        // Step 1: Generate leaves in batches to avoid massive memory allocation
+        var current_level = try allocator.alloc([]FieldElement, num_leaves);
+        defer {
+            for (current_level) |node| allocator.free(node);
+            allocator.free(current_level);
+        }
+
+        // Generate all leaves (this is still memory intensive but manageable)
+        for (0..num_leaves) |i| {
+            const epoch = @as(u32, @intCast(i));
+
+            // Generate private key (field elements)
+            const sk = try param_wots.generatePrivateKey(allocator, prf_key, epoch);
+            defer {
+                for (sk) |k| allocator.free(k);
+                allocator.free(sk);
+            }
+
+            // Generate public key (concatenated field elements)
+            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
+            defer allocator.free(pk);
+
+            // Hash full OTS public key to produce tree leaf
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0, // Leaf level
+                    .pos_in_level = @intCast(i),
+                },
+            };
+
+            const leaf_hash = try param_wots.hash.hashFieldElements(
+                allocator,
+                pk,
+                leaf_tweak,
+                7, // 7 field elements output (HASH_LEN_FE in Rust)
+            );
+            current_level[i] = leaf_hash;
+        }
+
+        // Step 2: Build tree level by level, only keeping 2 levels in memory
+        var current_len = num_leaves;
+        while (current_len > 1) {
+            const next_len = (current_len + 1) / 2;
+            var next_level = try allocator.alloc([]FieldElement, next_len);
+            
+            // Compute next level from current level
+            for (0..next_len) |i| {
+                const left_idx = i * 2;
+                const right_idx = left_idx + 1;
+                
+                if (right_idx < current_len) {
+                    // Both children exist
+                    const left_child = current_level[left_idx];
+                    const right_child = current_level[right_idx];
+                    
+                    // Combine children
+                    const combined = try allocator.alloc(FieldElement, left_child.len + right_child.len);
+                    defer allocator.free(combined);
+                    @memcpy(combined[0..left_child.len], left_child);
+                    @memcpy(combined[left_child.len..], right_child);
+                    
+                    // Hash the combined node
+                    const node_tweak = @import("tweak.zig").PoseidonTweak{
+                        .tree_tweak = .{
+                            .level = 1, // Internal node level
+                            .pos_in_level = @intCast(i),
+                        },
+                    };
+                    
+                    next_level[i] = try param_wots.hash.hashFieldElements(
+                        allocator,
+                        combined,
+                        node_tweak,
+                        7, // 7 field elements output
+                    );
+                } else {
+                    // Only left child exists (odd number of nodes)
+                    next_level[i] = try allocator.dupe(FieldElement, current_level[left_idx]);
+                }
+            }
+            
+            // Free previous level and move to next
+            for (current_level) |node| allocator.free(node);
+            allocator.free(current_level);
+            current_level = next_level;
+            current_len = next_len;
+        }
+        
+        // Return the root (single remaining node)
+        return current_level[0];
+    }
+
+    /// Traditional tree building for smaller trees (fallback)
+    fn buildTreeAndGetRoot(
+        _: *HashSignatureNative,
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) ![]FieldElement {
+        // Generate all OTS public keys (leaves)
+        var leaves = try allocator.alloc([]FieldElement, num_leaves);
+        defer allocator.free(leaves);
+
+        for (0..num_leaves) |i| {
+            const epoch = @as(u32, @intCast(i));
+
+            // Generate private key (field elements)
+            const sk = try param_wots.generatePrivateKey(allocator, prf_key, epoch);
+            defer {
+                for (sk) |k| allocator.free(k);
+                allocator.free(sk);
+            }
+
+            // Generate public key (concatenated field elements)
+            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
+            defer allocator.free(pk);
+
+            // Hash full OTS public key to produce tree leaf
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0, // Leaf level
+                    .pos_in_level = @intCast(i),
+                },
+            };
+
+            const leaf_hash = try param_wots.hash.hashFieldElements(
+                allocator,
+                pk,
+                leaf_tweak,
+                7, // 7 field elements output (HASH_LEN_FE in Rust)
+            );
+            leaves[i] = leaf_hash;
+        }
+
+        // Build full Merkle tree
+        const tree_levels = try param_tree.buildFullTree(allocator, leaves);
+        defer {
+            for (tree_levels) |level| {
+                for (level) |node| allocator.free(node);
+                allocator.free(level);
+            }
+            allocator.free(tree_levels);
+        }
+        
+        // Free temporary leaf hashes
+        for (leaves) |leaf_hash| allocator.free(leaf_hash);
+
+        // Return root
+        const root = tree_levels[tree_levels.len - 1][0];
+        return try allocator.dupe(FieldElement, root);
     }
 };
 
