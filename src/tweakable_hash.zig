@@ -5,11 +5,15 @@ const params = @import("params.zig");
 const poseidon2_mod = @import("poseidon2_hash.zig");
 const sha3_mod = @import("sha3.zig");
 const prf_mod = @import("prf.zig");
+const field_types = @import("field.zig");
+const tweak_types = @import("tweak.zig");
 const Parameters = params.Parameters;
 const HashFunction = params.HashFunction;
 const Poseidon2 = poseidon2_mod.Poseidon2;
 const Sha3 = sha3_mod.Sha3;
 const ShakePRF = prf_mod.ShakePRF;
+const FieldElement = field_types.FieldElement;
+const PoseidonTweak = tweak_types.PoseidonTweak;
 const Allocator = std.mem.Allocator;
 
 const HashImpl = union(enum) {
@@ -21,8 +25,19 @@ pub const TweakableHash = struct {
     params: Parameters,
     hash_impl: HashImpl,
     allocator: Allocator,
+    parameter: [5]FieldElement, // Random parameter (Rust compatibility)
 
     pub fn init(allocator: Allocator, parameters: Parameters) !TweakableHash {
+        // Default: use zero parameter for backward compatibility
+        const zero_param = [_]FieldElement{FieldElement.zero()} ** 5;
+        return initWithParameter(allocator, parameters, zero_param);
+    }
+
+    pub fn initWithParameter(
+        allocator: Allocator,
+        parameters: Parameters,
+        parameter: [5]FieldElement,
+    ) !TweakableHash {
         const hash_impl = switch (parameters.hash_function) {
             .poseidon2 => blk: {
                 const poseidon_instance = try Poseidon2.init(allocator);
@@ -38,6 +53,7 @@ pub const TweakableHash = struct {
             .params = parameters,
             .hash_impl = hash_impl,
             .allocator = allocator,
+            .parameter = parameter,
         };
     }
 
@@ -109,6 +125,98 @@ pub const TweakableHash = struct {
             },
         };
     }
+
+    // ========================================================================
+    // Field-Native Operations (for Rust compatibility)
+    // ========================================================================
+
+    /// Hash field elements with a Poseidon tweak (field-native version)
+    /// This matches Rust's TweakableHash implementation
+    /// Only works with Poseidon2 hash function
+    pub fn hashFieldElements(
+        self: *TweakableHash,
+        allocator: Allocator,
+        input: []const FieldElement,
+        tweak: PoseidonTweak,
+        comptime output_len: usize,
+    ) ![]FieldElement {
+        // Only Poseidon2 supports field-native operations
+        if (self.params.hash_function != .poseidon2) {
+            return error.FieldNativeNotSupported;
+        }
+
+        // Convert tweak to field elements (TWEAK_LEN_FE = 2 in Rust)
+        const tweak_fes = tweak.toFieldElements(2);
+
+        // Combine parameter + tweak + input into state (matching Rust)
+        // State layout: [param[0..5], tweak[0..2], input[0..N]]
+        const state_size = 5 + 2 + input.len; // param_len + tweak_len + input_len
+        var state = try allocator.alloc(FieldElement, state_size);
+        defer allocator.free(state);
+
+        // Copy parameter (5 elements)
+        @memcpy(state[0..5], &self.parameter);
+
+        // Copy tweak field elements (2 elements)
+        state[5] = tweak_fes[0];
+        state[6] = tweak_fes[1];
+
+        // Copy input field elements
+        @memcpy(state[7..][0..input.len], input);
+
+        // Select hash mode based on input length (matching Rust)
+        return switch (self.hash_impl) {
+            .poseidon2 => |*p| {
+                // Rust uses 3 modes:
+                // 1. Single element: Poseidon2-16 compress
+                // 2. Two elements: Poseidon2-24 compress
+                // 3. Many elements (>2): Poseidon2-24 sponge
+                if (input.len == 1) {
+                    // Mode 1: Chain hashing (single field element array)
+                    return try p.compress(allocator, state, output_len);
+                } else if (input.len == 2) {
+                    // Mode 2: Tree node merging (two field element arrays)
+                    return try p.compress24(allocator, state, output_len);
+                } else {
+                    // Mode 3: Leaf generation (many field element arrays)
+                    // CRITICAL: NUM_CHUNKS is the number of Domain elements, not total field elements!
+                    // In Rust: message.len() where message is Vec<[F; HASH_LEN]>
+                    // In Zig: input.len / HASH_LEN_FE (e.g., 154 / 7 = 22)
+                    const hash_len_fe = output_len; // HASH_LEN_FE = 7 for our instantiation
+                    const num_chunks = input.len / hash_len_fe;
+
+                    // Compute domain separator from lengths (matches Rust)
+                    const lengths = [4]u32{
+                        5, // PARAMETER_LEN
+                        2, // TWEAK_LEN_FE
+                        @intCast(num_chunks), // NUM_CHUNKS = number of Domain arrays (22 for W8)
+                        @intCast(output_len), // HASH_LEN_FE (7)
+                    };
+
+                    const capacity_value = try poseidon2_mod.Poseidon2.domainSeparator(allocator, lengths, 9); // CAPACITY = 9
+                    defer allocator.free(capacity_value);
+
+                    // For sponge, input is: parameter + tweak + flattened_input
+                    return try p.sponge24(allocator, capacity_value, state, output_len);
+                }
+            },
+            .sha3 => error.FieldNativeNotSupported,
+        };
+    }
+
+    /// PRF-based hash using SHAKE-128, returning field elements
+    /// This generates pseudorandom field elements for Winternitz chains
+    pub fn prfHashFieldElements(
+        self: *TweakableHash,
+        allocator: Allocator,
+        key: []const u8,
+        epoch: u32,
+        chain_index: usize,
+        num_elements: usize,
+    ) ![]FieldElement {
+        _ = self; // PRF is independent of hash function choice
+        return ShakePRF.getDomainElementsNative(allocator, key, epoch, chain_index, num_elements);
+    }
 };
 
 test "tweakable hash different tweaks poseidon2" {
@@ -142,4 +250,110 @@ test "tweakable hash different tweaks sha3" {
     defer allocator.free(hash2);
 
     try std.testing.expect(!std.mem.eql(u8, hash1, hash2));
+}
+
+test "tweakable hash field-native: hash field elements" {
+    const allocator = std.testing.allocator;
+    const parameters = Parameters.init(.lifetime_2_16);
+    var hash = try TweakableHash.init(allocator, parameters);
+    defer hash.deinit();
+
+    // Create test input
+    var input: [4]FieldElement = undefined;
+    for (0..4) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i + 1));
+    }
+
+    // Create tree tweak
+    const tweak = PoseidonTweak{ .tree_tweak = .{
+        .level = 1,
+        .pos_in_level = 0,
+    } };
+
+    // Hash field elements
+    const result = try hash.hashFieldElements(allocator, &input, tweak, 1);
+    defer allocator.free(result);
+
+    // Result should have 1 element
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+
+    // Result should be non-zero
+    try std.testing.expect(result[0].value != 0);
+}
+
+test "tweakable hash field-native: different tweaks produce different hashes" {
+    const allocator = std.testing.allocator;
+    const parameters = Parameters.init(.lifetime_2_16);
+    var hash = try TweakableHash.init(allocator, parameters);
+    defer hash.deinit();
+
+    // Create test input
+    var input: [4]FieldElement = undefined;
+    for (0..4) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i + 1));
+    }
+
+    // Create two different tweaks
+    const tweak1 = PoseidonTweak{ .tree_tweak = .{
+        .level = 1,
+        .pos_in_level = 0,
+    } };
+
+    const tweak2 = PoseidonTweak{ .tree_tweak = .{
+        .level = 1,
+        .pos_in_level = 1,
+    } };
+
+    // Hash with both tweaks
+    const result1 = try hash.hashFieldElements(allocator, &input, tweak1, 1);
+    defer allocator.free(result1);
+    const result2 = try hash.hashFieldElements(allocator, &input, tweak2, 1);
+    defer allocator.free(result2);
+
+    // Results should be different
+    try std.testing.expect(result1[0].value != result2[0].value);
+}
+
+test "tweakable hash field-native: prf hash field elements" {
+    const allocator = std.testing.allocator;
+    const parameters = Parameters.init(.lifetime_2_16);
+    var hash = try TweakableHash.init(allocator, parameters);
+    defer hash.deinit();
+
+    const key = "test_key_32_bytes_long_padded";
+    const epoch: u32 = 0;
+    const chain_index: usize = 0;
+    const num_elements: usize = 7;
+
+    const result = try hash.prfHashFieldElements(allocator, key, epoch, chain_index, num_elements);
+    defer allocator.free(result);
+
+    // Should have 7 elements
+    try std.testing.expectEqual(@as(usize, 7), result.len);
+
+    // All elements should be non-zero
+    for (result) |elem| {
+        try std.testing.expect(elem.value != 0);
+    }
+}
+
+test "tweakable hash field-native: sha3 not supported" {
+    const allocator = std.testing.allocator;
+    const parameters = Parameters.initWithSha3(.lifetime_2_16);
+    var hash = try TweakableHash.init(allocator, parameters);
+    defer hash.deinit();
+
+    var input: [4]FieldElement = undefined;
+    for (0..4) |i| {
+        input[i] = FieldElement.fromU32(@intCast(i + 1));
+    }
+
+    const tweak = PoseidonTweak{ .tree_tweak = .{
+        .level = 1,
+        .pos_in_level = 0,
+    } };
+
+    // Should return error for SHA3
+    const result = hash.hashFieldElements(allocator, &input, tweak, 1);
+    try std.testing.expectError(error.FieldNativeNotSupported, result);
 }
