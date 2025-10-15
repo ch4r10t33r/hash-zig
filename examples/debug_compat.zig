@@ -19,7 +19,7 @@ pub fn main() !void {
 
     var seed: [32]u8 = undefined;
     @memset(&seed, 0x42);
-    
+
     var prf_key: [32]u8 = undefined;
     var rng = hash_zig.chacha12_rng.init(seed);
     rng.fill(&prf_key);
@@ -150,4 +150,3 @@ pub fn main() !void {
     std.debug.print("Compare these values with Rust implementation to find divergence point\n", .{});
     std.debug.print("=" ** 80 ++ "\n\n", .{});
 }
-
