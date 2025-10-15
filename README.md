@@ -4,16 +4,16 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements **Generalized XMSS** signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with **exact compatibility** with the [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation. Features include PRF-based key derivation, epoch management, encoding randomness, and full Merkle tree storage. Poseidon2 targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants).
+A pure Zig implementation of hash-based signatures using **Poseidon2** and **SHA3** with incomparable encodings. This library implements **Generalized XMSS** signatures based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), with **100% compatibility** with the [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation. Features include PRF-based key derivation, epoch management, derandomized signing, and full 7-FE Merkle tree storage. Poseidon2 targets the KoalaBear 31‑bit field with Montgomery arithmetic (compatible with plonky3 constants).
 
 ## 🌟 Features
 
 ### Rust Compatibility ✅
-- **Exact Rust Implementation Match**: Key structures, signatures, and API match [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation
+- **100% Rust Implementation Match**: Key structures, signatures, and API match [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation
 - **PRF-Based Key Derivation**: Derives OTS keys on-demand from a 32-byte PRF key (not storing all keys)
+- **Derandomized Signing**: Compatible with hash-sig [PR #87](https://github.com/b-wagn/hash-sig/pull/87) - no randomness required for signing
 - **Epoch Management**: Supports activation_epoch and num_active_epochs for flexible key lifetimes
-- **Encoding Randomness**: Includes `rho` (encoding randomness) in signatures for security
-- **Full Tree Storage**: Stores complete Merkle tree structure (all 2047 nodes for 1024 leaves) in secret key
+- **7-FE Merkle Trees**: Uses 7 field elements per tree node (matching Rust's HASH_LEN_FE)
 - **Self-Contained Keys**: Parameters stored in public and secret keys
 
 ### Hash Functions & Parameters
