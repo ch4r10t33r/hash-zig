@@ -27,12 +27,13 @@ jobs:
           version: 0.14.1
       
       - name: Clear Zig cache and regenerate dependency hash
+        shell: bash
         run: |
           echo "Clearing Zig cache and regenerating dependency hash..."
           # Clear all possible cache locations
-          rm -rf ~/.cache/zig
-          rm -rf .zig-cache
-          rm -rf /tmp/zig-*
+          rm -rf ~/.cache/zig || true
+          rm -rf .zig-cache || true
+          rm -rf /tmp/zig-* || true
           # Create a clean build.zig.zon without zig_poseidon dependency
           cp build.zig.zon build.zig.zon.backup
           awk '/zig_poseidon/{flag=1} flag && /}/ {flag=0; next} !flag' build.zig.zon > build.zig.zon.tmp && mv build.zig.zon.tmp build.zig.zon
