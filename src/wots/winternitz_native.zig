@@ -95,13 +95,8 @@ pub const WinternitzOTSNative = struct {
     };
 
     fn generateChainRange(context: *ChainGenContext, start: usize, end: usize) void {
-        // Create thread-local arena for this worker
-        var thread_arena = std.heap.ArenaAllocator.init(context.parent_allocator);
-        defer thread_arena.deinit();
-        const allocator = thread_arena.allocator();
-
         for (start..end) |i| {
-            var current = allocator.dupe(FieldElement, context.private_key[i]) catch |err| {
+            var current = context.parent_allocator.dupe(FieldElement, context.private_key[i]) catch |err| {
                 context.mutex.lock();
                 defer context.mutex.unlock();
                 context.errors[i] = err;
@@ -123,8 +118,9 @@ pub const WinternitzOTSNative = struct {
                 };
 
                 // Use hardcoded 7 for KoalaBear chain hash output (matches Rust)
+                // Use parent allocator for FieldElement allocations to avoid alignment issues
                 const next = context.wots.hash.hashFieldElements(
-                    allocator,
+                    context.parent_allocator,
                     current,
                     tweak,
                     7, // chain_hash_output_len_fe for KoalaBear
@@ -134,6 +130,7 @@ pub const WinternitzOTSNative = struct {
                     context.errors[i] = err;
                     return;
                 };
+                context.parent_allocator.free(current);
                 current = next;
             }
 
@@ -146,6 +143,9 @@ pub const WinternitzOTSNative = struct {
             };
             context.public_parts[i] = result;
             context.mutex.unlock();
+
+            // Free the current value since it's been copied to result
+            context.parent_allocator.free(current);
         }
     }
 

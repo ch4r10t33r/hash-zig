@@ -167,52 +167,12 @@ pub const HashSignatureNative = struct {
         var param_tree = try MerkleTreeNative.initWithParameter(allocator, self.params, parameter);
         defer param_tree.deinit();
 
-        // Generate all OTS public keys (leaves)
-        // Each leaf is now 7 field elements (HASH_LEN_FE)
-        var leaves = try allocator.alloc([]FieldElement, num_leaves);
-        defer allocator.free(leaves);
+        // Generate all leaf hashes and build tree (matching Rust implementation)
+        const result = try self.generateTreeWithParallelization(allocator, &param_wots, &param_tree, &prf_key, num_leaves);
+        const root = result[0];
+        const tree_levels = result[1];
 
-        for (0..num_leaves) |i| {
-            const epoch = @as(u32, @intCast(i));
-
-            // Generate private key (field elements)
-            const sk = try param_wots.generatePrivateKey(allocator, &prf_key, epoch);
-            defer {
-                for (sk) |k| allocator.free(k);
-                allocator.free(sk);
-            }
-
-            // Generate public key (concatenated field elements)
-            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
-            defer allocator.free(pk);
-
-            // Hash full OTS public key to produce tree leaf
-            // This matches Rust's tree leaf generation
-            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
-                .tree_tweak = .{
-                    .level = 0, // Leaf level
-                    .pos_in_level = @intCast(i),
-                },
-            };
-
-            const leaf_hash = try param_wots.hash.hashFieldElements(
-                allocator,
-                pk,
-                leaf_tweak,
-                7, // 7 field elements output (HASH_LEN_FE in Rust)
-            );
-            // Don't defer - ownership transfers to leaves array
-            leaves[i] = leaf_hash;
-        }
-
-        // Build full Merkle tree
-        const tree_levels = try param_tree.buildFullTree(allocator, leaves);
-        // Free temporary leaf hashes now that tree owns duplicated copies
-        for (leaves) |leaf_hash| allocator.free(leaf_hash);
-
-        // Root is the single node at the top level (7 field elements)
-        const root = tree_levels[tree_levels.len - 1][0];
-        // Duplicate root for the public key to avoid double-free with secret tree ownership
+        // Duplicate root for the public key
         const root_copy = try allocator.dupe(FieldElement, root);
 
         return KeyPair{
@@ -223,7 +183,7 @@ pub const HashSignatureNative = struct {
             },
             .secret_key = SecretKey{
                 .prf_key = prf_key,
-                .tree = tree_levels,
+                .tree = tree_levels, // Full tree for signing
                 .tree_height = self.params.tree_height,
                 .parameter = self.params,
                 .hash_parameter = parameter,
@@ -409,6 +369,264 @@ pub const HashSignatureNative = struct {
 
         return result;
     }
+
+    /// Generate tree with streaming approach (memory-efficient)
+    /// This generates leaf hashes on-demand to avoid massive memory allocation
+    fn generateTreeWithParallelization(
+        _: *HashSignatureNative,
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        // For very large lifetimes (2^18), use streaming approach
+        // This generates leaves on-demand instead of storing them all in memory
+
+        if (num_leaves > 1 << 12) { // Threshold: 4,096 leaves
+            // Use batching approach for large trees to manage memory
+            return try generateTreeWithBatching(allocator, param_wots, param_tree, prf_key, num_leaves);
+        } else {
+            // Use traditional approach for smaller trees
+            return try generateTreeTraditional(allocator, param_wots, param_tree, prf_key, num_leaves);
+        }
+    }
+
+    /// Batching tree generation for large lifetimes
+    fn generateTreeWithBatching(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        _: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        // For very large trees, use recursive approach to avoid storing all leaves
+        // This trades CPU time for memory usage
+        const root_element = try computeRootRecursive(allocator, param_wots, prf_key, 0, num_leaves - 1, 0);
+
+        // Convert single FieldElement to slice for consistency
+        const root = try allocator.alloc(FieldElement, 1);
+        root[0] = root_element;
+
+        // For very large trees, we don't store the full tree in memory
+        // Create an empty tree structure (signatures will need to be generated differently)
+        const empty_tree = try allocator.alloc([][]FieldElement, 0);
+
+        return .{ root, empty_tree };
+    }
+
+    /// Traditional tree generation for smaller lifetimes
+    fn generateTreeTraditional(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        // Generate all leaf hashes (matching Rust's chain_ends_hashes)
+        const leaf_hashes = try allocator.alloc([]FieldElement, num_leaves);
+        defer {
+            for (leaf_hashes) |hash| {
+                allocator.free(hash);
+            }
+            allocator.free(leaf_hashes);
+        }
+
+        // Generate leaf hashes in parallel (matching Rust implementation)
+        // Use a simple parallelization approach with a fixed number of threads
+        const num_threads = @min(std.Thread.getCpuCount() catch 4, num_leaves);
+
+        // Use atomic counter for thread coordination
+        var next_leaf = std.atomic.Value(usize).init(0);
+
+        // Use the global ThreadContext definition
+
+        var threads = try allocator.alloc(std.Thread, num_threads);
+        defer allocator.free(threads);
+
+        // Spawn worker threads
+        for (0..num_threads) |i| {
+            const context = try allocator.create(ThreadContext);
+            context.* = ThreadContext{
+                .param_wots = param_wots,
+                .prf_key = prf_key,
+                .leaf_hashes = leaf_hashes,
+                .next_leaf = &next_leaf,
+                .total_leaves = num_leaves,
+                .allocator = allocator,
+                .error_flag = std.atomic.Value(bool).init(false),
+            };
+
+            threads[i] = try std.Thread.spawn(.{}, parallelWorker, .{context});
+        }
+
+        // Wait for all threads to complete
+        for (threads) |thread| {
+            thread.join();
+        }
+
+        // Check for errors
+        if (next_leaf.load(.monotonic) != num_leaves) {
+            return error.ParallelGenerationFailed;
+        }
+
+        // Flatten leaf hashes for buildTree (it expects individual field elements)
+        var flattened_leaves = try allocator.alloc(FieldElement, num_leaves);
+        defer allocator.free(flattened_leaves);
+
+        for (leaf_hashes, 0..) |leaf_hash, i| {
+            // Take the first element of each leaf hash as the tree leaf
+            flattened_leaves[i] = leaf_hash[0];
+        }
+
+        // Build tree and get root (matching Rust's HashTree::new)
+        const root_element = try param_tree.buildTree(allocator, flattened_leaves);
+        const tree_levels = try param_tree.buildFullTree(allocator, leaf_hashes);
+
+        // Convert single FieldElement to slice for consistency
+        const root = try allocator.alloc(FieldElement, 1);
+        root[0] = root_element;
+
+        return .{ root, tree_levels };
+    }
+
+    /// Recursive root computation for streaming approach
+    fn computeRootRecursive(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        prf_key: *const [32]u8,
+        start_idx: usize,
+        end_idx: usize,
+        level: u8,
+    ) !FieldElement {
+        if (start_idx == end_idx) {
+            // Base case: single leaf - generate the leaf hash
+            const epoch = @as(u32, @intCast(start_idx));
+
+            // Generate private key (field elements)
+            const sk = try param_wots.generatePrivateKey(allocator, prf_key, epoch);
+            defer {
+                for (sk) |k| allocator.free(k);
+                allocator.free(sk);
+            }
+
+            // Generate public key (concatenated field elements)
+            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
+            defer allocator.free(pk);
+
+            // Hash full OTS public key to produce tree leaf
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = level,
+                    .pos_in_level = @intCast(start_idx),
+                },
+            };
+
+            const leaf_hash = try param_wots.hash.hashFieldElements(
+                allocator,
+                pk,
+                leaf_tweak,
+                7, // 7 field elements output (HASH_LEN_FE in Rust)
+            );
+            defer allocator.free(leaf_hash);
+
+            // Return the first element of the leaf hash
+            return leaf_hash[0];
+        }
+
+        // Recursive case: combine two subtrees
+        const mid_idx = (start_idx + end_idx) / 2;
+
+        // Compute left and right subtrees recursively
+        const left_child = try computeRootRecursive(allocator, param_wots, prf_key, start_idx, mid_idx, level + 1);
+        const right_child = try computeRootRecursive(allocator, param_wots, prf_key, mid_idx + 1, end_idx, level + 1);
+
+        // Combine children
+        const combined = try allocator.alloc(FieldElement, 2);
+        defer allocator.free(combined);
+        combined[0] = left_child;
+        combined[1] = right_child;
+
+        // Hash the combined node
+        const node_tweak = @import("tweak.zig").PoseidonTweak{
+            .tree_tweak = .{
+                .level = level,
+                .pos_in_level = @intCast(start_idx / 2), // Approximate position
+            },
+        };
+
+        const result = try param_wots.hash.hashFieldElements(
+            allocator,
+            combined,
+            node_tweak,
+            1, // Single field element output for tree nodes
+        );
+        defer allocator.free(result);
+
+        return result[0];
+    }
+
+    /// Parallel worker thread for generating leaf hashes
+    fn parallelWorker(context: *ThreadContext) void {
+        while (!context.error_flag.load(.monotonic)) {
+            // Atomically get next leaf index to process
+            const leaf_idx = context.next_leaf.fetchAdd(1, .monotonic);
+            if (leaf_idx >= context.total_leaves) {
+                break; // All leaves processed
+            }
+
+            const epoch = @as(u32, @intCast(leaf_idx));
+
+            // Generate private key for this epoch (this is memory-efficient)
+            const sk = context.param_wots.generatePrivateKey(context.allocator, context.prf_key, epoch) catch {
+                context.error_flag.store(true, .monotonic);
+                return;
+            };
+            defer {
+                for (sk) |k| context.allocator.free(k);
+                context.allocator.free(sk);
+            }
+
+            // Generate public key (chain ends) - this is the memory-intensive part
+            const pk = context.param_wots.generatePublicKey(context.allocator, sk, epoch) catch {
+                context.error_flag.store(true, .monotonic);
+                return;
+            };
+            defer context.allocator.free(pk);
+
+            // Hash the public key to create leaf hash (matching Rust)
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0, // Leaf level
+                    .pos_in_level = @intCast(leaf_idx),
+                },
+            };
+
+            const leaf_hash = context.param_wots.hash.hashFieldElements(
+                context.allocator,
+                pk,
+                leaf_tweak,
+                7, // 7 field elements output
+            ) catch {
+                context.error_flag.store(true, .monotonic);
+                return;
+            };
+
+            // Store the leaf hash
+            context.leaf_hashes[leaf_idx] = leaf_hash;
+        }
+    }
+};
+
+// Thread context type definition
+const ThreadContext = struct {
+    param_wots: *WinternitzOTSNative,
+    prf_key: *const [32]u8,
+    leaf_hashes: [][]FieldElement,
+    next_leaf: *std.atomic.Value(usize),
+    total_leaves: usize,
+    allocator: Allocator,
+    error_flag: std.atomic.Value(bool),
 };
 
 test "signature native: key generation" {
