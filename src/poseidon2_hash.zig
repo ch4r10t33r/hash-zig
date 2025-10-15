@@ -413,31 +413,76 @@ pub const Poseidon2 = struct {
         return result;
     }
 
+    /// Compute domain separator for sponge construction
+    /// Matches Rust's poseidon_safe_domain_separator
+    pub fn domainSeparator(
+        allocator: Allocator,
+        params: [4]u32,
+        comptime domain_output_len: usize,
+    ) ![]FieldElement {
+        // Combine params into u128 (params are: parameter_len, tweak_len, num_chunks, hash_len)
+        var acc: u128 = 0;
+        for (params) |param| {
+            acc = (acc << 32) | @as(u128, param);
+        }
+
+        // Decompose into base-p (field prime)
+        var input: [24]FieldElement = undefined;
+        for (0..24) |i| {
+            const digit = acc % @as(u128, FieldElement.PRIME);
+            acc /= @as(u128, FieldElement.PRIME);
+            input[i] = FieldElement.fromU64(@intCast(digit));
+        }
+
+        // Compress using P2-24 (need a temp Poseidon2 instance)
+        var p = try Poseidon2.init(allocator);
+        defer p.deinit();
+        return try p.compress24(allocator, &input, domain_output_len);
+    }
+
     /// Sponge construction using Poseidon2-24 (for many elements)
     /// This matches Rust's mode 3: hashing 22 chain ends into 1 leaf
     pub fn sponge24(
         self: *Poseidon2,
         allocator: Allocator,
+        capacity_value: []const FieldElement,
         input: []const FieldElement,
         comptime output_len_fe: usize,
     ) ![]FieldElement {
         _ = self;
 
-        const rate = 16; // Absorb rate for width-24
-        // const capacity = 8;  // Capacity (not directly used)
+        // Validate capacity fits in width-24
+        if (capacity_value.len >= width24) return error.CapacityTooLarge;
 
-        // Initialize state
+        const rate = width24 - capacity_value.len;
+
+        // Pad input to multiple of rate (Rust pads with zeros)
+        const extra_elements = (rate - (input.len % rate)) % rate;
+        var padded_input = try allocator.alloc(FieldElement, input.len + extra_elements);
+        defer allocator.free(padded_input);
+
+        @memcpy(padded_input[0..input.len], input);
+        for (input.len..padded_input.len) |i| {
+            padded_input[i] = FieldElement.zero();
+        }
+
+        // Initialize state: rate portion is zeros, capacity portion is capacity_value
         var state: [width24]u32 = std.mem.zeroes([width24]u32);
+        for (capacity_value, 0..) |cap_elem, i| {
+            state[rate + i] = cap_elem.toU32();
+        }
 
         // Absorbing phase
-        var offset: usize = 0;
-        while (offset < input.len) {
-            const chunk_len = @min(rate, input.len - offset);
+        for (0..padded_input.len / rate) |chunk_idx| {
+            const chunk_start = chunk_idx * rate;
+            const chunk = padded_input[chunk_start .. chunk_start + rate];
 
-            // XOR/add input into rate portion
-            for (0..chunk_len) |i| {
-                const val = input[offset + i].toU32();
-                state[i] = (state[i] + val) % @as(u32, @intCast(FieldElement.PRIME));
+            // Add chunk to rate portion (avoid u32 overflow by using u64)
+            for (chunk, 0..) |elem, i| {
+                const val_u32 = elem.toU32();
+                const sum_u64 = @as(u64, state[i]) + @as(u64, val_u32);
+                const reduced = sum_u64 % FieldElement.PRIME;
+                state[i] = @intCast(reduced);
             }
 
             // Permute
@@ -449,14 +494,31 @@ pub const Poseidon2 = struct {
             for (0..width24) |i| {
                 state[i] = field_mod24.toNormal(state_mont[i]);
             }
-
-            offset += chunk_len;
         }
 
         // Squeezing phase - extract from rate
         var result = try allocator.alloc(FieldElement, output_len_fe);
-        for (0..output_len_fe) |i| {
-            result[i] = FieldElement.fromU32(state[i]);
+        var out_idx: usize = 0;
+
+        while (out_idx < output_len_fe) {
+            // Extract from rate portion
+            const extract_len = @min(rate, output_len_fe - out_idx);
+            for (0..extract_len) |i| {
+                result[out_idx + i] = FieldElement.fromU32(state[i]);
+            }
+            out_idx += extract_len;
+
+            // If we need more output, permute again
+            if (out_idx < output_len_fe) {
+                var state_mont: [width24]field_mod24.MontFieldElem = undefined;
+                for (0..width24) |i| {
+                    field_mod24.toMontgomery(&state_mont[i], state[i]);
+                }
+                poseidon2_core_type24.permutation(&state_mont);
+                for (0..width24) |i| {
+                    state[i] = field_mod24.toNormal(state_mont[i]);
+                }
+            }
         }
 
         return result;

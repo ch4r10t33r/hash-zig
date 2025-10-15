@@ -25,7 +25,7 @@ pub const PoseidonTweak = union(enum) {
     pub const ChainTweak = struct {
         epoch: u32, // Which signature (leaf index)
         chain_index: u8, // Which chain (0..21 for w=8)
-        pos_in_chain: u8, // Position in the chain (0..255 for w=8)
+        pos_in_chain: u8, // Position in the chain (1..255 for w=8)
     };
 
     /// Convert tweak to field elements

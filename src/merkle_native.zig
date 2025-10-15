@@ -109,7 +109,7 @@ pub const MerkleTreeNative = struct {
     }
 
     /// Build Merkle tree from field element leaves
-    /// Returns the root as a single FieldElement
+    /// Returns the root as a single FieldElement (for backward compatibility)
     pub fn buildTree(self: *MerkleTreeNative, allocator: Allocator, leaves: []const FieldElement) !FieldElement {
         if (leaves.len == 0) return error.EmptyLeaves;
         if (leaves.len == 1) return leaves[0];
@@ -208,8 +208,8 @@ pub const MerkleTreeNative = struct {
     pub fn buildFullTree(
         self: *MerkleTreeNative,
         allocator: Allocator,
-        leaves: []const FieldElement,
-    ) ![][]FieldElement {
+        leaves: []const []FieldElement,
+    ) ![][][]FieldElement {
         if (leaves.len == 0) return error.EmptyLeaves;
 
         // Calculate number of levels
@@ -221,18 +221,23 @@ pub const MerkleTreeNative = struct {
             levels_needed += 1;
         }
 
-        // Allocate for all levels
-        var tree_levels = try allocator.alloc([]FieldElement, levels_needed);
+        // Allocate for all levels (3D: levels → nodes → elements)
+        var tree_levels = try allocator.alloc([][]FieldElement, levels_needed);
         errdefer {
             for (tree_levels) |level| {
-                if (level.len > 0) allocator.free(level);
+                for (level) |node| {
+                    allocator.free(node);
+                }
+                allocator.free(level);
             }
             allocator.free(tree_levels);
         }
 
-        // Copy leaves
-        tree_levels[0] = try allocator.alloc(FieldElement, num_leaves);
-        @memcpy(tree_levels[0], leaves);
+        // Copy leaves (each leaf is already a []FieldElement)
+        tree_levels[0] = try allocator.alloc([]FieldElement, num_leaves);
+        for (leaves, 0..) |leaf, i| {
+            tree_levels[0][i] = try allocator.dupe(FieldElement, leaf);
+        }
 
         var current_len = num_leaves;
         var level_num: u32 = 0;
@@ -240,38 +245,45 @@ pub const MerkleTreeNative = struct {
         // Build each level
         for (1..levels_needed) |level_idx| {
             const next_len = (current_len + 1) / 2;
-            tree_levels[level_idx] = try allocator.alloc(FieldElement, next_len);
-            @memset(tree_levels[level_idx], FieldElement.zero());
+            tree_levels[level_idx] = try allocator.alloc([]FieldElement, next_len);
 
             const current_level = tree_levels[level_idx - 1];
-            const next_level = tree_levels[level_idx];
 
             for (0..next_len) |i| {
                 const left_idx = i * 2;
                 const right_idx = left_idx + 1;
 
                 if (right_idx < current_len) {
+                    // Have both children - hash them
                     const left = current_level[left_idx];
                     const right = current_level[right_idx];
 
-                    var input = [2]FieldElement{ left, right };
+                    // Combine left and right (each is 7 FEs, total 14 FEs)
+                    var combined = try allocator.alloc(FieldElement, left.len + right.len);
+                    defer allocator.free(combined);
+                    @memcpy(combined[0..left.len], left);
+                    @memcpy(combined[left.len..], right);
 
                     const tweak = PoseidonTweak{ .tree_tweak = .{
                         .level = @intCast(level_num + 1),
                         .pos_in_level = @intCast(i),
                     } };
 
-                    const result = try self.hash.hashFieldElements(
+                    const parent = try self.hash.hashFieldElements(
                         allocator,
-                        &input,
+                        combined,
                         tweak,
-                        1,
+                        7, // 7 field elements output (HASH_LEN_FE)
                     );
-                    defer allocator.free(result);
-
-                    next_level[i] = result[0];
+                    // Don't defer - ownership transfers to tree
+                    tree_levels[level_idx][i] = parent;
+                } else if (left_idx < current_len) {
+                    // Odd node, copy up
+                    tree_levels[level_idx][i] = try allocator.dupe(FieldElement, current_level[left_idx]);
                 } else {
-                    next_level[i] = current_level[left_idx];
+                    // Shouldn't happen, but handle gracefully
+                    tree_levels[level_idx][i] = try allocator.alloc(FieldElement, 7);
+                    @memset(tree_levels[level_idx][i], FieldElement.zero());
                 }
             }
 
@@ -286,17 +298,22 @@ pub const MerkleTreeNative = struct {
     pub fn getAuthPath(
         self: *MerkleTreeNative,
         allocator: Allocator,
-        tree_levels: [][]const FieldElement,
+        tree_levels: [][][]const FieldElement,
         leaf_index: usize,
-    ) ![]FieldElement {
+    ) ![][]FieldElement {
         _ = self;
 
         if (tree_levels.len == 0) return error.EmptyTree;
         if (leaf_index >= tree_levels[0].len) return error.InvalidLeafIndex;
 
         const height = tree_levels.len - 1; // Exclude root level
-        var auth_path = try allocator.alloc(FieldElement, height);
-        errdefer allocator.free(auth_path);
+        var auth_path = try allocator.alloc([]FieldElement, height);
+        errdefer {
+            for (auth_path) |node| {
+                allocator.free(node);
+            }
+            allocator.free(auth_path);
+        }
 
         var current_idx = leaf_index;
 
@@ -305,10 +322,11 @@ pub const MerkleTreeNative = struct {
             const current_level = tree_levels[level];
 
             if (sibling_idx < current_level.len) {
-                auth_path[level] = current_level[sibling_idx];
+                // Copy the sibling node (7 FEs)
+                auth_path[level] = try allocator.dupe(FieldElement, current_level[sibling_idx]);
             } else {
                 // No sibling (odd node), use the node itself
-                auth_path[level] = current_level[current_idx];
+                auth_path[level] = try allocator.dupe(FieldElement, current_level[current_idx]);
             }
 
             current_idx /= 2;
@@ -321,14 +339,22 @@ pub const MerkleTreeNative = struct {
     pub fn verifyAuthPath(
         self: *MerkleTreeNative,
         allocator: Allocator,
-        leaf: FieldElement,
+        leaf: []const FieldElement,
         leaf_index: usize,
-        auth_path: []const FieldElement,
-        expected_root: FieldElement,
+        auth_path: []const []FieldElement,
+        expected_root: []const FieldElement,
     ) !bool {
-        if (auth_path.len == 0) return leaf.value == expected_root.value;
+        if (auth_path.len == 0) {
+            // Compare arrays element by element
+            if (leaf.len != expected_root.len) return false;
+            for (leaf, expected_root) |l, r| {
+                if (l.toU32() != r.toU32()) return false;
+            }
+            return true;
+        }
 
-        var current = leaf;
+        var current = try allocator.dupe(FieldElement, leaf);
+        defer allocator.free(current);
         var current_idx = leaf_index;
         var level_num: u32 = 0;
 
@@ -336,13 +362,16 @@ pub const MerkleTreeNative = struct {
             const is_left = (current_idx & 1) == 0;
             const pos_in_level = current_idx / 2;
 
-            var input: [2]FieldElement = undefined;
+            // Combine current and sibling (each is 7 FEs, total 14 FEs)
+            var combined = try allocator.alloc(FieldElement, current.len + sibling.len);
+            defer allocator.free(combined);
+
             if (is_left) {
-                input[0] = current;
-                input[1] = sibling;
+                @memcpy(combined[0..current.len], current);
+                @memcpy(combined[current.len..], sibling);
             } else {
-                input[0] = sibling;
-                input[1] = current;
+                @memcpy(combined[0..sibling.len], sibling);
+                @memcpy(combined[sibling.len..], current);
             }
 
             const tweak = PoseidonTweak{ .tree_tweak = .{
@@ -352,18 +381,25 @@ pub const MerkleTreeNative = struct {
 
             const result = try self.hash.hashFieldElements(
                 allocator,
-                &input,
+                combined,
                 tweak,
-                1,
+                7, // 7 field elements output (HASH_LEN_FE)
             );
-            defer allocator.free(result);
 
-            current = result[0];
+            // Update current for next iteration
+            allocator.free(current);
+            current = result;
             current_idx = pos_in_level;
             level_num += 1;
         }
 
-        return current.value == expected_root.value;
+        // Compare final result with expected root
+        if (current.len != expected_root.len) return false;
+        for (current, expected_root) |c, r| {
+            if (c.toU32() != r.toU32()) return false;
+        }
+        // current will be freed by defer
+        return true;
     }
 };
 
@@ -374,16 +410,34 @@ test "merkle native: build tree from leaves" {
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
 
-    // Create 4 leaves
-    var leaves: [4]FieldElement = undefined;
-    for (0..4) |i| {
-        leaves[i] = FieldElement.fromU32(@intCast(i + 1));
+    // Create 4 leaves (each leaf is 7 FEs)
+    var leaves = try allocator.alloc([]FieldElement, 4);
+    defer {
+        for (leaves) |leaf| allocator.free(leaf);
+        allocator.free(leaves);
     }
 
-    const root = try tree.buildTree(allocator, &leaves);
+    for (0..4) |i| {
+        leaves[i] = try allocator.alloc(FieldElement, 7);
+        for (0..7) |j| {
+            leaves[i][j] = FieldElement.fromU32(@intCast(i * 7 + j + 1));
+        }
+    }
 
-    // Root should be non-zero
-    try std.testing.expect(root.value != 0);
+    const tree_levels = try tree.buildFullTree(allocator, leaves);
+    defer {
+        for (tree_levels) |level| {
+            for (level) |node| allocator.free(node);
+            allocator.free(level);
+        }
+        allocator.free(tree_levels);
+    }
+
+    const root = tree_levels[tree_levels.len - 1][0];
+
+    // Root should be non-zero (check first element)
+    try std.testing.expect(root.len > 0);
+    try std.testing.expect(root[0].toU32() != 0);
 }
 
 test "merkle native: build full tree" {
@@ -393,15 +447,26 @@ test "merkle native: build full tree" {
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
 
-    // Create 8 leaves
-    var leaves: [8]FieldElement = undefined;
-    for (0..8) |i| {
-        leaves[i] = FieldElement.fromU32(@intCast(i + 1));
+    // Create 8 leaves (each leaf is 7 FEs)
+    var leaves = try allocator.alloc([]FieldElement, 8);
+    defer {
+        for (leaves) |leaf| allocator.free(leaf);
+        allocator.free(leaves);
     }
 
-    const tree_levels = try tree.buildFullTree(allocator, &leaves);
+    for (0..8) |i| {
+        leaves[i] = try allocator.alloc(FieldElement, 7);
+        for (0..7) |j| {
+            leaves[i][j] = FieldElement.fromU32(@intCast(i * 7 + j + 1));
+        }
+    }
+
+    const tree_levels = try tree.buildFullTree(allocator, leaves);
     defer {
-        for (tree_levels) |level| allocator.free(level);
+        for (tree_levels) |level| {
+            for (level) |node| allocator.free(node);
+            allocator.free(level);
+        }
         allocator.free(tree_levels);
     }
 
@@ -420,15 +485,26 @@ test "merkle native: auth path verification" {
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
 
-    // Create 8 leaves
-    var leaves: [8]FieldElement = undefined;
-    for (0..8) |i| {
-        leaves[i] = FieldElement.fromU32(@intCast(i + 1));
+    // Create 8 leaves (each leaf is 7 FEs)
+    var leaves = try allocator.alloc([]FieldElement, 8);
+    defer {
+        for (leaves) |leaf| allocator.free(leaf);
+        allocator.free(leaves);
     }
 
-    const tree_levels = try tree.buildFullTree(allocator, &leaves);
+    for (0..8) |i| {
+        leaves[i] = try allocator.alloc(FieldElement, 7);
+        for (0..7) |j| {
+            leaves[i][j] = FieldElement.fromU32(@intCast(i * 7 + j + 1));
+        }
+    }
+
+    const tree_levels = try tree.buildFullTree(allocator, leaves);
     defer {
-        for (tree_levels) |level| allocator.free(level);
+        for (tree_levels) |level| {
+            for (level) |node| allocator.free(node);
+            allocator.free(level);
+        }
         allocator.free(tree_levels);
     }
 
@@ -436,8 +512,11 @@ test "merkle native: auth path verification" {
 
     // Get auth path for leaf 3
     const leaf_idx: usize = 3;
-    const auth_path = try tree.getAuthPath(allocator, @ptrCast(tree_levels), leaf_idx);
-    defer allocator.free(auth_path);
+    const auth_path = try tree.getAuthPath(allocator, tree_levels, leaf_idx);
+    defer {
+        for (auth_path) |node| allocator.free(node);
+        allocator.free(auth_path);
+    }
 
     // Verify the leaf
     const is_valid = try tree.verifyAuthPath(
@@ -450,7 +529,10 @@ test "merkle native: auth path verification" {
     try std.testing.expect(is_valid);
 
     // Verify with wrong leaf should fail
-    const wrong_leaf = FieldElement.fromU32(999);
+    const wrong_leaf = try allocator.alloc(FieldElement, 7);
+    defer allocator.free(wrong_leaf);
+    @memset(wrong_leaf, FieldElement.fromU32(999));
+
     const is_invalid = try tree.verifyAuthPath(
         allocator,
         wrong_leaf,
@@ -468,15 +550,44 @@ test "merkle native: deterministic" {
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
 
-    // Create same leaves twice
-    var leaves: [8]FieldElement = undefined;
-    for (0..8) |i| {
-        leaves[i] = FieldElement.fromU32(@intCast(i + 42));
+    // Create same leaves twice (each leaf is 7 FEs)
+    var leaves = try allocator.alloc([]FieldElement, 8);
+    defer {
+        for (leaves) |leaf| allocator.free(leaf);
+        allocator.free(leaves);
     }
 
-    const root1 = try tree.buildTree(allocator, &leaves);
-    const root2 = try tree.buildTree(allocator, &leaves);
+    for (0..8) |i| {
+        leaves[i] = try allocator.alloc(FieldElement, 7);
+        for (0..7) |j| {
+            leaves[i][j] = FieldElement.fromU32(@intCast(i * 7 + j + 42));
+        }
+    }
+
+    const tree_levels1 = try tree.buildFullTree(allocator, leaves);
+    defer {
+        for (tree_levels1) |level| {
+            for (level) |node| allocator.free(node);
+            allocator.free(level);
+        }
+        allocator.free(tree_levels1);
+    }
+
+    const tree_levels2 = try tree.buildFullTree(allocator, leaves);
+    defer {
+        for (tree_levels2) |level| {
+            for (level) |node| allocator.free(node);
+            allocator.free(level);
+        }
+        allocator.free(tree_levels2);
+    }
+
+    const root1 = tree_levels1[tree_levels1.len - 1][0];
+    const root2 = tree_levels2[tree_levels2.len - 1][0];
 
     // Roots should be identical
-    try std.testing.expectEqual(root1.value, root2.value);
+    try std.testing.expect(root1.len == root2.len);
+    for (root1, root2) |r1, r2| {
+        try std.testing.expect(r1.toU32() == r2.toU32());
+    }
 }

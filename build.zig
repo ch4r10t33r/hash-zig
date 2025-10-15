@@ -250,6 +250,60 @@ pub fn build(b: *std.Build) void {
     const test_p2_24_basic_exe_step = b.step("test-p2-24-basic", "Test Poseidon2-24 basic functionality");
     test_p2_24_basic_exe_step.dependOn(&run_test_p2_24_basic_exe.step);
 
+    // Simple debug executable module
+    const simple_debug_module = b.createModule(.{
+        .root_source_file = b.path("examples/simple_debug.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    simple_debug_module.addImport("hash-zig", hash_zig_module);
+
+    const simple_debug_exe = b.addExecutable(.{
+        .name = "simple-debug",
+        .root_module = simple_debug_module,
+    });
+    b.installArtifact(simple_debug_exe);
+
+    const run_simple_debug_exe = b.addRunArtifact(simple_debug_exe);
+    const simple_debug_exe_step = b.step("simple-debug", "Simple debug output for first steps");
+    simple_debug_exe_step.dependOn(&run_simple_debug_exe.step);
+
+    // Trace keygen executable module
+    const trace_keygen_module = b.createModule(.{
+        .root_source_file = b.path("examples/trace_keygen.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    trace_keygen_module.addImport("hash-zig", hash_zig_module);
+
+    const trace_keygen_exe = b.addExecutable(.{
+        .name = "trace-keygen",
+        .root_module = trace_keygen_module,
+    });
+    b.installArtifact(trace_keygen_exe);
+
+    const run_trace_keygen_exe = b.addRunArtifact(trace_keygen_exe);
+    const trace_keygen_exe_step = b.step("trace-keygen", "Complete key generation trace");
+    trace_keygen_exe_step.dependOn(&run_trace_keygen_exe.step);
+
+    // Test domain separator executable module
+    const test_domain_sep_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_domain_sep.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_domain_sep_module.addImport("hash-zig", hash_zig_module);
+
+    const test_domain_sep_exe = b.addExecutable(.{
+        .name = "test-domain-sep",
+        .root_module = test_domain_sep_module,
+    });
+    b.installArtifact(test_domain_sep_exe);
+
+    const run_test_domain_sep_exe = b.addRunArtifact(test_domain_sep_exe);
+    const test_domain_sep_exe_step = b.step("test-domain-sep", "Test domain separator computation");
+    test_domain_sep_exe_step.dependOn(&run_test_domain_sep_exe.step);
+
     // Run step (alias for example)
     const run_step = b.step("run", "Run the example application");
     run_step.dependOn(&run_example.step);

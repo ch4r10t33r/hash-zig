@@ -43,18 +43,20 @@ pub const HashSignatureNative = struct {
 
     /// Public key - field-native version
     pub const PublicKey = struct {
-        root: FieldElement, // Merkle root (single field element)
+        root: []FieldElement, // Merkle root (7 field elements for Poseidon2)
         parameter: Parameters,
         hash_parameter: [5]FieldElement, // Random parameter for hash operations
 
         pub fn serialize(self: *const PublicKey, allocator: Allocator) ![]u8 {
-            // Serialize as: root (4 bytes for KoalaBear) + parameters (20 bytes)
+            // Serialize as: root (7 × 4 = 28 bytes) + hash_parameter (5 × 4 = 20 bytes) + params
             var buffer = std.ArrayList(u8).init(allocator);
             errdefer buffer.deinit();
 
-            // Root as field element (4 bytes, little-endian)
-            const root_bytes = self.root.toBytes();
-            try buffer.appendSlice(&root_bytes);
+            // Root as 7 field elements (28 bytes total, little-endian)
+            for (self.root) |elem| {
+                const bytes = elem.toBytes();
+                try buffer.appendSlice(&bytes);
+            }
 
             // Parameters (same as byte-based version)
             try buffer.append(@intFromEnum(self.parameter.security_level));
@@ -83,7 +85,7 @@ pub const HashSignatureNative = struct {
     /// Secret key - field-native version
     pub const SecretKey = struct {
         prf_key: [32]u8,
-        tree: [][]FieldElement, // Full tree: tree[level][index]
+        tree: [][][]FieldElement, // Full tree: tree[level][index][elements] (3D)
         tree_height: u32,
         parameter: Parameters,
         hash_parameter: [5]FieldElement, // Random parameter for hash operations
@@ -91,7 +93,10 @@ pub const HashSignatureNative = struct {
         num_active_epochs: u64,
 
         pub fn deinit(self: *SecretKey, allocator: Allocator) void {
-            for (self.tree) |level| allocator.free(level);
+            for (self.tree) |level| {
+                for (level) |node| allocator.free(node);
+                allocator.free(level);
+            }
             allocator.free(self.tree);
         }
     };
@@ -101,6 +106,7 @@ pub const HashSignatureNative = struct {
         secret_key: SecretKey,
 
         pub fn deinit(self: *KeyPair, allocator: Allocator) void {
+            allocator.free(self.public_key.root);
             self.secret_key.deinit(allocator);
         }
     };
@@ -108,13 +114,14 @@ pub const HashSignatureNative = struct {
     /// Signature - field-native version
     pub const Signature = struct {
         epoch: u64,
-        auth_path: []FieldElement, // Authentication path
+        auth_path: [][]FieldElement, // Authentication path (array of 7-FE nodes)
         rho: [32]u8, // Encoding randomness (not yet used)
         hashes: [][]FieldElement, // OTS signature
 
         pub fn deinit(self: *Signature, allocator: Allocator) void {
             for (self.hashes) |hash| allocator.free(hash);
             allocator.free(self.hashes);
+            for (self.auth_path) |node| allocator.free(node);
             allocator.free(self.auth_path);
         }
     };
@@ -161,7 +168,8 @@ pub const HashSignatureNative = struct {
         defer param_tree.deinit();
 
         // Generate all OTS public keys (leaves)
-        var leaves = try allocator.alloc(FieldElement, num_leaves);
+        // Each leaf is now 7 field elements (HASH_LEN_FE)
+        var leaves = try allocator.alloc([]FieldElement, num_leaves);
         defer allocator.free(leaves);
 
         for (0..num_leaves) |i| {
@@ -191,21 +199,25 @@ pub const HashSignatureNative = struct {
                 allocator,
                 pk,
                 leaf_tweak,
-                1, // Single field element output for tree node
+                7, // 7 field elements output (HASH_LEN_FE in Rust)
             );
-            defer allocator.free(leaf_hash);
-
-            leaves[i] = leaf_hash[0];
+            // Don't defer - ownership transfers to leaves array
+            leaves[i] = leaf_hash;
         }
 
         // Build full Merkle tree
         const tree_levels = try param_tree.buildFullTree(allocator, leaves);
+        // Free temporary leaf hashes now that tree owns duplicated copies
+        for (leaves) |leaf_hash| allocator.free(leaf_hash);
 
+        // Root is the single node at the top level (7 field elements)
         const root = tree_levels[tree_levels.len - 1][0];
+        // Duplicate root for the public key to avoid double-free with secret tree ownership
+        const root_copy = try allocator.dupe(FieldElement, root);
 
         return KeyPair{
             .public_key = PublicKey{
-                .root = root,
+                .root = root_copy,
                 .parameter = self.params,
                 .hash_parameter = parameter,
             },
@@ -259,7 +271,7 @@ pub const HashSignatureNative = struct {
         // Get authentication path from tree
         const auth_path = try self.tree.getAuthPath(
             allocator,
-            @ptrCast(secret_key.tree),
+            secret_key.tree,
             @intCast(epoch),
         );
 
@@ -318,16 +330,14 @@ pub const HashSignatureNative = struct {
             allocator,
             ots_pk,
             leaf_tweak,
-            1, // Single field element output for tree node
+            7, // 7 field elements output (HASH_LEN_FE in Rust)
         );
         defer allocator.free(leaf_hash);
-
-        const leaf = leaf_hash[0];
 
         // Verify Merkle path
         return param_tree.verifyAuthPath(
             allocator,
-            leaf,
+            leaf_hash,
             @intCast(signature.epoch),
             signature.auth_path,
             public_key.root,
@@ -363,12 +373,12 @@ pub const HashSignatureNative = struct {
             const target_pos = encoded[chain_idx];
             var current = try allocator.dupe(FieldElement, sig_part);
 
-            // Hash from target_pos to chain_len
-            for (target_pos..chain_len) |pos_in_chain| {
+            // Hash from target_pos to chain_len - 1 (positions are 1..255)
+            for (target_pos..chain_len - 1) |pos_in_chain| {
                 const tweak = @import("tweak.zig").PoseidonTweak{ .chain_tweak = .{
                     .epoch = epoch,
                     .chain_index = @intCast(chain_idx),
-                    .pos_in_chain = @intCast(pos_in_chain),
+                    .pos_in_chain = @intCast(@as(u8, @intCast(pos_in_chain + 1))),
                 } };
 
                 const next = try param_wots.hash.hashFieldElements(
@@ -420,8 +430,9 @@ test "signature native: key generation" {
     );
     defer keypair.deinit(allocator);
 
-    // Root should be non-zero
-    try std.testing.expect(keypair.public_key.root.value != 0);
+    // Root should be non-zero (check first element)
+    try std.testing.expect(keypair.public_key.root.len > 0);
+    try std.testing.expect(keypair.public_key.root[0].toU32() != 0);
 
     // Tree should have correct height + 1 levels
     const expected_levels = parameters.tree_height + 1;

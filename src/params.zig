@@ -77,8 +77,9 @@ pub const Parameters = struct {
             .hash_output_len = 32, // 256-bit output for 128-bit security
             .key_lifetime = key_lifetime,
             // Field-native parameters (matching Rust hash-sig)
+            // Both chain and tree use HASH_LEN_FE = 7 in Rust
             .chain_hash_output_len_fe = 7, // 7 KoalaBear field elements for chain hashes
-            .tree_hash_output_len_fe = 1, // 1 KoalaBear field element for tree hashes
+            .tree_hash_output_len_fe = 7, // 7 KoalaBear field elements for tree hashes (was 1, should be 7!)
         };
     }
 
@@ -122,8 +123,9 @@ pub const Parameters = struct {
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
             // Field-native parameters (for Poseidon2)
+            // Both chain and tree use HASH_LEN_FE = 7 in Rust
             .chain_hash_output_len_fe = 7,
-            .tree_hash_output_len_fe = 1,
+            .tree_hash_output_len_fe = 7, // Was 1, should be 7!
         };
     }
 

@@ -179,7 +179,25 @@ pub const TweakableHash = struct {
                     return try p.compress24(allocator, state, output_len);
                 } else {
                     // Mode 3: Leaf generation (many field element arrays)
-                    return try p.sponge24(allocator, state, output_len);
+                    // CRITICAL: NUM_CHUNKS is the number of Domain elements, not total field elements!
+                    // In Rust: message.len() where message is Vec<[F; HASH_LEN]>
+                    // In Zig: input.len / HASH_LEN_FE (e.g., 154 / 7 = 22)
+                    const hash_len_fe = output_len; // HASH_LEN_FE = 7 for our instantiation
+                    const num_chunks = input.len / hash_len_fe;
+
+                    // Compute domain separator from lengths (matches Rust)
+                    const lengths = [4]u32{
+                        5, // PARAMETER_LEN
+                        2, // TWEAK_LEN_FE
+                        @intCast(num_chunks), // NUM_CHUNKS = number of Domain arrays (22 for W8)
+                        @intCast(output_len), // HASH_LEN_FE (7)
+                    };
+
+                    const capacity_value = try poseidon2_mod.Poseidon2.domainSeparator(allocator, lengths, 9); // CAPACITY = 9
+                    defer allocator.free(capacity_value);
+
+                    // For sponge, input is: parameter + tweak + flattened_input
+                    return try p.sponge24(allocator, capacity_value, state, output_len);
                 }
             },
             .sha3 => error.FieldNativeNotSupported,

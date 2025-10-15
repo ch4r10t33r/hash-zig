@@ -108,14 +108,19 @@ pub const WinternitzOTSNative = struct {
                 return;
             };
 
-            // Iterate hash chain
-            for (0..context.chain_len) |pos_in_chain| {
+            // Iterate hash chain (chain_len - 1 iterations, matching Rust's "steps")
+            // Rust loops: for j in 0..steps where steps = chain_length - 1
+            // This gives positions: start_pos + j + 1 = 0 + j + 1 = 1..(chain_len)
+            for (0..context.chain_len - 1) |j| {
                 // Create chain tweak for this iteration
-                const tweak = PoseidonTweak{ .chain_tweak = .{
-                    .epoch = context.epoch,
-                    .chain_index = @intCast(i),
-                    .pos_in_chain = @intCast(pos_in_chain),
-                } };
+                // Position is 1-indexed: j=0 → pos=1, j=254 → pos=255 (for chain_len=256)
+                const tweak = PoseidonTweak{
+                    .chain_tweak = .{
+                        .epoch = context.epoch,
+                        .chain_index = @intCast(i),
+                        .pos_in_chain = @intCast(@as(u8, @intCast(j + 1))),
+                    },
+                };
 
                 // Use hardcoded 7 for KoalaBear chain hash output (matches Rust)
                 const next = context.wots.hash.hashFieldElements(
@@ -253,11 +258,14 @@ pub const WinternitzOTSNative = struct {
 
             // Hash chain from 0 to target_pos
             for (0..target_pos) |pos_in_chain| {
-                const tweak = PoseidonTweak{ .chain_tweak = .{
-                    .epoch = epoch,
-                    .chain_index = @intCast(chain_idx),
-                    .pos_in_chain = @intCast(pos_in_chain),
-                } };
+                // IMPORTANT: Rust uses 1-indexed positions in chain tweaks
+                const tweak = PoseidonTweak{
+                    .chain_tweak = .{
+                        .epoch = epoch,
+                        .chain_index = @intCast(chain_idx),
+                        .pos_in_chain = @intCast(@as(u8, @intCast(pos_in_chain + 1))),
+                    },
+                };
 
                 // Use hardcoded 7 for KoalaBear chain hash output (matches Rust)
                 const next = try self.hash.hashFieldElements(
@@ -306,12 +314,15 @@ pub const WinternitzOTSNative = struct {
             var current = try allocator.dupe(FieldElement, sig_part);
 
             // Hash from target_pos to chain_len
-            for (target_pos..chain_len) |pos_in_chain| {
-                const tweak = PoseidonTweak{ .chain_tweak = .{
-                    .epoch = epoch,
-                    .chain_index = @intCast(chain_idx),
-                    .pos_in_chain = @intCast(pos_in_chain),
-                } };
+            for (target_pos..chain_len - 1) |pos_in_chain| {
+                // IMPORTANT: Rust uses 1-indexed positions in chain tweaks
+                const tweak = PoseidonTweak{
+                    .chain_tweak = .{
+                        .epoch = epoch,
+                        .chain_index = @intCast(chain_idx),
+                        .pos_in_chain = @intCast(@as(u8, @intCast(pos_in_chain + 1))),
+                    },
+                };
 
                 // Use hardcoded 7 for KoalaBear chain hash output (matches Rust)
                 const next = try self.hash.hashFieldElements(
