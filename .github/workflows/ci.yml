@@ -96,12 +96,13 @@ jobs:
       
       - name: Clear Zig cache and fetch dependencies
         if: steps.check_changes.outputs.has_zig_changes == 'true'
+        shell: bash
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
           # Clear all possible cache locations
-          rm -rf ~/.cache/zig
-          rm -rf .zig-cache
-          rm -rf /tmp/zig-*
+          rm -rf ~/.cache/zig || true
+          rm -rf .zig-cache || true
+          rm -rf /tmp/zig-* || true
           # Force fetch with explicit name
           zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
           # Verify the dependency was fetched
