@@ -24,7 +24,7 @@ pub fn main() !void {
     std.debug.print("Zig hash-zig ↔ Rust hash-sig Cross-Implementation Compatibility Test\n", .{});
     std.debug.print("=" ** 80 ++ "\n\n", .{});
 
-    // Use the same parameters as Rust: lifetime 2^18 (262,144 signatures)
+    // Always use lifetime 2^18 for interop comparison (262,144 signatures)
     const params = hash_zig.Parameters.init(.lifetime_2_18);
 
     std.debug.print("Configuration:\n", .{});
@@ -53,7 +53,7 @@ pub fn main() !void {
 
     const num_leaves = @as(u64, 1) << @intCast(params.tree_height);
     std.debug.print("Total leaves to generate: {d}\n", .{num_leaves});
-    std.debug.print("⏰ Expected time: ~1-2 hours (building full 2^{d} tree)\n\n", .{params.tree_height});
+    std.debug.print("⏰ Expected time: this may take a long time for 2^{d}\n\n", .{params.tree_height});
 
     // Initialize signature scheme
     var hash_sig = try hash_zig.HashSignatureNative.init(allocator, params);
@@ -89,12 +89,21 @@ pub fn main() !void {
     std.debug.print("PUBLIC KEY (Zig field-native):\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
 
-    const root = keypair.public_key.root;
-    std.debug.print("  Root (field element): {d}\n", .{root.value});
+    const root = keypair.public_key.root; // []FieldElement (len = 7)
+    std.debug.print("  Root (7 field elements):\n", .{});
+    for (root, 0..) |elem, i| {
+        std.debug.print("    [{d}]: {d} (0x{x:0>8})\n", .{ i, elem.value, elem.value });
+    }
 
-    // Convert root to bytes (4 bytes for KoalaBear)
-    const root_bytes = root.toBytes();
-    std.debug.print("  Root (4 bytes hex):   ", .{});
+    // Convert root (7 FEs) to bytes (7 * 4 = 28 bytes)
+    var root_bytes_arr = std.ArrayList(u8).init(allocator);
+    defer root_bytes_arr.deinit();
+    for (root) |elem| {
+        const bytes = elem.toBytes();
+        try root_bytes_arr.appendSlice(&bytes);
+    }
+    const root_bytes = root_bytes_arr.items;
+    std.debug.print("  Root (28 bytes hex):  ", .{});
     for (root_bytes) |byte| {
         std.debug.print("{x:0>2}", .{byte});
     }
@@ -102,7 +111,7 @@ pub fn main() !void {
 
     // Hash the root with SHA3-256 for comparison
     var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-    hasher.update(&root_bytes);
+    hasher.update(root_bytes);
     var root_hash: [32]u8 = undefined;
     hasher.final(&root_hash);
 
@@ -210,7 +219,7 @@ pub fn main() !void {
         try json_writer.print("{x:0>2}", .{byte});
     }
     try json_writer.writeAll("\",\n");
-    try json_writer.print("  \"root_field_element\": {d},\n", .{root.value});
+    // JSON: root as 28-byte hex and SHA3-256
     try json_writer.writeAll("  \"root_hex\": \"");
     for (root_bytes) |byte| {
         try json_writer.print("{x:0>2}", .{byte});
