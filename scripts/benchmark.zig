@@ -13,7 +13,7 @@ pub fn main() !void {
     std.debug.print("Target: Measure improvements from optimizations\n\n", .{});
 
     // Test with 2^10 lifetime only (recommended Winternitz parameters)
-    const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.params.KeyLifetime, expected_time_sec: f64, description: []const u8 }{
+    const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.core.KeyLifetime, expected_time_sec: f64, description: []const u8 }{
         .{ .name = "2^10", .lifetime = .lifetime_2_10, .expected_time_sec = 1.0, .description = "1,024 signatures - Winternitz w=8" },
     };
 
