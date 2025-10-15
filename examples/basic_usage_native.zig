@@ -67,7 +67,7 @@ pub fn main() !void {
     defer allocator.free(pk_serialized);
 
     std.debug.print("✅ Keypair generated successfully!\n", .{});
-    std.debug.print("   Public Key Root (field element): {d}\n", .{keypair.public_key.root.value});
+    std.debug.print("   Public Key Root (first element): {d}\n", .{keypair.public_key.root[0].toU32()});
     std.debug.print("   Public Key Size: {d} bytes\n", .{pk_serialized.len});
     std.debug.print("   Secret Key Tree Levels: {d}\n", .{keypair.secret_key.tree.len});
     std.debug.print("   Activation Epoch: {d}\n", .{keypair.secret_key.activation_epoch});

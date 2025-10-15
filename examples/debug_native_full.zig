@@ -29,7 +29,7 @@ pub fn main() !void {
     // Step 1: Generate parameter (5 random field elements)
     std.debug.print("Step 1: Generating random parameter...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
-    
+
     var rng = hash_zig.chacha12_rng.init(seed);
     var parameter: [5]hash_zig.FieldElement = undefined;
     for (0..5) |i| {
@@ -44,7 +44,7 @@ pub fn main() !void {
     // Step 2: Generate PRF key (32 bytes)
     std.debug.print("Step 2: Generating PRF key...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
-    
+
     var prf_key: [32]u8 = undefined;
     rng.fill(&prf_key);
     std.debug.print("  PRF key: {s}\n\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
@@ -52,10 +52,10 @@ pub fn main() !void {
     // Step 3: Generate first OTS private key (epoch=0, all chains)
     std.debug.print("Step 3: Generating first OTS private key (epoch 0)...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
-    
-    const prf = hash_zig.prf.ShakePRF{};
+
+    // PRF instance not needed for direct calls
     const num_chains = params.num_message_chains + params.num_checksum_chains;
-    
+
     // Show first 3 chains
     for (0..@min(3, num_chains)) |chain_idx| {
         const chain_output = try hash_zig.prf.ShakePRF.getDomainElementsNative(
@@ -66,7 +66,7 @@ pub fn main() !void {
             params.chain_hash_output_len_fe,
         );
         defer allocator.free(chain_output);
-        
+
         std.debug.print("  Chain {d}: ", .{chain_idx});
         for (chain_output, 0..) |elem, i| {
             std.debug.print("{d}", .{elem.toU32()});
@@ -79,7 +79,7 @@ pub fn main() !void {
     // Step 4: Generate first OTS public key
     std.debug.print("Step 4: Generating first OTS public key...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
-    
+
     var sig_native = try hash_zig.HashSignatureNative.init(allocator, params);
     defer sig_native.deinit();
 
@@ -93,39 +93,26 @@ pub fn main() !void {
 
     const first_sk = try param_wots.generatePrivateKey(allocator, &prf_key, 0);
     defer allocator.free(first_sk);
-    
-    const first_pk = try param_wots.generatePublicKey(allocator, first_sk);
-    defer {
-        for (first_pk) |chain| {
-            allocator.free(chain);
-        }
-        allocator.free(first_pk);
-    }
 
-    std.debug.print("  First OTS public key has {d} chains\n", .{first_pk.len});
-    std.debug.print("  First chain (first 3 elements): ", .{});
-    for (0..@min(3, first_pk[0].len)) |i| {
-        std.debug.print("{d}", .{first_pk[0][i].toU32()});
-        if (i < @min(3, first_pk[0].len) - 1) std.debug.print(", ", .{});
+    const first_pk = try param_wots.generatePublicKey(allocator, first_sk, 0);
+    defer allocator.free(first_pk);
+
+    std.debug.print("  First OTS public key has {d} field elements\n", .{first_pk.len});
+    std.debug.print("  First 3 elements: ", .{});
+    for (0..@min(3, first_pk.len)) |i| {
+        std.debug.print("{d}", .{first_pk[i].toU32()});
+        if (i < @min(3, first_pk.len) - 1) std.debug.print(", ", .{});
     }
     std.debug.print("\n\n", .{});
 
     // Step 5: Hash OTS public key to get tree leaf
     std.debug.print("Step 5: Hashing OTS public key to tree leaf...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
-    
-    // Flatten all chains into single array
-    const pk_flat_len = first_pk.len * first_pk[0].len;
-    var pk_flat = try allocator.alloc(hash_zig.FieldElement, pk_flat_len);
+
+    // first_pk is already a flat array of field elements
+    const pk_flat = try allocator.alloc(hash_zig.FieldElement, first_pk.len);
     defer allocator.free(pk_flat);
-    
-    var idx: usize = 0;
-    for (first_pk) |chain| {
-        for (chain) |elem| {
-            pk_flat[idx] = elem;
-            idx += 1;
-        }
-    }
+    @memcpy(pk_flat, first_pk);
 
     const tree_tweak = hash_zig.PoseidonTweak{
         .tree_tweak = .{
@@ -137,8 +124,8 @@ pub fn main() !void {
     const first_leaf = try param_wots.hash.hashFieldElements(
         allocator,
         pk_flat,
-        params.tree_hash_output_len_fe,
         tree_tweak,
+        7, // tree_hash_output_len_fe
     );
     defer allocator.free(first_leaf);
 
@@ -152,7 +139,7 @@ pub fn main() !void {
     // Step 6: Build full Merkle tree (showing just the root)
     std.debug.print("Step 6: Building Merkle tree...\n", .{});
     std.debug.print("-" ** 80 ++ "\n", .{});
-    
+
     // Generate all leaves
     const num_leaves = @as(usize, 1) << @intCast(params.tree_height);
     var all_leaves = try allocator.alloc([]hash_zig.FieldElement, num_leaves);
@@ -166,37 +153,26 @@ pub fn main() !void {
     for (0..num_leaves) |epoch| {
         const sk = try param_wots.generatePrivateKey(allocator, &prf_key, @intCast(epoch));
         defer allocator.free(sk);
-        
-        const pk = try param_wots.generatePublicKey(allocator, sk);
-        defer {
-            for (pk) |chain| {
-                allocator.free(chain);
-            }
-            allocator.free(pk);
-        }
 
-        // Flatten
-        var pk_flat_i = try allocator.alloc(hash_zig.FieldElement, pk_flat_len);
-        var idx_i: usize = 0;
-        for (pk) |chain| {
-            for (chain) |elem| {
-                pk_flat_i[idx_i] = elem;
-                idx_i += 1;
-            }
-        }
+        const pk = try param_wots.generatePublicKey(allocator, sk, @intCast(epoch));
+        defer allocator.free(pk);
+
+        // pk is already flat (single slice of field elements)
+        const pk_flat_i = try allocator.alloc(hash_zig.FieldElement, pk.len);
+        @memcpy(pk_flat_i, pk);
 
         const leaf_tweak = hash_zig.PoseidonTweak{
             .tree_tweak = .{
                 .level = 0,
-                .pos_in_level = epoch,
+                .pos_in_level = @intCast(epoch),
             },
         };
 
         const leaf = try param_wots.hash.hashFieldElements(
             allocator,
             pk_flat_i,
-            params.tree_hash_output_len_fe,
             leaf_tweak,
+            7, // tree_hash_output_len_fe
         );
         allocator.free(pk_flat_i);
         all_leaves[epoch] = leaf;
@@ -235,7 +211,7 @@ pub fn main() !void {
 
     const root_level = tree_levels[tree_levels.len - 1];
     const root = root_level[0];
-    
+
     std.debug.print("  Merkle root ({d} elements): ", .{root.len});
     for (root, 0..) |elem, i| {
         std.debug.print("{d}", .{elem.toU32()});
@@ -246,7 +222,7 @@ pub fn main() !void {
     // Convert root to bytes for SHA3 comparison
     var root_bytes = try allocator.alloc(u8, root.len * 4);
     defer allocator.free(root_bytes);
-    
+
     for (root, 0..) |elem, i| {
         const val = elem.toU32();
         std.mem.writeInt(u32, root_bytes[i * 4 ..][0..4], val, .little);
@@ -267,4 +243,3 @@ pub fn main() !void {
     std.debug.print("✅ Debug output complete\n", .{});
     std.debug.print("=" ** 80 ++ "\n\n", .{});
 }
-
