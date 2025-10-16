@@ -361,6 +361,32 @@ pub const WinternitzOTSNative = struct {
 
         return true;
     }
+
+    /// In-place chain computation without allocations (Rust-style efficiency)
+    pub fn generateChainEndInPlace(
+        self: *WinternitzOTSNative,
+        start: FieldElement,
+        epoch: u32,
+        chain_index: u8,
+        steps: usize,
+    ) !FieldElement {
+        var current = start; // No allocation, direct copy
+
+        for (0..steps) |i| {
+            const tweak = PoseidonTweak{
+                .chain_tweak = .{
+                    .epoch = epoch,
+                    .chain_index = chain_index,
+                    .pos_in_chain = @intCast(i + 1),
+                },
+            };
+
+            // In-place computation, no allocations
+            current = try self.hash.hashFieldElementsInPlace(current, tweak);
+        }
+
+        return current;
+    }
 };
 
 test "winternitz native: key generation" {
