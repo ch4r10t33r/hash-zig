@@ -50,17 +50,20 @@ pub const HashSignatureNative = struct {
         hash_parameter: [5]FieldElement, // Random parameter for hash operations
 
         pub fn serialize(self: *const PublicKey, allocator: Allocator) ![]u8 {
-            // Serialize as: root (7 × 4 = 28 bytes) + hash_parameter (5 × 4 = 20 bytes) + params
+            // Serialize as: root (8 × 4 = 32 bytes) + params (20 bytes)
             var buffer = std.ArrayList(u8).init(allocator);
             errdefer buffer.deinit();
 
-            // Root as 7 field elements (28 bytes total, little-endian)
-            for (self.root) |elem| {
-                const bytes = elem.toBytes();
+            // Root as exactly 8 field elements (32 bytes total, little-endian)
+            // If fewer are present, pad with zero elements
+            var i: usize = 0;
+            while (i < 8) : (i += 1) {
+                const fe = if (i < self.root.len) self.root[i] else FieldElement.zero();
+                const bytes = fe.toBytes();
                 try buffer.appendSlice(&bytes);
             }
 
-            // Parameters (same as byte-based version)
+            // Parameters (same as byte-based version), total 20 bytes
             try buffer.append(@intFromEnum(self.parameter.security_level));
             try buffer.append(@intFromEnum(self.parameter.hash_function));
             try buffer.append(@intFromEnum(self.parameter.encoding_type));
@@ -156,8 +159,8 @@ pub const HashSignatureNative = struct {
         rng.fill(&prf_key);
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
-        
-        std.debug.print("generateKeyPair: Starting with {} leaves (tree_height={})\n", .{num_leaves, self.params.tree_height});
+
+        std.debug.print("generateKeyPair: Starting with {} leaves (tree_height={})\n", .{ num_leaves, self.params.tree_height });
 
         // Validate epoch range
         if (activation_epoch + num_active_epochs > num_leaves) {
@@ -172,10 +175,10 @@ pub const HashSignatureNative = struct {
         defer param_tree.deinit();
 
         std.debug.print("generateKeyPair: About to call generateTreeWithParallelization with {} leaves\n", .{num_leaves});
-        
+
         // Generate all leaf hashes and build tree (matching Rust implementation)
         const result = try self.generateTreeWithParallelization(allocator, &param_wots, &param_tree, &prf_key, num_leaves);
-        
+
         std.debug.print("generateKeyPair: Successfully completed tree generation\n", .{});
         const root = result[0];
         const tree_levels = result[1];
@@ -410,14 +413,14 @@ pub const HashSignatureNative = struct {
         prf_key: *const [32]u8,
         num_leaves: usize,
     ) !struct { []FieldElement, [][][]FieldElement } {
-        std.debug.print("generateTreeWithStreaming: num_leaves = {}, threshold = {}\n", .{num_leaves, 65536});
-        
+        std.debug.print("generateTreeWithStreaming: num_leaves = {}, threshold = {}\n", .{ num_leaves, 65536 });
+
         // For extremely large lifetimes, use batch processing to manage memory
         if (num_leaves > 65536) { // 2^16 threshold
             std.debug.print("Using batch processing for {} leaves\n", .{num_leaves});
             return try generateTreeWithBatching(allocator, param_wots, param_tree, prf_key, num_leaves);
         }
-        
+
         std.debug.print("Using streaming approach for {} leaves\n", .{num_leaves});
 
         // Initialize streaming tree builder
@@ -483,8 +486,8 @@ pub const HashSignatureNative = struct {
         // Process in small batches to minimize memory usage
         const batch_size = 64; // Process 64 epochs at a time (further reduced for debugging)
         var processed_leaves: usize = 0;
-        
-        std.debug.print("BATCH PROCESSING: Starting with {} epochs, batch size: {}\n", .{num_leaves, batch_size});
+
+        std.debug.print("BATCH PROCESSING: Starting with {} epochs, batch size: {}\n", .{ num_leaves, batch_size });
         std.debug.print("BATCH PROCESSING: Estimated memory usage: ~{}MB\n", .{(batch_size * 180) / 1024});
 
         // Initialize streaming tree builder
@@ -495,19 +498,16 @@ pub const HashSignatureNative = struct {
             const batch_end = @min(processed_leaves + batch_size, num_leaves);
             const batch_num = (processed_leaves / batch_size) + 1;
             const total_batches = (num_leaves + batch_size - 1) / batch_size;
-            
-            std.debug.print("BATCH {}/{}: Processing epochs {} to {} of {} ({}% complete)\n", .{
-                batch_num, total_batches, processed_leaves, batch_end - 1, num_leaves,
-                (processed_leaves * 100) / num_leaves
-            });
+
+            std.debug.print("BATCH {}/{}: Processing epochs {} to {} of {} ({}% complete)\n", .{ batch_num, total_batches, processed_leaves, batch_end - 1, num_leaves, (processed_leaves * 100) / num_leaves });
 
             // Process batch sequentially to minimize memory usage
             for (processed_leaves..batch_end) |i| {
                 const epoch = @as(u32, @intCast(i));
-                
+
                 // Progress indicator every 10 epochs
                 if ((i - processed_leaves) % 10 == 0) {
-                    std.debug.print("  Processing epoch {}/{} in batch\n", .{i - processed_leaves + 1, batch_end - processed_leaves});
+                    std.debug.print("  Processing epoch {}/{} in batch\n", .{ i - processed_leaves + 1, batch_end - processed_leaves });
                 }
 
                 // Generate OTS key pair for this epoch using in-place computation
@@ -549,13 +549,13 @@ pub const HashSignatureNative = struct {
                 // Add to streaming tree builder
                 tree_builder.addLeafHash(leaf_hash[0]) catch return error.TreeBuildingFailed;
             }
-            
+
             processed_leaves = batch_end;
-            std.debug.print("BATCH {}/{}: Completed successfully\n", .{batch_num, total_batches});
+            std.debug.print("BATCH {}/{}: Completed successfully\n", .{ batch_num, total_batches });
         }
 
         std.debug.print("BATCH PROCESSING: All batches completed, computing final tree...\n", .{});
-        
+
         // Get final results
         const root_element = tree_builder.getRoot() catch return error.IncompleteTree;
         const root_value = root_element orelse return error.IncompleteTree;

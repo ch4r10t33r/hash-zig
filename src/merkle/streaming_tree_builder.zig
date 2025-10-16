@@ -19,15 +19,15 @@ pub const StreamingTreeBuilder = struct {
     pub fn init(allocator: std.mem.Allocator, tree_height: u8, hash: *TweakableHash) !StreamingTreeBuilder {
         // Use a truly streaming approach - only allocate what we need for current level
         const max_leaves = @as(usize, 1) << @intCast(tree_height);
-        std.debug.print("StreamingTreeBuilder: Initializing with tree_height={}, max_leaves={}\n", .{tree_height, max_leaves});
-        
+        std.debug.print("StreamingTreeBuilder: Initializing with tree_height={}, max_leaves={}\n", .{ tree_height, max_leaves });
+
         // Start with a small buffer for the current level (we'll grow as needed)
         const initial_buffer_size = 1024; // Much smaller initial allocation
         std.debug.print("StreamingTreeBuilder: About to allocate {} bytes for initial buffer\n", .{initial_buffer_size * @sizeOf(FieldElement)});
-        
+
         const current_level = try allocator.alloc(FieldElement, initial_buffer_size);
         @memset(current_level, FieldElement.zero());
-        
+
         std.debug.print("StreamingTreeBuilder: Successfully allocated initial buffer\n", .{});
 
         return StreamingTreeBuilder{
@@ -48,7 +48,7 @@ pub const StreamingTreeBuilder = struct {
     pub fn addLeafHash(self: *StreamingTreeBuilder, leaf_hash: FieldElement) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         // For now, just store the leaf hash in our buffer
         if (self.leaves_added >= self.current_level_size) {
             // Need to grow the buffer
@@ -56,11 +56,11 @@ pub const StreamingTreeBuilder = struct {
             const new_level = try self.allocator.realloc(self.current_level, new_size);
             self.current_level = new_level;
             self.current_level_size = new_size;
-            
+
             // Zero out the new space
             @memset(self.current_level[self.leaves_added..], FieldElement.zero());
         }
-        
+
         self.current_level[self.leaves_added] = leaf_hash;
         self.leaves_added += 1;
     }
