@@ -204,6 +204,46 @@ pub const TweakableHash = struct {
         };
     }
 
+    /// In-place hash computation without allocations (Rust-style efficiency)
+    pub fn hashFieldElementsInPlace(
+        self: *TweakableHash,
+        input: FieldElement,
+        tweak: PoseidonTweak,
+    ) !FieldElement {
+        // Only Poseidon2 supports field-native operations
+        if (self.params.hash_function != .poseidon2) {
+            return error.FieldNativeNotSupported;
+        }
+
+        // Convert tweak to field elements (TWEAK_LEN_FE = 2 in Rust)
+        const tweak_fes = tweak.toFieldElements(2);
+
+        // For single element input, we can optimize the state creation
+        const state_size = 5 + 2 + 1; // param_len + tweak_len + input_len
+        var state = [_]FieldElement{undefined} ** state_size;
+
+        // Copy parameter (5 elements)
+        @memcpy(state[0..5], &self.parameter);
+
+        // Copy tweak field elements (2 elements)
+        state[5] = tweak_fes[0];
+        state[6] = tweak_fes[1];
+
+        // Copy input field element
+        state[7] = input;
+
+        // Use Poseidon2 compress for single element (chain hashing)
+        return switch (self.hash_impl) {
+            .poseidon2 => |*p| {
+                // Single element input - use compress mode
+                const result = try p.compress(self.allocator, &state, 1);
+                defer self.allocator.free(result);
+                return result[0];
+            },
+            .sha3 => error.FieldNativeNotSupported,
+        };
+    }
+
     /// PRF-based hash using SHAKE-128, returning field elements
     /// This generates pseudorandom field elements for Winternitz chains
     pub fn prfHashFieldElements(
