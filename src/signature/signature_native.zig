@@ -15,11 +15,13 @@ const winternitz_native = @import("winternitz_native.zig");
 const merkle_native = @import("merkle_native.zig");
 const field_types = @import("field.zig");
 const chacha12_rng = @import("chacha12_rng.zig");
+const streaming_tree_builder = @import("../merkle/streaming_tree_builder.zig");
 const Parameters = params.Parameters;
 const WinternitzOTSNative = winternitz_native.WinternitzOTSNative;
 const MerkleTreeNative = merkle_native.MerkleTreeNative;
 const FieldElement = field_types.FieldElement;
 const Allocator = std.mem.Allocator;
+const StreamingTreeBuilder = streaming_tree_builder.StreamingTreeBuilder;
 
 pub const HashSignatureNative = struct {
     params: Parameters,
@@ -154,6 +156,8 @@ pub const HashSignatureNative = struct {
         rng.fill(&prf_key);
 
         const num_leaves = @as(usize, 1) << @intCast(self.params.tree_height);
+        
+        std.debug.print("generateKeyPair: Starting with {} leaves (tree_height={})\n", .{num_leaves, self.params.tree_height});
 
         // Validate epoch range
         if (activation_epoch + num_active_epochs > num_leaves) {
@@ -167,8 +171,12 @@ pub const HashSignatureNative = struct {
         var param_tree = try MerkleTreeNative.initWithParameter(allocator, self.params, parameter);
         defer param_tree.deinit();
 
+        std.debug.print("generateKeyPair: About to call generateTreeWithParallelization with {} leaves\n", .{num_leaves});
+        
         // Generate all leaf hashes and build tree (matching Rust implementation)
         const result = try self.generateTreeWithParallelization(allocator, &param_wots, &param_tree, &prf_key, num_leaves);
+        
+        std.debug.print("generateKeyPair: Successfully completed tree generation\n", .{});
         const root = result[0];
         const tree_levels = result[1];
 
@@ -382,10 +390,12 @@ pub const HashSignatureNative = struct {
     ) !struct { []FieldElement, [][][]FieldElement } {
         // For very large lifetimes (2^18), use streaming approach
         // This generates leaves on-demand instead of storing them all in memory
+        std.debug.print("generateTreeWithParallelization: num_leaves = {}, threshold = {}\n", .{ num_leaves, 1 << 12 });
+        std.debug.print("generateTreeWithParallelization: About to select approach...\n", .{});
 
         if (num_leaves > 1 << 12) { // Threshold: 4,096 leaves
-            // Use batching approach for large trees to manage memory
-            return try generateTreeWithBatching(allocator, param_wots, param_tree, prf_key, num_leaves);
+            // Use streaming approach for large trees to manage memory
+            return try generateTreeWithStreaming(allocator, param_wots, param_tree, prf_key, num_leaves);
         } else {
             // Use traditional approach for smaller trees
             return try generateTreeTraditional(allocator, param_wots, param_tree, prf_key, num_leaves);
@@ -393,26 +403,170 @@ pub const HashSignatureNative = struct {
     }
 
     /// Batching tree generation for large lifetimes
-    fn generateTreeWithBatching(
+    fn generateTreeWithStreaming(
         allocator: Allocator,
         param_wots: *WinternitzOTSNative,
-        _: *MerkleTreeNative,
+        param_tree: *MerkleTreeNative,
         prf_key: *const [32]u8,
         num_leaves: usize,
     ) !struct { []FieldElement, [][][]FieldElement } {
-        // For very large trees, use recursive approach to avoid storing all leaves
-        // This trades CPU time for memory usage
-        const root_element = try computeRootRecursive(allocator, param_wots, prf_key, 0, num_leaves - 1, 0);
+        std.debug.print("generateTreeWithStreaming: num_leaves = {}, threshold = {}\n", .{num_leaves, 65536});
+        
+        // For extremely large lifetimes, use batch processing to manage memory
+        if (num_leaves > 65536) { // 2^16 threshold
+            std.debug.print("Using batch processing for {} leaves\n", .{num_leaves});
+            return try generateTreeWithBatching(allocator, param_wots, param_tree, prf_key, num_leaves);
+        }
+        
+        std.debug.print("Using streaming approach for {} leaves\n", .{num_leaves});
+
+        // Initialize streaming tree builder
+        var tree_builder = try StreamingTreeBuilder.init(allocator, @intCast(param_tree.height), &param_wots.hash);
+        defer tree_builder.deinit();
+
+        // Determine optimal number of threads
+        const num_threads = @min(num_leaves, std.Thread.getCpuCount() catch 4);
+        const leaves_per_thread = (num_leaves + num_threads - 1) / num_threads;
+
+        // Create thread-safe shared state
+        var shared_state = try allocator.create(StreamingSharedState);
+        defer allocator.destroy(shared_state);
+        shared_state.* = StreamingSharedState{
+            .tree_builder = &tree_builder,
+            .param_wots = param_wots,
+            .prf_key = prf_key,
+            .allocator = allocator,
+            .error_flag = std.atomic.Value(bool).init(false),
+        };
+
+        // Launch parallel threads
+        var threads: []std.Thread = try allocator.alloc(std.Thread, num_threads);
+        defer allocator.free(threads);
+
+        for (0..num_threads) |thread_id| {
+            const start_idx = thread_id * leaves_per_thread;
+            const end_idx = @min(start_idx + leaves_per_thread, num_leaves);
+
+            threads[thread_id] = try std.Thread.spawn(.{}, processEpochsRangeStreaming, .{ shared_state, start_idx, end_idx });
+        }
+
+        // Wait for all threads to complete
+        for (threads) |thread| {
+            thread.join();
+        }
+
+        // Check for errors
+        if (shared_state.error_flag.load(.monotonic)) {
+            return error.ThreadError;
+        }
+
+        // Get final results
+        const root_element = tree_builder.getRoot() catch return error.IncompleteTree;
+        const root_value = root_element orelse return error.IncompleteTree;
+        const tree_levels = try tree_builder.getTreeLevels();
 
         // Convert single FieldElement to slice for consistency
         const root = try allocator.alloc(FieldElement, 1);
-        root[0] = root_element;
+        root[0] = root_value;
 
-        // For very large trees, we don't store the full tree in memory
-        // Create an empty tree structure (signatures will need to be generated differently)
-        const empty_tree = try allocator.alloc([][]FieldElement, 0);
+        return .{ root, tree_levels };
+    }
 
-        return .{ root, empty_tree };
+    /// Batch processing for extremely large lifetimes (memory-constrained)
+    fn generateTreeWithBatching(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        // Process in small batches to minimize memory usage
+        const batch_size = 64; // Process 64 epochs at a time (further reduced for debugging)
+        var processed_leaves: usize = 0;
+        
+        std.debug.print("BATCH PROCESSING: Starting with {} epochs, batch size: {}\n", .{num_leaves, batch_size});
+        std.debug.print("BATCH PROCESSING: Estimated memory usage: ~{}MB\n", .{(batch_size * 180) / 1024});
+
+        // Initialize streaming tree builder
+        var tree_builder = try StreamingTreeBuilder.init(allocator, @intCast(param_tree.height), &param_wots.hash);
+        defer tree_builder.deinit();
+
+        while (processed_leaves < num_leaves) {
+            const batch_end = @min(processed_leaves + batch_size, num_leaves);
+            const batch_num = (processed_leaves / batch_size) + 1;
+            const total_batches = (num_leaves + batch_size - 1) / batch_size;
+            
+            std.debug.print("BATCH {}/{}: Processing epochs {} to {} of {} ({}% complete)\n", .{
+                batch_num, total_batches, processed_leaves, batch_end - 1, num_leaves,
+                (processed_leaves * 100) / num_leaves
+            });
+
+            // Process batch sequentially to minimize memory usage
+            for (processed_leaves..batch_end) |i| {
+                const epoch = @as(u32, @intCast(i));
+                
+                // Progress indicator every 10 epochs
+                if ((i - processed_leaves) % 10 == 0) {
+                    std.debug.print("  Processing epoch {}/{} in batch\n", .{i - processed_leaves + 1, batch_end - processed_leaves});
+                }
+
+                // Generate OTS key pair for this epoch using in-place computation
+                const sk = param_wots.generatePrivateKey(allocator, prf_key, epoch) catch return error.KeyGenerationFailed;
+                defer {
+                    for (sk) |k| allocator.free(k);
+                    allocator.free(sk);
+                }
+
+                // Generate public key using in-place chain computation
+                var chain_ends = try allocator.alloc(FieldElement, sk.len);
+                defer allocator.free(chain_ends);
+
+                for (sk, 0..) |private_key_chain, chain_idx| {
+                    chain_ends[chain_idx] = param_wots.generateChainEndInPlace(
+                        private_key_chain[0], // Start with first element
+                        epoch,
+                        @intCast(chain_idx),
+                        param_wots.getChainLength() - 1, // steps
+                    ) catch return error.ChainGenerationFailed;
+                }
+
+                // Hash chain ends to get leaf hash
+                const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                    .tree_tweak = .{
+                        .level = 0,
+                        .pos_in_level = @intCast(i),
+                    },
+                };
+
+                const leaf_hash = param_wots.hash.hashFieldElements(
+                    allocator,
+                    chain_ends,
+                    leaf_tweak,
+                    7,
+                ) catch return error.HashGenerationFailed;
+                defer allocator.free(leaf_hash);
+
+                // Add to streaming tree builder
+                tree_builder.addLeafHash(leaf_hash[0]) catch return error.TreeBuildingFailed;
+            }
+            
+            processed_leaves = batch_end;
+            std.debug.print("BATCH {}/{}: Completed successfully\n", .{batch_num, total_batches});
+        }
+
+        std.debug.print("BATCH PROCESSING: All batches completed, computing final tree...\n", .{});
+        
+        // Get final results
+        const root_element = tree_builder.getRoot() catch return error.IncompleteTree;
+        const root_value = root_element orelse return error.IncompleteTree;
+        const tree_levels = try tree_builder.getTreeLevels();
+
+        // Convert single FieldElement to slice for consistency
+        const root = try allocator.alloc(FieldElement, 1);
+        root[0] = root_value;
+
+        std.debug.print("BATCH PROCESSING: Successfully completed {} epochs with batch processing!\n", .{num_leaves});
+        return .{ root, tree_levels };
     }
 
     /// Traditional tree generation for smaller lifetimes
@@ -444,10 +598,13 @@ pub const HashSignatureNative = struct {
         var threads = try allocator.alloc(std.Thread, num_threads);
         defer allocator.free(threads);
 
+        // Create contexts for all threads
+        var contexts: []ThreadContext = try allocator.alloc(ThreadContext, num_threads);
+        defer allocator.free(contexts);
+
         // Spawn worker threads
         for (0..num_threads) |i| {
-            const context = try allocator.create(ThreadContext);
-            context.* = ThreadContext{
+            contexts[i] = ThreadContext{
                 .param_wots = param_wots,
                 .prf_key = prf_key,
                 .leaf_hashes = leaf_hashes,
@@ -457,7 +614,7 @@ pub const HashSignatureNative = struct {
                 .error_flag = std.atomic.Value(bool).init(false),
             };
 
-            threads[i] = try std.Thread.spawn(.{}, parallelWorker, .{context});
+            threads[i] = try std.Thread.spawn(.{}, parallelWorker, .{&contexts[i]});
         }
 
         // Wait for all threads to complete
@@ -466,7 +623,7 @@ pub const HashSignatureNative = struct {
         }
 
         // Check for errors
-        if (next_leaf.load(.monotonic) != num_leaves) {
+        if (next_leaf.load(.monotonic) < num_leaves) {
             return error.ParallelGenerationFailed;
         }
 
@@ -617,6 +774,84 @@ pub const HashSignatureNative = struct {
         }
     }
 };
+
+// Streaming shared state for parallel processing
+const StreamingSharedState = struct {
+    tree_builder: *StreamingTreeBuilder,
+    param_wots: *WinternitzOTSNative,
+    prf_key: *const [32]u8,
+    allocator: Allocator,
+    error_flag: std.atomic.Value(bool),
+};
+
+// Process epochs range for streaming approach
+fn processEpochsRangeStreaming(shared_state: *StreamingSharedState, start_idx: usize, end_idx: usize) void {
+    for (start_idx..end_idx) |i| {
+        if (shared_state.error_flag.load(.monotonic)) {
+            break;
+        }
+
+        const epoch = @as(u32, @intCast(i));
+
+        // Generate OTS key pair for this epoch using in-place computation
+        const sk = shared_state.param_wots.generatePrivateKey(
+            shared_state.allocator,
+            shared_state.prf_key,
+            epoch,
+        ) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+        defer {
+            for (sk) |k| shared_state.allocator.free(k);
+            shared_state.allocator.free(sk);
+        }
+
+        // Generate public key using in-place chain computation
+        var chain_ends = shared_state.allocator.alloc(FieldElement, sk.len) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+        defer shared_state.allocator.free(chain_ends);
+
+        for (sk, 0..) |private_key_chain, chain_idx| {
+            chain_ends[chain_idx] = shared_state.param_wots.generateChainEndInPlace(
+                private_key_chain[0], // Start with first element
+                epoch,
+                @intCast(chain_idx),
+                shared_state.param_wots.getChainLength() - 1, // steps
+            ) catch {
+                shared_state.error_flag.store(true, .monotonic);
+                break;
+            };
+        }
+
+        // Hash chain ends to get leaf hash
+        const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+            .tree_tweak = .{
+                .level = 0,
+                .pos_in_level = @intCast(i),
+            },
+        };
+
+        const leaf_hash = shared_state.param_wots.hash.hashFieldElements(
+            shared_state.allocator,
+            chain_ends,
+            leaf_tweak,
+            7,
+        ) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+        defer shared_state.allocator.free(leaf_hash);
+
+        // Add to streaming tree builder (thread-safe)
+        shared_state.tree_builder.addLeafHash(leaf_hash[0]) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+    }
+}
 
 // Thread context type definition
 const ThreadContext = struct {

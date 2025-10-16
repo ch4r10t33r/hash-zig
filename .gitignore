@@ -38,6 +38,7 @@ site/
 
 # Investigation and analysis documents
 investigations/
+analysis/
 
 # OS-specific files
 Thumbs.db
