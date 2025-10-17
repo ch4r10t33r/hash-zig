@@ -461,7 +461,10 @@ pub const Poseidon2 = struct {
         var padded_input = try allocator.alloc(FieldElement, input.len + extra_elements);
         defer allocator.free(padded_input);
 
-        @memcpy(padded_input[0..input.len], input);
+        // Copy input to avoid aliasing issues
+        for (input, 0..) |elem, i| {
+            padded_input[i] = elem;
+        }
         for (input.len..padded_input.len) |i| {
             padded_input[i] = FieldElement.zero();
         }

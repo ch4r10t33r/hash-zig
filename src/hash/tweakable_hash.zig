@@ -161,8 +161,10 @@ pub const TweakableHash = struct {
         state[5] = tweak_fes[0];
         state[6] = tweak_fes[1];
 
-        // Copy input field elements
-        @memcpy(state[7..][0..input.len], input);
+        // Copy input field elements (avoid aliasing)
+        for (input, 0..) |elem, i| {
+            state[7 + i] = elem;
+        }
 
         // Select hash mode based on input length (matching Rust)
         return switch (self.hash_impl) {
