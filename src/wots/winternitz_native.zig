@@ -175,7 +175,7 @@ pub const WinternitzOTSNative = struct {
         defer allocator.free(errors);
         @memset(errors, null);
 
-        const num_threads = 4;
+        const num_threads = std.Thread.getCpuCount() catch 8;
         const chains_per_thread = (private_key.len + num_threads - 1) / num_threads;
 
         var context = ChainGenContext{
@@ -214,6 +214,11 @@ pub const WinternitzOTSNative = struct {
                 std.debug.print("Chain generation error at index {d}: {}\n", .{ i, e });
                 return e;
             }
+        }
+
+        // Debug: show first chain part first FE
+        if (public_parts.len > 0 and public_parts[0].len > 0) {
+            std.debug.print("DBG chain0 keygen firstFE: {}\n", .{public_parts[0][0].toU32()});
         }
 
         // Concatenate all public parts into a single array

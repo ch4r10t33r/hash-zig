@@ -12,6 +12,7 @@ pub const encoding = @import("encoding/mod.zig");
 pub const wots = @import("wots/mod.zig");
 pub const merkle = @import("merkle/mod.zig");
 pub const signature = @import("signature/mod.zig");
+pub const utils = @import("utils/mod.zig");
 
 // Note: SIMD implementations (simd_signature, simd_winternitz, etc.) are available
 // as separate modules in build.zig. Access them via:

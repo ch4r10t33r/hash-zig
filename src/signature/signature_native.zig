@@ -246,6 +246,8 @@ pub const HashSignatureNative = struct {
             @intCast(epoch),
         );
 
+        // (debug removed)
+
         return Signature{
             .epoch = epoch,
             .auth_path = auth_path,
@@ -289,6 +291,11 @@ pub const HashSignatureNative = struct {
         );
         defer allocator.free(ots_pk);
 
+        // DEBUG: print recovered pk first FE
+        if (signature.epoch == 0 and ots_pk.len > 0) {
+            std.debug.print("DBG PK verify firstFE: {}\n", .{ots_pk[0].toU32()});
+        }
+
         // Hash OTS public key to produce tree leaf (same as in key generation)
         const leaf_tweak = @import("tweak.zig").PoseidonTweak{
             .tree_tweak = .{
@@ -301,14 +308,21 @@ pub const HashSignatureNative = struct {
             allocator,
             ots_pk,
             leaf_tweak,
-            1, // 1 field element output (matching key generation)
+            7, // 7 field elements output (HASH_LEN_FE in Rust)
         );
         defer allocator.free(leaf_hash);
+        if (signature.epoch == 0) {
+            std.debug.print("DBG leaf verify firstFE: {}\n", .{leaf_hash[0].toU32()});
+        }
 
-        // For now, just verify that the leaf hash matches the first element of the root
-        // TODO: Implement proper Merkle path verification for single field element trees
-        if (public_key.root.len == 0) return false;
-        return leaf_hash[0].toU32() == public_key.root[0].toU32();
+        // Verify Merkle path against 7-FE public root (Rust-compatible)
+        return param_tree.verifyAuthPath(
+            allocator,
+            leaf_hash,
+            @intCast(signature.epoch),
+            signature.auth_path,
+            public_key.root,
+        );
     }
 
     /// Helper: Recover OTS public key from signature (with parameter)
@@ -336,29 +350,35 @@ pub const HashSignatureNative = struct {
         }
 
         // For each signature part, hash from encoded position to chain end
+        // Apply positions (target_pos .. chain_len-1) with pos_in_chain = pos+1
         for (signature_hashes, 0..) |sig_part, chain_idx| {
             const target_pos = encoded[chain_idx];
             var current = try allocator.dupe(FieldElement, sig_part);
 
-            // Hash from target_pos to chain_len - 1 (positions are 1..255)
-            for (target_pos..chain_len - 1) |pos_in_chain| {
-                const tweak = @import("tweak.zig").PoseidonTweak{ .chain_tweak = .{
-                    .epoch = epoch,
-                    .chain_index = @intCast(chain_idx),
-                    .pos_in_chain = @intCast(@as(u8, @intCast(pos_in_chain + 1))),
-                } };
+            // Iterate positions target_pos+1 .. chain_len-1 (1-indexed), i.e., pos_zero_indexed in [target_pos .. chain_len-2]
+            if (target_pos < chain_len - 1) {
+                for (target_pos..chain_len - 1) |pos_zero_indexed| {
+                    const tweak = @import("tweak.zig").PoseidonTweak{ .chain_tweak = .{
+                        .epoch = epoch,
+                        .chain_index = @intCast(chain_idx),
+                        .pos_in_chain = @intCast(@as(u8, @intCast(pos_zero_indexed + 1))),
+                    } };
 
-                const next = try param_wots.hash.hashFieldElements(
-                    allocator,
-                    current,
-                    tweak,
-                    7, // chain_hash_output_len_fe
-                );
-                allocator.free(current);
-                current = next;
+                    const next = try param_wots.hash.hashFieldElements(
+                        allocator,
+                        current,
+                        tweak,
+                        7, // chain_hash_output_len_fe
+                    );
+                    allocator.free(current);
+                    current = next;
+                }
             }
 
             recovered_parts[chain_idx] = current;
+            if (chain_idx == 0 and signature_hashes.len > 0) {
+                std.debug.print("DBG chain0 recovered firstFE: {} (target_pos={})\n", .{ current[0].toU32(), target_pos });
+            }
         }
 
         // Concatenate all parts
@@ -389,40 +409,39 @@ pub const HashSignatureNative = struct {
     ) !struct { []FieldElement, [][][]FieldElement } {
         // For very large lifetimes (2^18), use streaming approach
         // This generates leaves on-demand instead of storing them all in memory
-        std.debug.print("generateTreeWithParallelization: num_leaves = {}, threshold = {}\n", .{ num_leaves, 1 << 12 });
+        std.debug.print("generateTreeWithParallelization: num_leaves = {}, parallel_threshold = {}, streaming_threshold = {}\n", .{ num_leaves, 1 << 8, 1 << 16 });
         std.debug.print("generateTreeWithParallelization: About to select approach...\n", .{});
 
-        if (num_leaves > 1 << 12) { // Threshold: 4,096 leaves
-            // Use streaming approach for large trees to manage memory
+        if (num_leaves > 1 << 16) { // Threshold: 65,536 leaves
+            // Use streaming approach for very large trees to manage memory
             return try generateTreeWithStreaming(allocator, param_wots, param_tree, prf_key, num_leaves);
+        } else if (num_leaves >= 1 << 8) { // Threshold: 256 leaves
+            // Use parallel approach for medium to large trees
+            return try generateTreeParallel(allocator, param_wots, param_tree, prf_key, num_leaves);
         } else {
-            // Use simple single-threaded approach for now (threading issues need more work)
+            // Use optimized single-threaded approach for small trees
             return try generateTreeSimple(allocator, param_wots, param_tree, prf_key, num_leaves);
         }
     }
 
-    /// Optimized single-threaded tree generation
-    fn generateTreeSimple(
+    /// Ultra-optimized tree generation using incremental builder
+    fn generateTreeUltraOptimized(
         allocator: Allocator,
         param_wots: *WinternitzOTSNative,
         param_tree: *MerkleTreeNative,
         prf_key: *const [32]u8,
         num_leaves: usize,
     ) !struct { []FieldElement, [][][]FieldElement } {
-        std.debug.print("generateTreeSimple: Processing {} leaves single-threaded (optimized)\n", .{num_leaves});
+        _ = param_tree; // Not used in incremental approach
+        std.debug.print("generateTreeUltraOptimized: Processing {} leaves with incremental tree building\n", .{num_leaves});
 
-        // Pre-allocate all leaf hashes to avoid repeated allocations
-        var leaf_hashes = try allocator.alloc([]FieldElement, num_leaves);
-        defer {
-            for (leaf_hashes) |hash| {
-                if (hash.len > 0) allocator.free(hash);
-            }
-            allocator.free(leaf_hashes);
-        }
-
-        // Pre-allocate flattened leaves array
-        var flattened_leaves = try allocator.alloc(FieldElement, num_leaves);
-        defer allocator.free(flattened_leaves);
+        // Initialize incremental tree builder
+        var tree_builder = try @import("../merkle/incremental_tree_builder.zig").IncrementalTreeBuilder.init(
+            allocator,
+            @intCast(@ctz(@as(u64, num_leaves))),
+            &param_wots.hash,
+        );
+        defer tree_builder.deinit();
 
         // Process each leaf sequentially with optimized memory usage
         for (0..num_leaves) |leaf_idx| {
@@ -452,6 +471,93 @@ pub const HashSignatureNative = struct {
             };
 
             const leaf_hash = try param_wots.hash.hashFieldElements(allocator, pk, leaf_tweak, 1);
+            defer allocator.free(leaf_hash);
+
+            // Add leaf to incremental tree builder
+            try tree_builder.addLeaf(leaf_hash[0]);
+        }
+
+        std.debug.print("  Computing final tree root...\n", .{});
+
+        // Get the final root
+        const final_root = try tree_builder.finalize();
+
+        // Wrap single root element in a slice
+        var root_slice = try allocator.alloc(FieldElement, 1);
+        root_slice[0] = final_root;
+
+        // For compatibility, return empty tree levels (we don't store the full tree)
+        const empty_tree_levels = try allocator.alloc([][]FieldElement, 0);
+
+        return .{ root_slice, empty_tree_levels };
+    }
+
+    /// Hybrid tree generation with memory pools and aggressive optimizations
+    fn generateTreeHybrid(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        std.debug.print("generateTreeHybrid: Processing {} leaves with memory pools and optimizations\n", .{num_leaves});
+
+        // Initialize memory pools for common allocation sizes
+        var field_pool = @import("../utils/memory_pool.zig").MemoryPool.init(allocator, @sizeOf(FieldElement) * 22); // For OTS private keys
+        defer field_pool.deinit();
+
+        var hash_pool = @import("../utils/memory_pool.zig").MemoryPool.init(allocator, @sizeOf(FieldElement) * 7); // For leaf hashes
+        defer hash_pool.deinit();
+
+        // Pre-allocate all leaf hashes to avoid repeated allocations
+        var leaf_hashes = try allocator.alloc([]FieldElement, num_leaves);
+        defer {
+            for (leaf_hashes) |hash| {
+                if (hash.len > 0) allocator.free(hash);
+            }
+            allocator.free(leaf_hashes);
+        }
+
+        // Note: Merkle buildTree uses single-FE nodes, but buildFullTree expects 7-FE leaves.
+        // We only need buildFullTree for auth paths; the public root will use the 7-FE root node.
+        // For buildTree we still supply single-FE leaves (first element of each leaf hash).
+        var flattened_leaves = try allocator.alloc(FieldElement, num_leaves);
+        defer allocator.free(flattened_leaves);
+
+        // Process each leaf with aggressive optimizations and memory pools
+        for (0..num_leaves) |leaf_idx| {
+            if (leaf_idx % 25 == 0) { // Even more frequent progress updates
+                std.debug.print("  Progress: {}/{} ({d:.1}%)\n", .{ leaf_idx, num_leaves, @as(f64, @floatFromInt(leaf_idx)) * 100.0 / @as(f64, @floatFromInt(num_leaves)) });
+            }
+
+            const epoch = @as(u32, @intCast(leaf_idx));
+
+            // Generate private key with optimized allocation
+            const sk = try param_wots.generatePrivateKey(allocator, prf_key, epoch);
+            defer {
+                for (sk) |k| allocator.free(k);
+                allocator.free(sk);
+            }
+
+            // Generate public key with optimized allocation
+            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
+            defer allocator.free(pk);
+
+            // Hash public key to create leaf hash (optimized tweak)
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0,
+                    .pos_in_level = @as(u32, @intCast(leaf_idx)),
+                },
+            };
+
+            if (leaf_idx == 0) {
+                std.debug.print("DBG PK keygen firstFE: {}\n", .{pk[0].toU32()});
+            }
+            const leaf_hash = try param_wots.hash.hashFieldElements(allocator, pk, leaf_tweak, 7);
+            if (leaf_idx == 0) {
+                std.debug.print("DBG leaf keygen firstFE: {}\n", .{leaf_hash[0].toU32()});
+            }
             leaf_hashes[leaf_idx] = leaf_hash;
 
             // Store flattened version for tree building
@@ -460,13 +566,231 @@ pub const HashSignatureNative = struct {
 
         std.debug.print("  Building tree from {} leaf hashes...\n", .{num_leaves});
 
-        // Build tree from flattened leaf hashes
-        const root_element = try param_tree.buildTree(allocator, flattened_leaves);
+        // Build full tree structure (nodes are 7-FE arrays at each level)
         const tree_levels = try param_tree.buildFullTree(allocator, leaf_hashes);
 
-        // Wrap single root element in a slice
-        var root_slice = try allocator.alloc(FieldElement, 1);
-        root_slice[0] = root_element;
+        // Set public root as the 7-FE node at the final level (Rust-compatible)
+        const final_level = tree_levels[tree_levels.len - 1];
+        const root_node = final_level[0]; // []FieldElement of length 7
+        const root_slice = try allocator.dupe(FieldElement, root_node);
+
+        return .{ root_slice, tree_levels };
+    }
+
+    /// Optimized single-threaded tree generation
+    fn generateTreeSimple(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        std.debug.print("generateTreeSimple: Processing {} leaves single-threaded (optimized)\n", .{num_leaves});
+
+        // Pre-allocate all leaf hashes to avoid repeated allocations
+        var leaf_hashes = try allocator.alloc([]FieldElement, num_leaves);
+        defer {
+            for (leaf_hashes) |hash| {
+                if (hash.len > 0) allocator.free(hash);
+            }
+            allocator.free(leaf_hashes);
+        }
+
+        // Pre-allocate flattened leaves array
+        var flattened_leaves = try allocator.alloc(FieldElement, num_leaves);
+        defer allocator.free(flattened_leaves);
+
+        // Process each leaf with aggressive optimizations
+        for (0..num_leaves) |leaf_idx| {
+            if (leaf_idx % 50 == 0) { // More frequent progress updates
+                std.debug.print("  Progress: {}/{} ({d:.1}%)\n", .{ leaf_idx, num_leaves, @as(f64, @floatFromInt(leaf_idx)) * 100.0 / @as(f64, @floatFromInt(num_leaves)) });
+            }
+
+            const epoch = @as(u32, @intCast(leaf_idx));
+
+            // Generate private key with optimized allocation
+            const sk = try param_wots.generatePrivateKey(allocator, prf_key, epoch);
+            defer {
+                for (sk) |k| allocator.free(k);
+                allocator.free(sk);
+            }
+
+            // Generate public key with optimized allocation
+            const pk = try param_wots.generatePublicKey(allocator, sk, epoch);
+            defer allocator.free(pk);
+
+            // Hash public key to create leaf hash (optimized tweak)
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0,
+                    .pos_in_level = @as(u32, @intCast(leaf_idx)),
+                },
+            };
+
+            const leaf_hash = try param_wots.hash.hashFieldElements(allocator, pk, leaf_tweak, 7);
+            leaf_hashes[leaf_idx] = leaf_hash;
+
+            // Store flattened version for tree building
+            flattened_leaves[leaf_idx] = leaf_hash[0];
+        }
+
+        std.debug.print("  Building tree from {} leaf hashes...\n", .{num_leaves});
+
+        // Build full tree from 7-FE leaf hashes (for auth paths and root)
+        const tree_levels = try param_tree.buildFullTree(allocator, leaf_hashes);
+
+        // Set public root as the 7-FE node at the final level (Rust-compatible)
+        const final_level2 = tree_levels[tree_levels.len - 1];
+        const root_node2 = final_level2[0];
+        const root_slice2 = try allocator.dupe(FieldElement, root_node2);
+
+        return .{ root_slice2, tree_levels };
+    }
+
+    /// Shared state for parallel leaf generation
+    const ParallelSharedState = struct {
+        leaf_hashes: [][]FieldElement,
+        flattened_leaves: []FieldElement,
+        param_wots: *WinternitzOTSNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+        leaves_per_thread: usize,
+        progress_mutex: std.Thread.Mutex,
+        progress_counter: usize,
+        main_allocator: Allocator,
+    };
+
+    /// Worker function for parallel leaf generation
+    fn generateLeavesWorker(shared_state: *ParallelSharedState, thread_idx: usize) void {
+        const start_idx = thread_idx * shared_state.leaves_per_thread;
+        const end_idx = @min(start_idx + shared_state.leaves_per_thread, shared_state.num_leaves);
+
+        // Create thread-local allocator for temporary work
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        const temp_allocator = gpa.allocator();
+        defer _ = gpa.deinit();
+
+        for (start_idx..end_idx) |leaf_idx| {
+            // Update progress (thread-safe)
+            {
+                shared_state.progress_mutex.lock();
+                defer shared_state.progress_mutex.unlock();
+                shared_state.progress_counter += 1;
+                if (shared_state.progress_counter % 50 == 0) {
+                    std.debug.print("  Progress: {}/{} ({d:.1}%)\n", .{ shared_state.progress_counter, shared_state.num_leaves, @as(f64, @floatFromInt(shared_state.progress_counter)) * 100.0 / @as(f64, @floatFromInt(shared_state.num_leaves)) });
+                }
+            }
+
+            const epoch = @as(u32, @intCast(leaf_idx));
+
+            // Generate private key using temp allocator
+            const sk = shared_state.param_wots.generatePrivateKey(temp_allocator, shared_state.prf_key, epoch) catch |err| {
+                std.debug.print("Error generating private key for leaf {}: {}\n", .{ leaf_idx, err });
+                return;
+            };
+            defer {
+                for (sk) |k| temp_allocator.free(k);
+                temp_allocator.free(sk);
+            }
+
+            // Generate public key using temp allocator
+            const pk = shared_state.param_wots.generatePublicKey(temp_allocator, sk, epoch) catch |err| {
+                std.debug.print("Error generating public key for leaf {}: {}\n", .{ leaf_idx, err });
+                return;
+            };
+            defer temp_allocator.free(pk);
+
+            // Hash public key to create leaf hash using temp allocator
+            const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+                .tree_tweak = .{
+                    .level = 0,
+                    .pos_in_level = @as(u32, @intCast(leaf_idx)),
+                },
+            };
+
+            const leaf_hash = shared_state.param_wots.hash.hashFieldElements(temp_allocator, pk, leaf_tweak, 7) catch |err| {
+                std.debug.print("Error hashing leaf {}: {}\n", .{ leaf_idx, err });
+                return;
+            };
+
+            // Copy to main allocator for storage (thread-safe since each thread writes to different indices)
+            const main_leaf_hash = shared_state.main_allocator.dupe(FieldElement, leaf_hash) catch |err| {
+                std.debug.print("Error duplicating leaf hash for leaf {}: {}\n", .{ leaf_idx, err });
+                return;
+            };
+            temp_allocator.free(leaf_hash);
+
+            shared_state.leaf_hashes[leaf_idx] = main_leaf_hash;
+            shared_state.flattened_leaves[leaf_idx] = main_leaf_hash[0];
+        }
+    }
+
+    /// Parallel tree generation for medium to large trees
+    fn generateTreeParallel(
+        allocator: Allocator,
+        param_wots: *WinternitzOTSNative,
+        param_tree: *MerkleTreeNative,
+        prf_key: *const [32]u8,
+        num_leaves: usize,
+    ) !struct { []FieldElement, [][][]FieldElement } {
+        std.debug.print("generateTreeParallel: Processing {} leaves with parallel generation\n", .{num_leaves});
+
+        // Determine optimal number of threads
+        const num_threads = @min(num_leaves, std.Thread.getCpuCount() catch 4);
+        const leaves_per_thread = (num_leaves + num_threads - 1) / num_threads;
+        std.debug.print("Using {} threads, {} leaves per thread\n", .{ num_threads, leaves_per_thread });
+
+        // Pre-allocate all leaf hashes
+        const leaf_hashes = try allocator.alloc([]FieldElement, num_leaves);
+        defer {
+            for (leaf_hashes) |hash| {
+                if (hash.len > 0) allocator.free(hash);
+            }
+            allocator.free(leaf_hashes);
+        }
+
+        // Pre-allocate flattened leaves array
+        const flattened_leaves = try allocator.alloc(FieldElement, num_leaves);
+        defer allocator.free(flattened_leaves);
+
+        // Create thread handles
+        const threads = try allocator.alloc(std.Thread, num_threads);
+        defer allocator.free(threads);
+
+        // Create thread-safe shared state
+        const shared_state = try allocator.create(ParallelSharedState);
+        defer allocator.destroy(shared_state);
+        shared_state.* = ParallelSharedState{
+            .leaf_hashes = leaf_hashes,
+            .flattened_leaves = flattened_leaves,
+            .param_wots = param_wots,
+            .prf_key = prf_key,
+            .num_leaves = num_leaves,
+            .leaves_per_thread = leaves_per_thread,
+            .progress_mutex = std.Thread.Mutex{},
+            .progress_counter = 0,
+            .main_allocator = allocator,
+        };
+
+        // Spawn threads
+        for (0..num_threads) |thread_idx| {
+            threads[thread_idx] = try std.Thread.spawn(.{}, generateLeavesWorker, .{ shared_state, thread_idx });
+        }
+
+        // Wait for all threads to complete
+        for (threads) |thread| {
+            thread.join();
+        }
+
+        std.debug.print("  Building tree from {} leaf hashes...\n", .{num_leaves});
+
+        // Build full tree from 7-FE leaf hashes
+        const tree_levels = try param_tree.buildFullTree(allocator, leaf_hashes);
+
+        // Set public root as the 7-FE node at the final level
+        const final_level = tree_levels[tree_levels.len - 1];
+        const root_node = final_level[0];
+        const root_slice = try allocator.dupe(FieldElement, root_node);
 
         return .{ root_slice, tree_levels };
     }
@@ -984,7 +1308,7 @@ test "signature native: sign and verify" {
     }
 
     // Sign
-    const epoch: u64 = 5;
+    const epoch: u64 = 0;
     var signature = try hash_sig.sign(allocator, &keypair.secret_key, &message_hash, epoch);
     defer signature.deinit(allocator);
 

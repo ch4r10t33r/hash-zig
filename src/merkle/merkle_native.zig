@@ -73,33 +73,23 @@ pub const MerkleTreeNative = struct {
             const right_idx = left_idx + 1;
 
             if (right_idx < ctx.current_len) {
-                // Hash two children nodes
                 const left = ctx.current_level[left_idx];
                 const right = ctx.current_level[right_idx];
-
-                // Create input: [left, right]
                 var input = [2]FieldElement{ left, right };
-
-                // Create tree tweak
-                const tweak = PoseidonTweak{
-                    .tree_tweak = .{
-                        .level = @intCast(ctx.level_num + 1), // Parent level
-                        .pos_in_level = @intCast(i), // Position in parent level
-                    },
-                };
-
-                // Hash to single field element (tree_hash_output_len_fe = 1)
+                const tweak = PoseidonTweak{ .tree_tweak = .{
+                    .level = @intCast(ctx.level_num + 1),
+                    .pos_in_level = @intCast(i),
+                } };
                 const result = ctx.tree.hash.hashFieldElements(
                     ctx.allocator,
                     &input,
                     tweak,
-                    1, // tree_hash_output_len_fe for KoalaBear
+                    1,
                 ) catch {
                     ctx.error_flag.store(true, .monotonic);
                     return;
                 };
                 defer ctx.allocator.free(result);
-
                 ctx.next_level[i] = result[0];
             } else {
                 // Odd node, promote directly
@@ -275,6 +265,13 @@ pub const MerkleTreeNative = struct {
                         tweak,
                         7, // 7 field elements output (HASH_LEN_FE)
                     );
+                    // Debug: show first FE values for early nodes
+                    if (i < 2 and level_idx <= 2) {
+                        std.debug.print(
+                            "BUILD L{} i{}: left0={} right0={} -> parent0={}\n",
+                            .{ level_num + 1, i, left[0].toU32(), right[0].toU32(), parent[0].toU32() },
+                        );
+                    }
                     // Don't defer - ownership transfers to tree
                     tree_levels[level_idx][i] = parent;
                 } else if (left_idx < current_len) {
@@ -374,6 +371,8 @@ pub const MerkleTreeNative = struct {
                 @memcpy(combined[sibling.len..], current);
             }
 
+            // Rust uses parent level index for the hash tweak. Our level_num starts at 0 for leaves,
+            // so parent level is (level_num + 1), which matches Rust's convention.
             const tweak = PoseidonTweak{ .tree_tweak = .{
                 .level = @intCast(level_num + 1),
                 .pos_in_level = @intCast(pos_in_level),
@@ -385,6 +384,13 @@ pub const MerkleTreeNative = struct {
                 tweak,
                 7, // 7 field elements output (HASH_LEN_FE)
             );
+            // Debug: show first FE values for early levels in verification
+            if (pos_in_level < 2 and level_num <= 2) {
+                std.debug.print(
+                    "VERIFY L{} pos{} is_left={} cur0={} sib0={} -> out0={}\n",
+                    .{ level_num + 1, pos_in_level, is_left, current[0].toU32(), sibling[0].toU32(), result[0].toU32() },
+                );
+            }
 
             // Update current for next iteration
             allocator.free(current);
@@ -394,9 +400,15 @@ pub const MerkleTreeNative = struct {
         }
 
         // Compare final result with expected root
-        if (current.len != expected_root.len) return false;
-        for (current, expected_root) |c, r| {
-            if (c.toU32() != r.toU32()) return false;
+        if (current.len != expected_root.len) {
+            std.debug.print("VERIFY DEBUG: root len mismatch {} vs {}\n", .{ current.len, expected_root.len });
+            return false;
+        }
+        for (current, expected_root, 0..) |c, r, i| {
+            if (c.toU32() != r.toU32()) {
+                std.debug.print("VERIFY DEBUG: root mismatch at element {}: {} != {}\n", .{ i, c.toU32(), r.toU32() });
+                return false;
+            }
         }
         // current will be freed by defer
         return true;

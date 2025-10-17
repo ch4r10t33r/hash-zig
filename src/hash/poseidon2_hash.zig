@@ -456,10 +456,20 @@ pub const Poseidon2 = struct {
 
         const rate = width24 - capacity_value.len;
 
-        // Pad input to multiple of rate (Rust pads with zeros)
+        // Optimize: use stack allocation for small inputs to avoid heap allocation
         const extra_elements = (rate - (input.len % rate)) % rate;
-        var padded_input = try allocator.alloc(FieldElement, input.len + extra_elements);
-        defer allocator.free(padded_input);
+        const total_input_len = input.len + extra_elements;
+
+        // Use stack allocation for small inputs (most common case)
+        var padded_input: []FieldElement = undefined;
+        var stack_buffer: [64]FieldElement = undefined; // Stack buffer for small inputs
+
+        if (total_input_len <= stack_buffer.len) {
+            padded_input = stack_buffer[0..total_input_len];
+        } else {
+            padded_input = try allocator.alloc(FieldElement, total_input_len);
+            defer allocator.free(padded_input);
+        }
 
         // Copy input to avoid aliasing issues
         for (input, 0..) |elem, i| {
