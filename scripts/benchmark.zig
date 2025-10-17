@@ -15,9 +15,9 @@ pub fn main() !void {
         std.debug.print("  arg[{}]: {s}\n", .{ i, arg });
     }
 
-    var lifetime_power: u8 = 10; // Default to 2^10
+    var lifetime_power: u8 = 18; // Default to 2^18 for performance testing
     if (args.len > 1) {
-        lifetime_power = std.fmt.parseInt(u8, args[1], 10) catch 10;
+        lifetime_power = std.fmt.parseInt(u8, args[1], 10) catch 18;
         std.debug.print("Parsed lifetime_power: {d}\n", .{lifetime_power});
     } else {
         std.debug.print("No args provided, using default lifetime_power: {d}\n", .{lifetime_power});
@@ -41,7 +41,7 @@ pub fn main() !void {
     };
 
     const num_signatures = @as(usize, 1) << @intCast(lifetime_power);
-    const expected_time_sec = @as(f64, @floatFromInt(num_signatures)) / 1000.0; // Rough estimate
+    const expected_time_sec = @as(f64, @floatFromInt(num_signatures)) / 100.0; // More realistic estimate for optimized implementation
 
     const lifetimes = [_]struct { name: []const u8, lifetime: hash_zig.core.KeyLifetime, expected_time_sec: f64, description: []const u8 }{
         .{ .name = std.fmt.allocPrint(allocator, "2^{d}", .{lifetime_power}) catch "2^10", .lifetime = lifetime, .expected_time_sec = expected_time_sec, .description = std.fmt.allocPrint(allocator, "{d} signatures - Winternitz w=8", .{num_signatures}) catch "1,024 signatures - Winternitz w=8" },
@@ -53,7 +53,7 @@ pub fn main() !void {
         std.debug.print("-------------------\n", .{});
 
         const params = hash_zig.Parameters.init(config.lifetime);
-        var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
+        var sig_scheme = try hash_zig.HashSignatureNative.init(allocator, params);
         defer sig_scheme.deinit();
 
         const seed: [32]u8 = .{42} ** 32;
@@ -61,7 +61,7 @@ pub fn main() !void {
         // Key generation benchmark - this is the main focus
         std.debug.print("Starting key generation...\n", .{});
         const keygen_start = std.time.nanoTimestamp();
-        var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
+        var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, num_signatures);
         const keygen_end = std.time.nanoTimestamp();
         defer keypair.deinit(allocator);
 
@@ -81,7 +81,7 @@ pub fn main() !void {
         // Sign benchmark
         const message = "Performance test message";
         const sign_start = std.time.nanoTimestamp();
-        var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, 0, &seed);
+        var signature = try sig_scheme.sign(allocator, &keypair.secret_key, message, 0);
         const sign_end = std.time.nanoTimestamp();
         defer signature.deinit(allocator);
 
@@ -90,7 +90,7 @@ pub fn main() !void {
 
         // Verify benchmark
         const verify_start = std.time.nanoTimestamp();
-        const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
+        const is_valid = try sig_scheme.verify(allocator, &keypair.public_key, message, &signature);
         const verify_end = std.time.nanoTimestamp();
 
         const verify_duration_ns = verify_end - verify_start;

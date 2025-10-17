@@ -407,15 +407,14 @@ pub const HashSignatureNative = struct {
         prf_key: *const [32]u8,
         num_leaves: usize,
     ) !struct { []FieldElement, [][][]FieldElement } {
-        // For very large lifetimes (2^18), use streaming approach
-        // This generates leaves on-demand instead of storing them all in memory
-        std.debug.print("generateTreeWithParallelization: num_leaves = {}, parallel_threshold = {}, streaming_threshold = {}\n", .{ num_leaves, 1 << 8, 1 << 16 });
+        // Optimized thresholds for better performance
+        std.debug.print("generateTreeWithParallelization: num_leaves = {}, parallel_threshold = {}, streaming_threshold = {}\n", .{ num_leaves, 1 << 6, 1 << 14 });
         std.debug.print("generateTreeWithParallelization: About to select approach...\n", .{});
 
-        if (num_leaves > 1 << 16) { // Threshold: 65,536 leaves
+        if (num_leaves > 1 << 14) { // Threshold: 16,384 leaves (reduced from 65,536)
             // Use streaming approach for very large trees to manage memory
             return try generateTreeWithStreaming(allocator, param_wots, param_tree, prf_key, num_leaves);
-        } else if (num_leaves >= 1 << 8) { // Threshold: 256 leaves
+        } else if (num_leaves >= 1 << 6) { // Threshold: 64 leaves (reduced from 256)
             // Use parallel approach for medium to large trees
             return try generateTreeParallel(allocator, param_wots, param_tree, prf_key, num_leaves);
         } else {
@@ -660,7 +659,7 @@ pub const HashSignatureNative = struct {
         main_allocator: Allocator,
     };
 
-    /// Worker function for parallel leaf generation
+    /// Worker function for parallel leaf generation (optimized)
     fn generateLeavesWorker(shared_state: *ParallelSharedState, thread_idx: usize) void {
         const start_idx = thread_idx * shared_state.leaves_per_thread;
         const end_idx = @min(start_idx + shared_state.leaves_per_thread, shared_state.num_leaves);
@@ -670,17 +669,11 @@ pub const HashSignatureNative = struct {
         const temp_allocator = gpa.allocator();
         defer _ = gpa.deinit();
 
-        for (start_idx..end_idx) |leaf_idx| {
-            // Update progress (thread-safe)
-            {
-                shared_state.progress_mutex.lock();
-                defer shared_state.progress_mutex.unlock();
-                shared_state.progress_counter += 1;
-                if (shared_state.progress_counter % 50 == 0) {
-                    std.debug.print("  Progress: {}/{} ({d:.1}%)\n", .{ shared_state.progress_counter, shared_state.num_leaves, @as(f64, @floatFromInt(shared_state.progress_counter)) * 100.0 / @as(f64, @floatFromInt(shared_state.num_leaves)) });
-                }
-            }
+        // Process leaves in batches to reduce synchronization overhead
+        const batch_size = 100;
+        var processed_count: usize = 0;
 
+        for (start_idx..end_idx) |leaf_idx| {
             const epoch = @as(u32, @intCast(leaf_idx));
 
             // Generate private key using temp allocator
@@ -722,6 +715,24 @@ pub const HashSignatureNative = struct {
 
             shared_state.leaf_hashes[leaf_idx] = main_leaf_hash;
             shared_state.flattened_leaves[leaf_idx] = main_leaf_hash[0];
+
+            // Update progress less frequently to reduce synchronization overhead
+            processed_count += 1;
+            if (processed_count % batch_size == 0) {
+                shared_state.progress_mutex.lock();
+                defer shared_state.progress_mutex.unlock();
+                shared_state.progress_counter += batch_size;
+                if (shared_state.progress_counter % 500 == 0) { // Less frequent updates
+                    std.debug.print("  Progress: {}/{} ({d:.1}%)\n", .{ shared_state.progress_counter, shared_state.num_leaves, @as(f64, @floatFromInt(shared_state.progress_counter)) * 100.0 / @as(f64, @floatFromInt(shared_state.num_leaves)) });
+                }
+            }
+        }
+
+        // Update final progress for remaining leaves
+        if (processed_count % batch_size != 0) {
+            shared_state.progress_mutex.lock();
+            defer shared_state.progress_mutex.unlock();
+            shared_state.progress_counter += processed_count % batch_size;
         }
     }
 
@@ -865,7 +876,7 @@ pub const HashSignatureNative = struct {
         return .{ root, tree_levels };
     }
 
-    /// Batch processing for extremely large lifetimes (memory-constrained)
+    /// Optimized batch processing for extremely large lifetimes
     fn generateTreeWithBatching(
         allocator: Allocator,
         param_wots: *WinternitzOTSNative,
@@ -873,16 +884,19 @@ pub const HashSignatureNative = struct {
         prf_key: *const [32]u8,
         num_leaves: usize,
     ) !struct { []FieldElement, [][][]FieldElement } {
-        // Process in small batches to minimize memory usage
-        const batch_size = 64; // Process 64 epochs at a time (further reduced for debugging)
+        // Use larger batches with parallel processing for better performance
+        const batch_size = 2048; // Process 2048 epochs at a time (increased for better performance)
         var processed_leaves: usize = 0;
 
-        std.debug.print("BATCH PROCESSING: Starting with {} epochs, batch size: {}\n", .{ num_leaves, batch_size });
-        std.debug.print("BATCH PROCESSING: Estimated memory usage: ~{}MB\n", .{(batch_size * 180) / 1024});
+        std.debug.print("OPTIMIZED BATCH PROCESSING: Starting with {} epochs, batch size: {}\n", .{ num_leaves, batch_size });
+        std.debug.print("OPTIMIZED BATCH PROCESSING: Estimated memory usage: ~{}MB\n", .{(batch_size * 180) / 1024});
 
         // Initialize streaming tree builder
         var tree_builder = try StreamingTreeBuilder.init(allocator, @intCast(param_tree.height), &param_wots.hash);
         defer tree_builder.deinit();
+
+        // Use parallel processing for batches
+        const num_threads = @min(std.Thread.getCpuCount() catch 4, 8); // Limit to 8 threads max
 
         while (processed_leaves < num_leaves) {
             const batch_end = @min(processed_leaves + batch_size, num_leaves);
@@ -891,60 +905,47 @@ pub const HashSignatureNative = struct {
 
             std.debug.print("BATCH {}/{}: Processing epochs {} to {} of {} ({}% complete)\n", .{ batch_num, total_batches, processed_leaves, batch_end - 1, num_leaves, (processed_leaves * 100) / num_leaves });
 
-            // Process batch sequentially to minimize memory usage
-            for (processed_leaves..batch_end) |i| {
-                const epoch = @as(u32, @intCast(i));
+            // Process batch with parallel workers
+            const batch_size_actual = batch_end - processed_leaves;
+            const leaves_per_thread = (batch_size_actual + num_threads - 1) / num_threads;
 
-                // Progress indicator every 10 epochs
-                if ((i - processed_leaves) % 10 == 0) {
-                    std.debug.print("  Processing epoch {}/{} in batch\n", .{ i - processed_leaves + 1, batch_end - processed_leaves });
-                }
+            // Create thread handles for this batch
+            const batch_threads = try allocator.alloc(std.Thread, num_threads);
+            defer allocator.free(batch_threads);
 
-                // Generate OTS key pair for this epoch using in-place computation
-                const sk = param_wots.generatePrivateKey(allocator, prf_key, epoch) catch return error.KeyGenerationFailed;
-                defer {
-                    for (sk) |k| allocator.free(k);
-                    allocator.free(sk);
-                }
+            // Create shared state for this batch
+            const batch_state = try allocator.create(BatchSharedState);
+            defer allocator.destroy(batch_state);
+            batch_state.* = BatchSharedState{
+                .tree_builder = &tree_builder,
+                .param_wots = param_wots,
+                .prf_key = prf_key,
+                .allocator = allocator,
+                .start_idx = processed_leaves,
+                .end_idx = batch_end,
+                .error_flag = std.atomic.Value(bool).init(false),
+            };
 
-                // Generate public key using in-place chain computation
-                var chain_ends = try allocator.alloc(FieldElement, sk.len);
-                defer allocator.free(chain_ends);
+            // Spawn threads for this batch
+            for (0..num_threads) |thread_idx| {
+                batch_threads[thread_idx] = try std.Thread.spawn(.{}, processBatchWorker, .{ batch_state, thread_idx, leaves_per_thread });
+            }
 
-                for (sk, 0..) |private_key_chain, chain_idx| {
-                    chain_ends[chain_idx] = param_wots.generateChainEndInPlace(
-                        private_key_chain[0], // Start with first element
-                        epoch,
-                        @intCast(chain_idx),
-                        param_wots.getChainLength() - 1, // steps
-                    ) catch return error.ChainGenerationFailed;
-                }
+            // Wait for all threads to complete
+            for (batch_threads) |thread| {
+                thread.join();
+            }
 
-                // Hash chain ends to get leaf hash
-                const leaf_tweak = @import("tweak.zig").PoseidonTweak{
-                    .tree_tweak = .{
-                        .level = 0,
-                        .pos_in_level = @intCast(i),
-                    },
-                };
-
-                const leaf_hash = param_wots.hash.hashFieldElements(
-                    allocator,
-                    chain_ends,
-                    leaf_tweak,
-                    7,
-                ) catch return error.HashGenerationFailed;
-                defer allocator.free(leaf_hash);
-
-                // Add to streaming tree builder
-                tree_builder.addLeafHash(leaf_hash[0]) catch return error.TreeBuildingFailed;
+            // Check for errors
+            if (batch_state.error_flag.load(.monotonic)) {
+                return error.BatchProcessingFailed;
             }
 
             processed_leaves = batch_end;
             std.debug.print("BATCH {}/{}: Completed successfully\n", .{ batch_num, total_batches });
         }
 
-        std.debug.print("BATCH PROCESSING: All batches completed, computing final tree...\n", .{});
+        std.debug.print("OPTIMIZED BATCH PROCESSING: All batches completed, computing final tree...\n", .{});
 
         // Get final results
         const root_element = tree_builder.getRoot() catch return error.IncompleteTree;
@@ -955,7 +956,7 @@ pub const HashSignatureNative = struct {
         const root = try allocator.alloc(FieldElement, 1);
         root[0] = root_value;
 
-        std.debug.print("BATCH PROCESSING: Successfully completed {} epochs with batch processing!\n", .{num_leaves});
+        std.debug.print("OPTIMIZED BATCH PROCESSING: Successfully completed {} epochs with parallel batch processing!\n", .{num_leaves});
         return .{ root, tree_levels };
     }
 
@@ -1253,6 +1254,73 @@ const ThreadContext = struct {
     allocator: Allocator,
     error_flag: std.atomic.Value(bool),
 };
+
+// Batch shared state for parallel batch processing
+const BatchSharedState = struct {
+    tree_builder: *StreamingTreeBuilder,
+    param_wots: *WinternitzOTSNative,
+    prf_key: *const [32]u8,
+    allocator: Allocator,
+    start_idx: usize,
+    end_idx: usize,
+    error_flag: std.atomic.Value(bool),
+};
+
+// Process batch worker for parallel batch processing
+fn processBatchWorker(shared_state: *BatchSharedState, thread_idx: usize, leaves_per_thread: usize) void {
+    const start_idx = shared_state.start_idx + (thread_idx * leaves_per_thread);
+    const end_idx = @min(start_idx + leaves_per_thread, shared_state.end_idx);
+
+    // Create thread-local allocator for temporary work
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const temp_allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    for (start_idx..end_idx) |i| {
+        if (shared_state.error_flag.load(.monotonic)) {
+            break;
+        }
+
+        const epoch = @as(u32, @intCast(i));
+
+        // Generate OTS key pair for this epoch using temp allocator
+        const sk = shared_state.param_wots.generatePrivateKey(temp_allocator, shared_state.prf_key, epoch) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+        defer {
+            for (sk) |k| temp_allocator.free(k);
+            temp_allocator.free(sk);
+        }
+
+        // Generate public key using temp allocator
+        const pk = shared_state.param_wots.generatePublicKey(temp_allocator, sk, epoch) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+        defer temp_allocator.free(pk);
+
+        // Hash public key to create leaf hash using temp allocator
+        const leaf_tweak = @import("tweak.zig").PoseidonTweak{
+            .tree_tweak = .{
+                .level = 0,
+                .pos_in_level = @as(u32, @intCast(i)),
+            },
+        };
+
+        const leaf_hash = shared_state.param_wots.hash.hashFieldElements(temp_allocator, pk, leaf_tweak, 7) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+        defer temp_allocator.free(leaf_hash);
+
+        // Add to streaming tree builder (thread-safe)
+        shared_state.tree_builder.addLeafHash(leaf_hash[0]) catch {
+            shared_state.error_flag.store(true, .monotonic);
+            break;
+        };
+    }
+}
 
 test "signature native: key generation" {
     const allocator = std.testing.allocator;
