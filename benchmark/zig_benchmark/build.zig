@@ -4,11 +4,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Add hash-zig dependency
-    const hash_zig_dep = b.dependency("hash_zig", .{
+    // Create hash-zig module directly
+    const hash_zig_module = b.addModule("hash-zig", .{
+        .root_source_file = b.path("../../src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    // Add poseidon dependency
+    const zig_poseidon_dep = b.dependency("zig_poseidon", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const poseidon_mod = zig_poseidon_dep.module("poseidon");
+    hash_zig_module.addImport("poseidon", poseidon_mod);
 
     const exe = b.addExecutable(.{
         .name = "keygen_bench",
@@ -17,7 +26,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.root_module.addImport("hash-zig", hash_zig_dep.module("hash-zig"));
+    exe.root_module.addImport("hash-zig", hash_zig_module);
 
     b.installArtifact(exe);
 
@@ -39,7 +48,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    sign_exe.root_module.addImport("hash-zig", hash_zig_dep.module("hash-zig"));
+    sign_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(sign_exe);
 
     // Add verification binary
@@ -50,7 +59,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    verify_exe.root_module.addImport("hash-zig", hash_zig_dep.module("hash-zig"));
+    verify_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(verify_exe);
 
     // Add internal test binary
@@ -61,7 +70,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    test_internal_exe.root_module.addImport("hash-zig", hash_zig_dep.module("hash-zig"));
+    test_internal_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(test_internal_exe);
 
     // Add same keypair test binary
@@ -72,6 +81,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    test_same_keypair_exe.root_module.addImport("hash-zig", hash_zig_dep.module("hash-zig"));
+    test_same_keypair_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(test_same_keypair_exe);
 }

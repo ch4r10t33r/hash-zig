@@ -53,6 +53,9 @@ pub const GeneralizedXMSSPublicKey = signature.GeneralizedXMSSPublicKey;
 pub const GeneralizedXMSSSecretKey = signature.GeneralizedXMSSSecretKey;
 pub const GeneralizedXMSSSignature = signature.GeneralizedXMSSSignature;
 
+// Serialization utilities
+pub const serialization = @import("signature/serialization.zig");
+
 // Legacy implementation (kept for compatibility)
 pub const HashSignatureShakeCompatLegacy = signature.HashSignatureShakeCompatLegacy;
 

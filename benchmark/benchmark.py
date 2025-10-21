@@ -232,12 +232,18 @@ class HashSigImplementationRust(HashSigImplementation):
             if result.returncode != 0:
                 return SignResult(0, False, None, f"Signing failed: {result.stderr[:300]}")
             
-            # Parse signature from output
+            # Parse signature and key data from output
             signature_data = None
+            public_key_data = None
+            secret_key_data = None
+            
             for line in result.stdout.split('\n'):
                 if line.startswith("SIGNATURE:"):
                     signature_data = line.split(":", 1)[1].strip()
-                    break
+                elif line.startswith("PUBLIC_KEY:"):
+                    public_key_data = line.split(":", 1)[1].strip()
+                elif line.startswith("SECRET_KEY:"):
+                    secret_key_data = line.split(":", 1)[1].strip()
             
             elapsed = end_time - start_time
             return SignResult(elapsed, True, signature_data)
@@ -434,12 +440,18 @@ class HashZigImplementation(HashSigImplementation):
             if result.returncode != 0:
                 return SignResult(0, False, None, f"Signing failed: {result.stderr[:300]}")
             
-            # Parse signature from stderr (Zig outputs to stderr)
+            # Parse signature and key data from stderr (Zig outputs to stderr)
             signature_data = None
+            public_key_data = None
+            secret_key_data = None
+            
             for line in result.stderr.split('\n'):
                 if line.startswith("SIGNATURE:"):
                     signature_data = line.split(":", 1)[1].strip()
-                    break
+                elif line.startswith("PUBLIC_KEY:"):
+                    public_key_data = line.split(":", 1)[1].strip()
+                elif line.startswith("SECRET_KEY:"):
+                    secret_key_data = line.split(":", 1)[1].strip()
             
             elapsed = end_time - start_time
             return SignResult(elapsed, True, signature_data)
@@ -779,8 +791,10 @@ class BenchmarkRunner:
             print(f"    ✓ Rust signing successful ({rust_sign_result.time:.3f}s)")
             
             print("    Verifying with Zig...")
+            # Use the public key data from the signing result (properly serialized)
+            public_key_for_verification = rust_key_result.public_hex or ""
             zig_verify_result = zig_impl.verify_signature(
-                rust_key_result.public_hex or "", 
+                public_key_for_verification, 
                 rust_sign_result.signature_data or "", 
                 test_message, 
                 test_epoch

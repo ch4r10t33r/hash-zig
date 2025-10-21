@@ -29,53 +29,42 @@ pub fn main() !void {
     defer allocator.free(epoch_str);
     const epoch = std.fmt.parseInt(u32, epoch_str, 10) catch 0;
 
-    // Initialize the scheme
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
-    defer scheme.deinit();
-
-    // For now, we'll generate a new keypair since we don't have key serialization
-    // In a real implementation, we'd deserialize the public_key_data
-    const keypair = try scheme.keyGen(0, 256);
-    defer keypair.secret_key.deinit();
-
     // Convert message to bytes (truncate/pad to 32 bytes)
     var message_bytes: [32]u8 = [_]u8{0} ** 32;
     const copy_len = @min(message.len, 32);
     @memcpy(message_bytes[0..copy_len], message[0..copy_len]);
 
-    // Parse the signature data
+    // Parse the signature and public key data
     if (std.mem.startsWith(u8, signature_data, "SIGNATURE:")) {
-        const json_data = signature_data[10..]; // Skip "SIGNATURE:" prefix
+        const signature_json = signature_data[10..]; // Skip "SIGNATURE:" prefix
 
-        // CRITICAL FIX: We need to use the same keypair that was used for signing
-        // Since we can't easily deserialize the signature, we'll create a signature
-        // with the same keypair and message, but we need to ensure we're using
-        // the CORRECT keypair (the one that was used for signing)
+        // Parse public key
+        const public_key_json = if (std.mem.startsWith(u8, public_key_data, "PUBLIC_KEY:"))
+            public_key_data[11..] // Skip "PUBLIC_KEY:" prefix
+        else
+            public_key_data;
 
-        // The issue is that we're generating a NEW keypair here instead of using
-        // the keypair that was used for signing. For true cross-compatibility,
-        // we would need to deserialize both the public key and signature.
+        // Deserialize public key
+        const public_key = hash_zig.serialization.deserializePublicKey(public_key_json) catch |err| {
+            std.debug.print("Failed to deserialize public key: {}\n", .{err});
+            std.process.exit(1);
+        };
 
-        // For now, let's implement a simple test: if the signature data contains
-        // "placeholder", it means it came from Rust (which uses placeholder data)
-        // Otherwise, it came from Zig (which uses real signature data)
+        // Deserialize signature
+        const signature = hash_zig.serialization.deserializeSignature(allocator, signature_json) catch |err| {
+            std.debug.print("Failed to deserialize signature: {}\n", .{err});
+            std.process.exit(1);
+        };
+        defer signature.deinit();
 
-        const is_zig_signature = std.mem.indexOf(u8, json_data, "core.field") != null;
+        // Initialize the scheme
+        var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
+        defer scheme.deinit();
 
-        if (is_zig_signature) {
-            // This is a Zig signature - create a signature with the same keypair
-            const signature = try scheme.sign(keypair.secret_key, epoch, message_bytes);
-            defer signature.deinit();
+        // Verify the signature
+        const is_valid = try scheme.verify(&public_key, epoch, message_bytes, signature);
 
-            // Verify the signature
-            const is_valid = try scheme.verify(&keypair.public_key, epoch, message_bytes, signature);
-
-            std.debug.print("VERIFY_RESULT:{}\n", .{is_valid});
-        } else {
-            // This is a Rust signature - we cannot verify it because we don't have
-            // the corresponding secret key. This will fail as expected.
-            std.debug.print("VERIFY_RESULT:false\n", .{});
-        }
+        std.debug.print("VERIFY_RESULT:{}\n", .{is_valid});
     } else {
         std.debug.print("VERIFY_RESULT:false\n", .{});
     }
