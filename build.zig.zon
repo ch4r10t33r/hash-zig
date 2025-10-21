@@ -1,13 +1,13 @@
 .{
     .name = .hash_zig,
-    .version = "0.1.0",
+    .version = "1.1.0",
     .fingerprint = 0xc2f8b6b2acaee93c,
     .minimum_zig_version = "0.14.1",
 
     .dependencies = .{
         .zig_poseidon = .{
-            .url = "https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz",
-            .hash = "zig_poseidon-0.2.0-CHeW2Pi8AABVfZSqWGjEjT8DEFBk9EwtMnmQ6OCXT4_4",
+            .url = "https://github.com/blockblaz/zig-poseidon/archive/refs/heads/main.tar.gz",
+            .hash = "zig_poseidon-0.2.0-CHeW2IA_AQCpTqQYrzpREdQX-Yvu4UkX7RuxmMml3Auf",
         },
     },
 

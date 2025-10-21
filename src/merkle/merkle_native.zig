@@ -73,33 +73,23 @@ pub const MerkleTreeNative = struct {
             const right_idx = left_idx + 1;
 
             if (right_idx < ctx.current_len) {
-                // Hash two children nodes
                 const left = ctx.current_level[left_idx];
                 const right = ctx.current_level[right_idx];
-
-                // Create input: [left, right]
                 var input = [2]FieldElement{ left, right };
-
-                // Create tree tweak
-                const tweak = PoseidonTweak{
-                    .tree_tweak = .{
-                        .level = @intCast(ctx.level_num + 1), // Parent level
-                        .pos_in_level = @intCast(i), // Position in parent level
-                    },
-                };
-
-                // Hash to single field element (tree_hash_output_len_fe = 1)
+                const tweak = PoseidonTweak{ .tree_tweak = .{
+                    .level = @intCast(ctx.level_num + 1),
+                    .pos_in_level = @intCast(i),
+                } };
                 const result = ctx.tree.hash.hashFieldElements(
                     ctx.allocator,
                     &input,
                     tweak,
-                    1, // tree_hash_output_len_fe for KoalaBear
+                    1,
                 ) catch {
                     ctx.error_flag.store(true, .monotonic);
                     return;
                 };
                 defer ctx.allocator.free(result);
-
                 ctx.next_level[i] = result[0];
             } else {
                 // Odd node, promote directly
@@ -275,6 +265,7 @@ pub const MerkleTreeNative = struct {
                         tweak,
                         7, // 7 field elements output (HASH_LEN_FE)
                     );
+                    // Removed debug print for performance
                     // Don't defer - ownership transfers to tree
                     tree_levels[level_idx][i] = parent;
                 } else if (left_idx < current_len) {
@@ -322,7 +313,7 @@ pub const MerkleTreeNative = struct {
             const current_level = tree_levels[level];
 
             if (sibling_idx < current_level.len) {
-                // Copy the sibling node (7 FEs)
+                // Copy all field elements for the sibling node
                 auth_path[level] = try allocator.dupe(FieldElement, current_level[sibling_idx]);
             } else {
                 // No sibling (odd node), use the node itself
@@ -345,12 +336,10 @@ pub const MerkleTreeNative = struct {
         expected_root: []const FieldElement,
     ) !bool {
         if (auth_path.len == 0) {
-            // Compare arrays element by element
-            if (leaf.len != expected_root.len) return false;
-            for (leaf, expected_root) |l, r| {
-                if (l.toU32() != r.toU32()) return false;
-            }
-            return true;
+            // Compare single field element
+            if (leaf.len != 1) return false;
+            if (expected_root.len != 1) return false;
+            return leaf[0].toU32() == expected_root[0].toU32();
         }
 
         var current = try allocator.dupe(FieldElement, leaf);
@@ -362,7 +351,7 @@ pub const MerkleTreeNative = struct {
             const is_left = (current_idx & 1) == 0;
             const pos_in_level = current_idx / 2;
 
-            // Combine current and sibling (each is 7 FEs, total 14 FEs)
+            // Combine current and sibling (each contains 7 field elements)
             var combined = try allocator.alloc(FieldElement, current.len + sibling.len);
             defer allocator.free(combined);
 
@@ -374,6 +363,8 @@ pub const MerkleTreeNative = struct {
                 @memcpy(combined[sibling.len..], current);
             }
 
+            // Rust uses parent level index for the hash tweak. Our level_num starts at 0 for leaves,
+            // so parent level is (level_num + 1), which matches Rust's convention.
             const tweak = PoseidonTweak{ .tree_tweak = .{
                 .level = @intCast(level_num + 1),
                 .pos_in_level = @intCast(pos_in_level),
@@ -383,8 +374,9 @@ pub const MerkleTreeNative = struct {
                 allocator,
                 combined,
                 tweak,
-                7, // 7 field elements output (HASH_LEN_FE)
+                7, // 7 field elements output for Poseidon2
             );
+            // Removed debug print for performance
 
             // Update current for next iteration
             allocator.free(current);
@@ -394,11 +386,16 @@ pub const MerkleTreeNative = struct {
         }
 
         // Compare final result with expected root
-        if (current.len != expected_root.len) return false;
-        for (current, expected_root) |c, r| {
-            if (c.toU32() != r.toU32()) return false;
+        if (current.len != expected_root.len) {
+            return false;
         }
-        // current will be freed by defer
+
+        // Compare all field elements
+        for (current, expected_root) |current_fe, expected_fe| {
+            if (current_fe.toU32() != expected_fe.toU32()) {
+                return false;
+            }
+        }
         return true;
     }
 };

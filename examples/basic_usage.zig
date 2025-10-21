@@ -1,109 +1,82 @@
-//! Example usage of the hash-zig library
-
 const std = @import("std");
-const hash_sig = @import("hash-zig");
+const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    // zlinter-disable-next-line no_deprecated - Standard allocator pattern for examples
-    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("Hash-Sig Example\n", .{});
-    std.debug.print("================\n\n", .{});
+    std.debug.print("hash-zig Basic Usage Example\n", .{});
+    std.debug.print("============================\n", .{});
+    std.debug.print("Demonstrating key generation, signing, and verification with timing\n\n", .{});
 
-    // Initialize with 128-bit security (only security level supported)
-    // Using lifetime_2_10 (1,024 signatures) with recommended Winternitz parameters
-    const params = hash_sig.Parameters.init(.lifetime_2_10);
-    var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
-    defer sig_scheme.deinit();
+    // Initialize the GeneralizedXMSS signature scheme for lifetime 2^8
+    std.debug.print("1. Initializing signature scheme (lifetime 2^8)...\n", .{});
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
+    defer scheme.deinit();
+    std.debug.print("✅ Signature scheme initialized\n\n", .{});
 
-    std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
-    std.debug.print("Parameters: 22 chains of length 256 (w=8) - Recommended\n", .{});
-    std.debug.print("Hash: Poseidon2\n\n", .{});
+    // Generate a keypair with timing
+    std.debug.print("2. Generating keypair...\n", .{});
+    var keygen_timer = try std.time.Timer.start();
+    const keypair = try scheme.keyGen(0, 256); // activation_epoch=0, num_active_epochs=256
+    const keygen_elapsed = keygen_timer.read();
+    const keygen_ms = keygen_elapsed / 1_000_000;
+    const keygen_s = @as(f64, @floatFromInt(keygen_elapsed)) / 1_000_000_000.0;
 
-    std.debug.print("Generating keypair...\n", .{});
+    std.debug.print("✅ Key generation completed\n", .{});
+    std.debug.print("⏱️  Key generation time: {d:.2} seconds ({d} ms)\n", .{ keygen_s, keygen_ms });
+    std.debug.print("📊 Generation rate: {d:.1} signatures/second\n", .{256.0 / keygen_s});
+    std.debug.print("🔑 Public key root: {}\n", .{keypair.public_key.root.value});
+    std.debug.print("🔐 Secret key epochs: 0 to {}\n\n", .{keypair.secret_key.getActivationInterval().end});
 
-    // Generate a random seed for key generation
-    var seed: [32]u8 = undefined;
-    std.crypto.random.bytes(&seed);
+    // Prepare a message to sign
+    const message = [_]u8{ 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21 } ++ [_]u8{0x00} ** 20; // "Hello World!" + padding
+    const epoch: u32 = 0;
 
-    // Measure key generation time
-    const start_time = std.time.nanoTimestamp();
-    // Generate key pair with full lifetime (0 = use all epochs)
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
-    const end_time = std.time.nanoTimestamp();
-    defer keypair.deinit(allocator);
+    // Sign the message with timing
+    std.debug.print("3. Signing message...\n", .{});
+    std.debug.print("📝 Message: \"Hello World!\" (32 bytes)\n", .{});
+    std.debug.print("📅 Epoch: {}\n", .{epoch});
 
-    const duration_ns = end_time - start_time;
-    const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
-    const duration_sec = duration_ms / 1000.0;
+    var sign_timer = try std.time.Timer.start();
+    const signature = try scheme.sign(keypair.secret_key, epoch, message);
+    const sign_elapsed = sign_timer.read();
+    const sign_ms = sign_elapsed / 1_000_000;
+    const sign_s = @as(f64, @floatFromInt(sign_elapsed)) / 1_000_000_000.0;
 
-    std.debug.print("Key generation completed in {d:.3} seconds\n", .{duration_sec});
-    std.debug.print("\nBENCHMARK_RESULT: {d:.6}\n", .{duration_sec});
+    std.debug.print("✅ Signing completed\n", .{});
+    std.debug.print("⏱️  Signing time: {d:.3} seconds ({d} ms)\n", .{ sign_s, sign_ms });
+    std.debug.print("📊 Signing rate: {d:.1} signatures/second\n\n", .{1.0 / sign_s});
 
-    std.debug.print("\nPublic Key:\n", .{});
-    std.debug.print("  Root length: {} bytes\n", .{keypair.public_key.root.len});
-    std.debug.print("  Root: ", .{});
-    for (keypair.public_key.root) |byte| {
-        std.debug.print("{x:0>2}", .{byte});
-    }
-    std.debug.print("\n\n", .{});
+    // Verify the signature with timing
+    std.debug.print("4. Verifying signature...\n", .{});
 
-    std.debug.print("Secret Key:\n", .{});
-    std.debug.print("  PRF key length: {} bytes\n", .{keypair.secret_key.prf_key.len});
-    std.debug.print("  PRF key: ", .{});
-    for (keypair.secret_key.prf_key) |byte| {
-        std.debug.print("{x:0>2}", .{byte});
-    }
-    std.debug.print("\n  Tree nodes: {}\n", .{keypair.secret_key.tree.len});
-    std.debug.print("  Activation epoch: {}\n", .{keypair.secret_key.activation_epoch});
-    std.debug.print("  Active epochs: {}\n", .{keypair.secret_key.num_active_epochs});
-    std.debug.print("\n", .{});
-    std.debug.print("Seed used:\n", .{});
-    std.debug.print("  Content (first 32 bytes): ", .{});
-    for (seed[0..32]) |byte| {
-        std.debug.print("{x:0>2}", .{byte});
-    }
-    std.debug.print("\n\n", .{});
+    var verify_timer = try std.time.Timer.start();
+    const is_valid = try scheme.verify(&keypair.public_key, epoch, message, signature);
+    const verify_elapsed = verify_timer.read();
+    const verify_ms = verify_elapsed / 1_000_000;
+    const verify_s = @as(f64, @floatFromInt(verify_elapsed)) / 1_000_000_000.0;
 
-    // Sign a message
-    const message = "Hello, Hash-based Signatures with Poseidon2!";
-    std.debug.print("Signing message: \"{s}\"\n", .{message});
+    std.debug.print("✅ Verification completed\n", .{});
+    std.debug.print("⏱️  Verification time: {d:.3} seconds ({d} ms)\n", .{ verify_s, verify_ms });
+    std.debug.print("📊 Verification rate: {d:.1} verifications/second\n", .{1.0 / verify_s});
+    std.debug.print("🎯 Signature valid: {}\n\n", .{is_valid});
 
-    const sign_start = std.time.nanoTimestamp();
-    var signature = try sig_scheme.sign(allocator, message, &keypair.secret_key, 0, &seed);
-    const sign_end = std.time.nanoTimestamp();
-    defer signature.deinit(allocator);
+    // Performance summary
+    std.debug.print("📈 Performance Summary\n", .{});
+    std.debug.print("======================\n", .{});
+    std.debug.print("Key Generation: {d:.2}s ({d} ms)\n", .{ keygen_s, keygen_ms });
+    std.debug.print("Signing:        {d:.3}s ({d} ms)\n", .{ sign_s, sign_ms });
+    std.debug.print("Verification:   {d:.3}s ({d} ms)\n", .{ verify_s, verify_ms });
 
-    const sign_duration_ms = @as(f64, @floatFromInt(sign_end - sign_start)) / 1_000_000.0;
-    std.debug.print("Signature generated (epoch: {}) in {d:.2} ms\n", .{ signature.epoch, sign_duration_ms });
-    std.debug.print("  OTS signature parts: {}\n", .{signature.hashes.len});
-    std.debug.print("  Auth path length: {}\n\n", .{signature.auth_path.len});
+    const total_time = keygen_s + sign_s + verify_s;
+    std.debug.print("Total Time:     {d:.3}s\n", .{total_time});
 
-    // Verify the signature
-    std.debug.print("Verifying signature...\n", .{});
+    // Clean up
+    keypair.secret_key.deinit();
+    signature.deinit();
 
-    const verify_start = std.time.nanoTimestamp();
-    const is_valid = try sig_scheme.verify(allocator, message, signature, &keypair.public_key);
-    const verify_end = std.time.nanoTimestamp();
-
-    const verify_duration_ms = @as(f64, @floatFromInt(verify_end - verify_start)) / 1_000_000.0;
-
-    if (is_valid) {
-        std.debug.print("✓ Signature is VALID (verified in {d:.2} ms)\n", .{verify_duration_ms});
-    } else {
-        std.debug.print("✗ Signature is INVALID (checked in {d:.2} ms)\n", .{verify_duration_ms});
-    }
-
-    // Try with wrong message
-    const wrong_message = "Different message";
-    std.debug.print("\nVerifying with wrong message: \"{s}\"\n", .{wrong_message});
-    const is_valid_wrong = try sig_scheme.verify(allocator, wrong_message, signature, &keypair.public_key);
-
-    if (!is_valid_wrong) {
-        std.debug.print("✓ Correctly rejected invalid signature\n", .{});
-    } else {
-        std.debug.print("✗ Incorrectly accepted invalid signature\n", .{});
-    }
+    std.debug.print("\n🎉 Example completed successfully!\n", .{});
+    std.debug.print("💡 Tip: Use 'zig build -Doptimize=ReleaseFast' for better performance\n", .{});
 }

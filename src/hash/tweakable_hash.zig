@@ -9,7 +9,7 @@ const field_types = @import("field.zig");
 const tweak_types = @import("tweak.zig");
 const Parameters = params.Parameters;
 const HashFunction = params.HashFunction;
-const Poseidon2 = poseidon2_mod.Poseidon2;
+const Poseidon2 = poseidon2_mod.Poseidon2RustCompat;
 const Sha3 = sha3_mod.Sha3;
 const ShakePRF = prf_mod.ShakePRF;
 const FieldElement = field_types.FieldElement;
@@ -161,8 +161,10 @@ pub const TweakableHash = struct {
         state[5] = tweak_fes[0];
         state[6] = tweak_fes[1];
 
-        // Copy input field elements
-        @memcpy(state[7..][0..input.len], input);
+        // Copy input field elements (avoid aliasing)
+        for (input, 0..) |elem, i| {
+            state[7 + i] = elem;
+        }
 
         // Select hash mode based on input length (matching Rust)
         return switch (self.hash_impl) {
@@ -196,8 +198,10 @@ pub const TweakableHash = struct {
                     const capacity_value = try poseidon2_mod.Poseidon2.domainSeparator(allocator, lengths, 9); // CAPACITY = 9
                     defer allocator.free(capacity_value);
 
-                    // For sponge, input is: parameter + tweak + flattened_input
-                    return try p.sponge24(allocator, capacity_value, state, output_len);
+                    // For sponge, pass only the input portion (skip parameter + tweak)
+                    const input_start = 7; // Skip parameter (5) + tweak (2)
+                    const input_portion = state[input_start..];
+                    return try p.sponge24(allocator, capacity_value, input_portion, output_len);
                 }
             },
             .sha3 => error.FieldNativeNotSupported,
@@ -235,10 +239,8 @@ pub const TweakableHash = struct {
         // Use Poseidon2 compress for single element (chain hashing)
         return switch (self.hash_impl) {
             .poseidon2 => |*p| {
-                // Single element input - use compress mode
-                const result = try p.compress(self.allocator, &state, 1);
-                defer self.allocator.free(result);
-                return result[0];
+                // Zero-allocation fast path
+                return p.compress1NoAlloc(&state);
             },
             .sha3 => error.FieldNativeNotSupported,
         };

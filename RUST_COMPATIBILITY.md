@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `hash-zig` implementation is designed to be **100% compatible** with the Rust `hash-sig` reference implementation (https://github.com/b-wagn/hash-sig/). This document outlines the requirements and tests that enforce this compatibility.
+The `hash-zig` implementation is designed to be **100% compatible** with the Rust `hash-sig` reference implementation (https://github.com/b-wagn/hash-sig/). The primary `HashSignature` implementation is now Rust-compatible by default. This document outlines the requirements and tests that enforce this compatibility.
 
 ## ⚠️ CRITICAL: Rust Compatibility is MANDATORY
 

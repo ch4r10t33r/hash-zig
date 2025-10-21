@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
-    // Performance tests (key generation, sign, verify with benchmarks)
+    // Performance tests
     const performance_tests = b.addTest(.{
         .root_source_file = b.path("test/performance_test.zig"),
         .target = target,
@@ -50,7 +50,7 @@ pub fn build(b: *std.Build) void {
     performance_tests.root_module.addImport("hash-zig", hash_zig_module);
     const run_performance_tests = b.addRunArtifact(performance_tests);
 
-    // Rust compatibility tests (CRITICAL - must pass)
+    // Rust compatibility tests
     const rust_compat_tests = b.addTest(.{
         .root_source_file = b.path("test/rust_compatibility_test.zig"),
         .target = target,
@@ -60,190 +60,88 @@ pub fn build(b: *std.Build) void {
     const run_rust_compat_tests = b.addRunArtifact(rust_compat_tests);
 
     // Test step runs all tests
-    const test_step = b.step("test", "Run all tests (MUST pass before merge)");
+    const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_performance_tests.step);
     test_step.dependOn(&run_rust_compat_tests.step);
 
-    // Rust compatibility test step (for CI)
-    const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests (for CI)");
-    rust_test_step.dependOn(&run_rust_compat_tests.step);
-
-    // Example executable module
-    const example_module = b.createModule(.{
+    // Basic usage example
+    const basic_example_module = b.createModule(.{
         .root_source_file = b.path("examples/basic_usage.zig"),
         .target = target,
         .optimize = optimize,
     });
-    example_module.addImport("hash-zig", hash_zig_module);
+    basic_example_module.addImport("hash-zig", hash_zig_module);
 
-    const example = b.addExecutable(.{
-        .name = "hash-zig-example",
-        .root_module = example_module,
+    const basic_example_exe = b.addExecutable(.{
+        .name = "basic-example",
+        .root_module = basic_example_module,
     });
-    b.installArtifact(example);
+    b.installArtifact(basic_example_exe);
 
-    const run_example = b.addRunArtifact(example);
-    const example_step = b.step("example", "Run example");
-    example_step.dependOn(&run_example.step);
+    const run_basic_example_exe = b.addRunArtifact(basic_example_exe);
+    const basic_example_exe_step = b.step("example", "Run basic usage example");
+    basic_example_exe_step.dependOn(&run_basic_example_exe.step);
 
-    // Field-native example executable module
-    const example_native_module = b.createModule(.{
-        .root_source_file = b.path("examples/basic_usage_native.zig"),
+    // Rust compatibility test step (for CI)
+    const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests");
+    rust_test_step.dependOn(&run_rust_compat_tests.step);
+
+    // Main GeneralizedXMSS compatibility test executable
+    const generalized_xmss_test_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_generalized_xmss_compat.zig"),
         .target = target,
         .optimize = optimize,
     });
-    example_native_module.addImport("hash-zig", hash_zig_module);
+    generalized_xmss_test_module.addImport("hash-zig", hash_zig_module);
 
-    const example_native = b.addExecutable(.{
-        .name = "hash-zig-example-native",
-        .root_module = example_native_module,
+    const generalized_xmss_test_exe = b.addExecutable(.{
+        .name = "test-generalized-xmss-compat",
+        .root_module = generalized_xmss_test_module,
     });
-    b.installArtifact(example_native);
+    b.installArtifact(generalized_xmss_test_exe);
 
-    const run_example_native = b.addRunArtifact(example_native);
-    const example_native_step = b.step("example-native", "Run field-native (Rust-compatible) example");
-    example_native_step.dependOn(&run_example_native.step);
+    const run_generalized_xmss_test_exe = b.addRunArtifact(generalized_xmss_test_exe);
+    const generalized_xmss_test_exe_step = b.step("test-generalized-xmss-compat", "Run GeneralizedXMSS Rust compatibility test");
+    generalized_xmss_test_exe_step.dependOn(&run_generalized_xmss_test_exe.step);
 
-    // Rust compatibility test executable module
-    const rust_compat_test_module = b.createModule(.{
-        .root_source_file = b.path("examples/rust_compat_test.zig"),
+    // ShakePRF compatibility test
+    const shake_prf_test_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_shake_prf_compatibility.zig"),
         .target = target,
         .optimize = optimize,
     });
-    rust_compat_test_module.addImport("hash-zig", hash_zig_module);
+    shake_prf_test_module.addImport("hash-zig", hash_zig_module);
 
-    const rust_compat_test_exe = b.addExecutable(.{
-        .name = "rust-compat-test",
-        .root_module = rust_compat_test_module,
+    const shake_prf_test_exe = b.addExecutable(.{
+        .name = "test-shake-prf-compat",
+        .root_module = shake_prf_test_module,
     });
-    b.installArtifact(rust_compat_test_exe);
+    b.installArtifact(shake_prf_test_exe);
 
-    const run_rust_compat_test_exe = b.addRunArtifact(rust_compat_test_exe);
-    const rust_compat_test_exe_step = b.step("rust-compat-test", "Run Rust cross-implementation compatibility test");
-    rust_compat_test_exe_step.dependOn(&run_rust_compat_test_exe.step);
+    const run_shake_prf_test_exe = b.addRunArtifact(shake_prf_test_exe);
+    const shake_prf_test_exe_step = b.step("test-shake-prf-compat", "Run ShakePRF compatibility test");
+    shake_prf_test_exe_step.dependOn(&run_shake_prf_test_exe.step);
 
-    // Debug compatibility test executable module
-    const debug_compat_module = b.createModule(.{
-        .root_source_file = b.path("examples/debug_compat.zig"),
+    // Poseidon2 compatibility test
+    const poseidon2_test_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_poseidon2_compatibility.zig"),
         .target = target,
         .optimize = optimize,
     });
-    debug_compat_module.addImport("hash-zig", hash_zig_module);
+    poseidon2_test_module.addImport("hash-zig", hash_zig_module);
 
-    const debug_compat_exe = b.addExecutable(.{
-        .name = "debug-compat",
-        .root_module = debug_compat_module,
+    const poseidon2_test_exe = b.addExecutable(.{
+        .name = "test-poseidon2-compat",
+        .root_module = poseidon2_test_module,
     });
-    b.installArtifact(debug_compat_exe);
+    b.installArtifact(poseidon2_test_exe);
 
-    const run_debug_compat_exe = b.addRunArtifact(debug_compat_exe);
-    const debug_compat_exe_step = b.step("debug-compat", "Run debug compatibility test");
-    debug_compat_exe_step.dependOn(&run_debug_compat_exe.step);
+    const run_poseidon2_test_exe = b.addRunArtifact(poseidon2_test_exe);
+    const poseidon2_test_exe_step = b.step("test-poseidon2-compat", "Run Poseidon2 compatibility test");
+    poseidon2_test_exe_step.dependOn(&run_poseidon2_test_exe.step);
 
-    // Debug native full executable module
-    const debug_native_full_module = b.createModule(.{
-        .root_source_file = b.path("examples/debug_native_full.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    debug_native_full_module.addImport("hash-zig", hash_zig_module);
-
-    const debug_native_full_exe = b.addExecutable(.{
-        .name = "debug-native-full",
-        .root_module = debug_native_full_module,
-    });
-    b.installArtifact(debug_native_full_exe);
-
-    const run_debug_native_full_exe = b.addRunArtifact(debug_native_full_exe);
-    const debug_native_full_exe_step = b.step("debug-native-full", "Full debug output for native implementation");
-    debug_native_full_exe_step.dependOn(&run_debug_native_full_exe.step);
-
-    // Test Poseidon2 raw executable module - REMOVED (file doesn't exist)
-
-    // Test parameter generation executable module - REMOVED (file doesn't exist)
-
-    // Quick compat test (lifetime 2^10)
-    const quick_compat_module = b.createModule(.{
-        .root_source_file = b.path("examples/quick_compat_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    quick_compat_module.addImport("hash-zig", hash_zig_module);
-
-    const quick_compat_exe = b.addExecutable(.{
-        .name = "quick-compat-test",
-        .root_module = quick_compat_module,
-    });
-    b.installArtifact(quick_compat_exe);
-
-    const run_quick_compat_exe = b.addRunArtifact(quick_compat_exe);
-    const quick_compat_exe_step = b.step("quick-compat", "Quick compatibility test (2^10)");
-    quick_compat_exe_step.dependOn(&run_quick_compat_exe.step);
-
-    // Verify P2-24 executable module
-    const verify_p2_24_module = b.createModule(.{
-        .root_source_file = b.path("examples/verify_p2_24.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    verify_p2_24_module.addImport("poseidon", poseidon_mod);
-
-    const verify_p2_24_exe = b.addExecutable(.{
-        .name = "verify-p2-24",
-        .root_module = verify_p2_24_module,
-    });
-    b.installArtifact(verify_p2_24_exe);
-
-    const run_verify_p2_24_exe = b.addRunArtifact(verify_p2_24_exe);
-    const verify_p2_24_exe_step = b.step("verify-p2-24", "Verify Poseidon2-24 against plonky3");
-    verify_p2_24_exe_step.dependOn(&run_verify_p2_24_exe.step);
-
-    // Test P2-24 basic executable module - REMOVED (file doesn't exist)
-
-    // Simple debug executable module
-    const simple_debug_module = b.createModule(.{
-        .root_source_file = b.path("examples/simple_debug.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    simple_debug_module.addImport("hash-zig", hash_zig_module);
-
-    const simple_debug_exe = b.addExecutable(.{
-        .name = "simple-debug",
-        .root_module = simple_debug_module,
-    });
-    b.installArtifact(simple_debug_exe);
-
-    const run_simple_debug_exe = b.addRunArtifact(simple_debug_exe);
-    const simple_debug_exe_step = b.step("simple-debug", "Simple debug output for first steps");
-    simple_debug_exe_step.dependOn(&run_simple_debug_exe.step);
-
-    // Trace keygen executable module
-    const trace_keygen_module = b.createModule(.{
-        .root_source_file = b.path("examples/trace_keygen.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    trace_keygen_module.addImport("hash-zig", hash_zig_module);
-
-    const trace_keygen_exe = b.addExecutable(.{
-        .name = "trace-keygen",
-        .root_module = trace_keygen_module,
-    });
-    b.installArtifact(trace_keygen_exe);
-
-    const run_trace_keygen_exe = b.addRunArtifact(trace_keygen_exe);
-    const trace_keygen_exe_step = b.step("trace-keygen", "Complete key generation trace");
-    trace_keygen_exe_step.dependOn(&run_trace_keygen_exe.step);
-
-    // Test domain separator executable module - REMOVED (file doesn't exist)
-
-    // Run step (alias for example)
-    const run_step = b.step("run", "Run the example application");
-    run_step.dependOn(&run_example.step);
-
-    // Benchmark executable
+    // Benchmark script
     const benchmark_module = b.createModule(.{
         .root_source_file = b.path("scripts/benchmark.zig"),
         .target = target,
@@ -251,28 +149,42 @@ pub fn build(b: *std.Build) void {
     });
     benchmark_module.addImport("hash-zig", hash_zig_module);
 
-    const benchmark = b.addExecutable(.{
+    const benchmark_exe = b.addExecutable(.{
         .name = "hash-zig-benchmark",
         .root_module = benchmark_module,
     });
-    b.installArtifact(benchmark);
+    b.installArtifact(benchmark_exe);
 
-    const run_benchmark = b.addRunArtifact(benchmark);
-    const benchmark_step = b.step("benchmark", "Run performance benchmark");
-    benchmark_step.dependOn(&run_benchmark.step);
+    const run_benchmark_exe = b.addRunArtifact(benchmark_exe);
+    const benchmark_exe_step = b.step("benchmark", "Run hash-zig benchmarks");
+    benchmark_exe_step.dependOn(&run_benchmark_exe.step);
 
-    // SIMD modules, benchmark, and comparison removed - they depended on the local
-    // poseidon2 implementation which has been replaced with external zig-poseidon
-    // Poseidon2 test files moved to investigations/ directory
+    // Key generation benchmark script
+    const keygen_benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark_keygen.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    keygen_benchmark_module.addImport("hash-zig", hash_zig_module);
 
-    // Documentation (opt-in to avoid enabling -femit-docs on default builds)
+    const keygen_benchmark_exe = b.addExecutable(.{
+        .name = "benchmark-keygen",
+        .root_module = keygen_benchmark_module,
+    });
+    b.installArtifact(keygen_benchmark_exe);
+
+    const run_keygen_benchmark_exe = b.addRunArtifact(keygen_benchmark_exe);
+    const keygen_benchmark_exe_step = b.step("benchmark-keygen", "Run key generation benchmarks");
+    keygen_benchmark_exe_step.dependOn(&run_keygen_benchmark_exe.step);
+
+    // Documentation generation
     if (enable_docs) {
-        const docs_step = b.step("docs", "Generate documentation");
-        const install_docs = b.addInstallDirectory(.{
+        const docs = b.addInstallDirectory(.{
             .source_dir = lib.getEmittedDocs(),
             .install_dir = .prefix,
             .install_subdir = "docs",
         });
-        docs_step.dependOn(&install_docs.step);
+        const docs_step = b.step("docs", "Generate documentation");
+        docs_step.dependOn(&docs.step);
     }
 }
