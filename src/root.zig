@@ -40,7 +40,6 @@ pub const ShakePRF = prf.ShakePRF;
 pub const IncomparableEncoding = encoding.IncomparableEncoding;
 pub const TweakableHash = hash.TweakableHash;
 pub const WinternitzOTS = wots.WinternitzOTS;
-pub const WinternitzOTSNative = wots.WinternitzOTSNative;
 pub const MerkleTree = merkle.MerkleTree;
 pub const MerkleTreeNative = merkle.MerkleTreeNative;
 pub const HashSignature = signature.HashSignature;

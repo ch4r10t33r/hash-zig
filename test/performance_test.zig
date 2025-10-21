@@ -17,27 +17,13 @@ test "lifetime_2_10 key generation, sign, and verify performance" {
     std.debug.print("Hash: Poseidon2 (KoalaBear field)\n", .{});
     std.debug.print("==============================================\n\n", .{});
 
-    // Initialize parameters
-    const params = hash_zig.Parameters.init(.lifetime_2_10);
-
-    // Verify parameters
-    try testing.expectEqual(@as(u32, 10), params.tree_height);
-    try testing.expectEqual(@as(u32, 8), params.winternitz_w);
-    try testing.expectEqual(@as(u32, 20), params.num_message_chains);
-    try testing.expectEqual(@as(u32, 2), params.num_checksum_chains);
-    try testing.expectEqual(@as(u32, 22), params.num_chains);
-    try testing.expectEqual(hash_zig.HashFunction.poseidon2, params.hash_function);
-
-    std.debug.print("✅ Parameters validated\n", .{});
-    std.debug.print("   Tree height: {}\n", .{params.tree_height});
-    std.debug.print("   Message chains: {}\n", .{params.num_message_chains});
-    std.debug.print("   Checksum chains: {}\n", .{params.num_checksum_chains});
-    std.debug.print("   Total chains: {}\n", .{params.num_chains});
-    std.debug.print("   Chain length: {}\n\n", .{@as(u32, 1) << @intCast(params.winternitz_w)});
-
-    // Initialize signature scheme
-    var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
+    // Initialize signature scheme with new GeneralizedXMSS API
+    var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer sig_scheme.deinit();
+
+    std.debug.print("✅ GeneralizedXMSS signature scheme initialized\n", .{});
+    std.debug.print("   Lifetime: 2^8 = 256 signatures\n", .{});
+    std.debug.print("   Using Rust-compatible implementation\n\n", .{});
 
     // Test seed (deterministic)
     var seed: [32]u8 = undefined;
@@ -54,28 +40,23 @@ test "lifetime_2_10 key generation, sign, and verify performance" {
     std.debug.print("----------------------------------------\n", .{});
 
     const keygen_start = std.time.nanoTimestamp();
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 0);
+    var keypair = try sig_scheme.keyGen(0, 256); // activation_epoch=0, num_active_epochs=256
     const keygen_end = std.time.nanoTimestamp();
-    defer keypair.deinit(allocator);
+    defer keypair.secret_key.deinit();
 
     const keygen_time_ns = keygen_end - keygen_start;
     const keygen_time_ms = @as(f64, @floatFromInt(keygen_time_ns)) / 1_000_000.0;
     const keygen_time_s = keygen_time_ms / 1000.0;
 
     std.debug.print("⏱️  Key Generation Time: {d:.3} seconds ({d:.2} ms)\n", .{ keygen_time_s, keygen_time_ms });
-    std.debug.print("   Public key root: ", .{});
-    for (keypair.public_key.root[0..16]) |b| std.debug.print("{x:0>2}", .{b});
-    std.debug.print("...\n", .{});
-    std.debug.print("   Secret key size: {} tree nodes\n", .{keypair.secret_key.tree.len});
+    std.debug.print("   Public key root: {}\n", .{keypair.public_key.root.value});
     std.debug.print("   Activation epoch: {}\n", .{keypair.secret_key.activation_epoch});
     std.debug.print("   Active epochs: {}\n", .{keypair.secret_key.num_active_epochs});
     std.debug.print("✅ Key generation successful\n\n", .{});
 
     // Verify key structure
-    try testing.expectEqual(@as(usize, 32), keypair.public_key.root.len);
-    try testing.expectEqual(@as(usize, 2047), keypair.secret_key.tree.len); // Full tree for height 10
     try testing.expectEqual(@as(u64, 0), keypair.secret_key.activation_epoch);
-    try testing.expectEqual(@as(u64, 1024), keypair.secret_key.num_active_epochs);
+    try testing.expectEqual(@as(u64, 256), keypair.secret_key.num_active_epochs);
 
     // ========================================
     // Test 2: Signing
@@ -83,37 +64,25 @@ test "lifetime_2_10 key generation, sign, and verify performance" {
     std.debug.print("Test 2: Signing\n", .{});
     std.debug.print("----------------------------------------\n", .{});
 
-    const test_message = "Hello, post-quantum world! This is a test message for hash-based signatures.";
-    const epoch: u64 = 0; // First signature
-
-    // RNG seed for encoding randomness
-    var rng_seed: [32]u8 = undefined;
-    @memset(&rng_seed, 0x99);
+    const test_message = [_]u8{ 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x70, 0x6f, 0x73, 0x74, 0x2d, 0x71, 0x75, 0x61, 0x6e, 0x74, 0x75, 0x6d, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // "Hello, post-quantum world!" + padding
+    const epoch: u32 = 0; // First signature
 
     const sign_start = std.time.nanoTimestamp();
-    var signature = try sig_scheme.sign(
-        allocator,
-        test_message,
-        &keypair.secret_key,
-        epoch,
-        &rng_seed,
-    );
+    var signature = try sig_scheme.sign(keypair.secret_key, epoch, test_message);
     const sign_end = std.time.nanoTimestamp();
-    defer signature.deinit(allocator);
+    defer signature.deinit();
 
     const sign_time_ns = sign_end - sign_start;
     const sign_time_ms = @as(f64, @floatFromInt(sign_time_ns)) / 1_000_000.0;
 
     std.debug.print("⏱️  Signing Time: {d:.3} ms\n", .{sign_time_ms});
-    std.debug.print("   Message: \"{s}\"\n", .{test_message});
+    std.debug.print("   Message: \"Hello, post-quantum world!\"\n", .{});
     std.debug.print("   Epoch: {}\n", .{epoch});
     std.debug.print("   Signature size: {} hashes\n", .{signature.hashes.len});
-    std.debug.print("   Auth path length: {} nodes\n", .{signature.auth_path.len});
     std.debug.print("✅ Signing successful\n\n", .{});
 
     // Verify signature structure
-    try testing.expectEqual(@as(usize, 22), signature.hashes.len); // 22 chains
-    try testing.expectEqual(@as(usize, 10), signature.auth_path.len); // Height 10
+    try testing.expectEqual(@as(usize, 64), signature.hashes.len); // 64 chains for lifetime_2_8
 
     // ========================================
     // Test 3: Verification
@@ -122,12 +91,7 @@ test "lifetime_2_10 key generation, sign, and verify performance" {
     std.debug.print("----------------------------------------\n", .{});
 
     const verify_start = std.time.nanoTimestamp();
-    const is_valid = try sig_scheme.verify(
-        allocator,
-        test_message,
-        signature,
-        &keypair.public_key,
-    );
+    const is_valid = try sig_scheme.verify(&keypair.public_key, epoch, test_message, signature);
     const verify_end = std.time.nanoTimestamp();
 
     const verify_time_ns = verify_end - verify_start;
@@ -145,14 +109,9 @@ test "lifetime_2_10 key generation, sign, and verify performance" {
     std.debug.print("Test 4: Invalid Signature Detection\n", .{});
     std.debug.print("----------------------------------------\n", .{});
 
-    const wrong_message = "This is a different message";
+    const wrong_message = [_]u8{ 0x54, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x61, 0x20, 0x64, 0x69, 0x66, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00 }; // "This is a different message" + padding
     const wrong_verify_start = std.time.nanoTimestamp();
-    const is_invalid = try sig_scheme.verify(
-        allocator,
-        wrong_message,
-        signature,
-        &keypair.public_key,
-    );
+    const is_invalid = try sig_scheme.verify(&keypair.public_key, epoch, wrong_message, signature);
     const wrong_verify_end = std.time.nanoTimestamp();
 
     const wrong_verify_time_ns = wrong_verify_end - wrong_verify_start;
@@ -187,16 +146,15 @@ test "multiple signatures with same keypair" {
     std.debug.print("Test: Multiple Signatures\n", .{});
     std.debug.print("==============================================\n\n", .{});
 
-    const params = hash_zig.Parameters.init(.lifetime_2_10);
-    var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
+    var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer sig_scheme.deinit();
 
     var seed: [32]u8 = undefined;
     @memset(&seed, 0x55);
 
     std.debug.print("Generating keypair...\n", .{});
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 10); // Only 10 epochs
-    defer keypair.deinit(allocator);
+    var keypair = try sig_scheme.keyGen(0, 10); // Only 10 epochs
+    defer keypair.secret_key.deinit();
     std.debug.print("✅ Keypair generated (10 active epochs)\n\n", .{});
 
     // Sign and verify multiple messages
@@ -217,15 +175,9 @@ test "multiple signatures with same keypair" {
         std.debug.print("Epoch {}: Signing...", .{i});
 
         const sign_start = std.time.nanoTimestamp();
-        var signature = try sig_scheme.sign(
-            allocator,
-            message,
-            &keypair.secret_key,
-            i,
-            &rng_seed,
-        );
+        var signature = try sig_scheme.sign(keypair.secret_key, @as(u32, @intCast(i)), message);
         const sign_end = std.time.nanoTimestamp();
-        defer signature.deinit(allocator);
+        defer signature.deinit();
 
         const sign_time = sign_end - sign_start;
         total_sign_time += @intCast(sign_time);
@@ -233,12 +185,7 @@ test "multiple signatures with same keypair" {
         std.debug.print(" {d:.3} ms, Verifying...", .{@as(f64, @floatFromInt(sign_time)) / 1_000_000.0});
 
         const verify_start = std.time.nanoTimestamp();
-        const is_valid = try sig_scheme.verify(
-            allocator,
-            message,
-            signature,
-            &keypair.public_key,
-        );
+        const is_valid = try sig_scheme.verify(&keypair.public_key, @as(u32, @intCast(i)), message, signature);
         const verify_end = std.time.nanoTimestamp();
 
         const verify_time = verify_end - verify_start;
@@ -406,36 +353,33 @@ test "epoch range validation" {
     std.debug.print("Test: Epoch Range Validation\n", .{});
     std.debug.print("==============================================\n\n", .{});
 
-    const params = hash_zig.Parameters.init(.lifetime_2_10);
-    var sig_scheme = try hash_zig.HashSignature.init(allocator, params);
+    var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer sig_scheme.deinit();
 
     var seed: [32]u8 = undefined;
     @memset(&seed, 0x77);
 
     // Generate key with limited epoch range
-    var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 100, 10);
-    defer keypair.deinit(allocator);
+    var keypair = try sig_scheme.keyGen(100, 10);
+    defer keypair.secret_key.deinit();
 
     std.debug.print("Keypair generated:\n", .{});
     std.debug.print("  Activation epoch: {}\n", .{keypair.secret_key.activation_epoch});
     std.debug.print("  Active epochs: {}\n", .{keypair.secret_key.num_active_epochs});
     std.debug.print("  Valid range: {} - {}\n\n", .{ keypair.secret_key.activation_epoch, keypair.secret_key.activation_epoch + keypair.secret_key.num_active_epochs - 1 });
 
-    const test_message = "Test message";
-    var rng_seed: [32]u8 = undefined;
-    @memset(&rng_seed, 0x88);
+    const test_message = [_]u8{ 0x54, 0x65, 0x73, 0x74, 0x20, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65 } ++ [_]u8{0x00} ** 20; // "Test message" + padding
 
     // Test signing within valid range
     std.debug.print("Signing at epoch 105 (valid)...", .{});
-    var sig_valid = try sig_scheme.sign(allocator, test_message, &keypair.secret_key, 105, &rng_seed);
-    defer sig_valid.deinit(allocator);
+    var sig_valid = try sig_scheme.sign(keypair.secret_key, 105, test_message);
+    defer sig_valid.deinit();
     std.debug.print(" ✅\n", .{});
 
     // Test signing outside valid range (should fail)
     std.debug.print("Signing at epoch 110 (invalid)...", .{});
-    const result = sig_scheme.sign(allocator, test_message, &keypair.secret_key, 110, &rng_seed);
-    try testing.expectError(error.EpochOutOfRange, result);
+    const result = sig_scheme.sign(keypair.secret_key, 110, test_message);
+    try testing.expectError(error.KeyNotActive, result);
     std.debug.print(" ✅ Correctly rejected\n", .{});
 
     std.debug.print("\n✅ Epoch range validation working correctly\n", .{});
