@@ -59,11 +59,41 @@ pub fn build(b: *std.Build) void {
     rust_compat_tests.root_module.addImport("hash-zig", hash_zig_module);
     const run_rust_compat_tests = b.addRunArtifact(rust_compat_tests);
 
+    // Comprehensive Rust compatibility tests
+    const comprehensive_rust_compat_tests = b.addTest(.{
+        .root_source_file = b.path("test/comprehensive_rust_compatibility_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    comprehensive_rust_compat_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_comprehensive_rust_compat_tests = b.addRunArtifact(comprehensive_rust_compat_tests);
+
+    // Encoding variants tests
+    const encoding_variants_tests = b.addTest(.{
+        .root_source_file = b.path("test/encoding_variants_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    encoding_variants_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_encoding_variants_tests = b.addRunArtifact(encoding_variants_tests);
+
+    // Performance benchmark tests
+    const performance_benchmark_tests = b.addTest(.{
+        .root_source_file = b.path("test/performance_benchmark_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    performance_benchmark_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_performance_benchmark_tests = b.addRunArtifact(performance_benchmark_tests);
+
     // Test step runs all tests
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_performance_tests.step);
     test_step.dependOn(&run_rust_compat_tests.step);
+    test_step.dependOn(&run_comprehensive_rust_compat_tests.step);
+    test_step.dependOn(&run_encoding_variants_tests.step);
+    test_step.dependOn(&run_performance_benchmark_tests.step);
 
     // Basic usage example
     const basic_example_module = b.createModule(.{

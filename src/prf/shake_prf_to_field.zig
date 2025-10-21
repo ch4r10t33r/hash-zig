@@ -32,7 +32,9 @@ pub fn ShakePRFtoF(comptime DOMAIN_LENGTH_FE: usize, comptime RAND_LENGTH_FE: us
         /// Generate a random key (matching Rust key_gen)
         pub fn keyGen(rng: anytype) Key {
             var key: Key = undefined;
-            rng.fill(&key);
+            for (0..key.len) |i| {
+                key[i] = rng.int(u8);
+            }
             return key;
         }
 

@@ -1,22 +1,22 @@
 # Release Process
 
-This repository uses an automated release process that creates tagged releases directly when commits are pushed to the master branch.
+This repository uses a controlled release process that creates tagged releases through pull requests to the release branch.
 
 ## How It Works
 
-### 1. Automatic Release Detection
-When commits are pushed to the `master` or `main` branch, the release workflow automatically:
+### 1. Release Branch Process
+Releases are created when pull requests are merged to the `release` branch:
 - Analyzes commit messages to determine the next version (semantic versioning)
 - Updates the version in `build.zig.zon`
 - Creates a Git tag for the release
 - Creates a GitHub release with the new version
 
-### 2. Direct Release Workflow
-The `release-on-master.yml` workflow:
-- **Triggers**: On push to `master`/`main` branches
+### 2. Release Branch Workflow
+The `auto-release.yml` workflow:
+- **Triggers**: On pull request merge to `release` branch
 - **Updates**: Version in `build.zig.zon`
 - **Creates**: Git tag and GitHub release
-- **Pushes**: Version bump commit back to master
+- **Generates**: Changelog from commits
 
 ## Semantic Versioning
 
@@ -36,11 +36,11 @@ release: minor
 
 ## Release Process Steps
 
-1. **Push commits** to `master`/`main` branch
-2. **Workflow triggers** and analyzes commits
-3. **Version is determined** using semantic versioning
-4. **Release is created** automatically with tag and GitHub release
-5. **Version bump** is committed back to master
+1. **Create pull request** from `main` to `release` branch
+2. **Merge pull request** to `release` branch
+3. **Workflow triggers** and analyzes commits
+4. **Version is determined** using semantic versioning
+5. **Release is created** automatically with tag and GitHub release
 
 ## Benefits
 

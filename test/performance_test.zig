@@ -166,8 +166,13 @@ test "multiple signatures with same keypair" {
 
     for (0..num_tests) |i| {
         // Different message for each epoch
-        const message = try std.fmt.allocPrint(allocator, "Message number {}", .{i});
-        defer allocator.free(message);
+        var message: [32]u8 = undefined;
+        const message_str = try std.fmt.allocPrint(allocator, "Message number {}", .{i});
+        defer allocator.free(message_str);
+
+        // Copy and pad message to 32 bytes
+        @memset(&message, 0);
+        @memcpy(message[0..@min(message_str.len, 32)], message_str);
 
         // Different RNG seed for each signature
         @memset(&rng_seed, @intCast(i));
