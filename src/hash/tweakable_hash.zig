@@ -80,12 +80,12 @@ pub const TweakableHash = struct {
                 defer allocator.free(field_elements);
                 const hash_result = try p.hashFieldElements(allocator, field_elements);
                 defer allocator.free(hash_result);
-                
+
                 // Convert field elements back to bytes
                 const result = try allocator.alloc(u8, hash_result.len * 4);
                 for (hash_result, 0..) |fe, i| {
                     const bytes = std.mem.toBytes(fe.value);
-                    @memcpy(result[i*4..(i+1)*4], &bytes);
+                    @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
                 }
                 return result;
             },
@@ -97,19 +97,19 @@ pub const TweakableHash = struct {
     fn bytesToFieldElements(_: *TweakableHash, allocator: Allocator, data: []const u8) ![]FieldElement {
         const num_elements = (data.len + 3) / 4; // 4 bytes per field element
         const field_elements = try allocator.alloc(FieldElement, num_elements);
-        
+
         for (0..num_elements) |i| {
             const start = i * 4;
             const end = @min(start + 4, data.len);
-            
+
             var value: u32 = 0;
             for (start..end) |j| {
                 value |= @as(u32, data[j]) << @intCast((j - start) * 8);
             }
-            
+
             field_elements[i] = FieldElement{ .value = value % 2130706433 }; // KoalaBear modulus
         }
-        
+
         return field_elements;
     }
 
@@ -212,20 +212,54 @@ pub const TweakableHash = struct {
                     if (state.len >= 24) {
                         var state_array: [24]FieldElement = undefined;
                         @memcpy(state_array[0..state.len], state);
-                        return try p.compress(state_array, output_len);
+                        const compress_result = try p.compress(state_array, output_len);
+
+                        // Convert field elements to bytes
+                        const result = try allocator.alloc(u8, compress_result.len * 4);
+                        for (compress_result, 0..) |fe, i| {
+                            const bytes = std.mem.toBytes(fe.value);
+                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
+                        }
+                        return result;
                     } else {
                         // Use hashFieldElements for variable length
-                        return try p.hashFieldElements(allocator, state);
+                        const hash_result = try p.hashFieldElements(allocator, state);
+                        defer allocator.free(hash_result);
+
+                        // Convert field elements to bytes
+                        const result = try allocator.alloc(u8, hash_result.len * 4);
+                        for (hash_result, 0..) |fe, i| {
+                            const bytes = std.mem.toBytes(fe.value);
+                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
+                        }
+                        return result;
                     }
                 } else if (input.len == 2) {
                     // Mode 2: Tree node merging (two field element arrays)
                     if (state.len >= 24) {
                         var state_array: [24]FieldElement = undefined;
                         @memcpy(state_array[0..state.len], state);
-                        return try p.compress(state_array, output_len);
+                        const compress_result = try p.compress(state_array, output_len);
+
+                        // Convert field elements to bytes
+                        const result = try allocator.alloc(u8, compress_result.len * 4);
+                        for (compress_result, 0..) |fe, i| {
+                            const bytes = std.mem.toBytes(fe.value);
+                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
+                        }
+                        return result;
                     } else {
                         // Use hashFieldElements for variable length
-                        return try p.hashFieldElements(allocator, state);
+                        const hash_result = try p.hashFieldElements(allocator, state);
+                        defer allocator.free(hash_result);
+
+                        // Convert field elements to bytes
+                        const result = try allocator.alloc(u8, hash_result.len * 4);
+                        for (hash_result, 0..) |fe, i| {
+                            const bytes = std.mem.toBytes(fe.value);
+                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
+                        }
+                        return result;
                     }
                 } else {
                     // Mode 3: Leaf generation (many field element arrays)

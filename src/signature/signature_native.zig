@@ -601,7 +601,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Check activation interval
         const activation_interval = secret_key.getActivationInterval();
         if (epoch < activation_interval.start or epoch >= activation_interval.end) {
-            return error.EpochNotActive;
+            return error.KeyNotActive;
         }
 
         // Check prepared interval
@@ -612,6 +612,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Generate Merkle path (simplified for now)
         const path = try HashTreeOpening.init(self.allocator, &[_]FieldElement{});
+        errdefer path.deinit(); // Clean up if signature creation fails
 
         // Generate randomness using PRF
         const rho = try self.generateRandomness(secret_key.prf_key, epoch, message, 0);

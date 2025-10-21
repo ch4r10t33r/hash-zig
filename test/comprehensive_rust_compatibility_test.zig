@@ -115,7 +115,7 @@ fn testInternalConsistencyCheck(allocator: std.mem.Allocator) !void {
         defer scheme.deinit();
 
         // Test that scheme initializes without errors
-        _ = scheme; // Use the scheme to verify it was created successfully
+        // The scheme is used implicitly by the defer statement, so no need to explicitly use it
 
         std.debug.print("✅ Internal consistency check passed for lifetime {}\n", .{lifetime});
     }
