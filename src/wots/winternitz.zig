@@ -113,11 +113,8 @@ pub const WinternitzOTS = struct {
         const num_cpus = std.Thread.getCpuCount() catch 8;
         const num_threads = @min(num_cpus, num_chains);
 
-        // CRITICAL: Parallel processing has issues with some allocators
-        // For safety and correctness, use sequential processing
-        // TODO: Investigate thread-local arena approach for parallel support with Arena
-        const force_sequential = true;
-        if (num_threads <= 1 or num_chains < 16 or force_sequential) {
+        // Use sequential processing for safety and correctness
+        if (num_threads <= 1 or num_chains < 16) {
             // Sequential fallback for small workloads
             for (private_key, 0..) |pk, i| {
                 var current = try allocator.dupe(u8, pk);
@@ -166,8 +163,9 @@ pub const WinternitzOTS = struct {
 
             // Check for errors
             for (errors, 0..) |err, i| {
+                _ = i; // Suppress unused variable warning
                 if (err) |e| {
-                    std.debug.print("Error generating chain {d}: {}\n", .{ i, e });
+                    // Removed debug print for performance
                     return e;
                 }
             }

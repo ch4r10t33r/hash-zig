@@ -758,7 +758,7 @@ See `.github/workflows/ci.yml` for details.
 - ✅ **Field-native implementation**: 100% compatible with latest hash-sig
 - ⚠️ **Byte-based implementation**: Legacy support, not compatible with PR #87
 
-**Recommendation**: Use `HashSignatureNative` for all new projects requiring Rust compatibility.
+**Recommendation**: Use `HashSignature` (now Rust-compatible) for all new projects requiring Rust compatibility. `HashSignatureNative` provides advanced ShakePRFtoF compatibility.
 
 ## 🐛 Known Issues
 

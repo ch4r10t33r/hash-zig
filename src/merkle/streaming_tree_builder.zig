@@ -18,17 +18,17 @@ pub const StreamingTreeBuilder = struct {
 
     pub fn init(allocator: std.mem.Allocator, tree_height: u8, hash: *TweakableHash) !StreamingTreeBuilder {
         // Use a truly streaming approach - only allocate what we need for current level
-        const max_leaves = @as(usize, 1) << @intCast(tree_height);
-        std.debug.print("StreamingTreeBuilder: Initializing with tree_height={}, max_leaves={}\n", .{ tree_height, max_leaves });
+        // Removed unused variable for performance
+        // Removed debug print for performance
 
         // Start with a small buffer for the current level (we'll grow as needed)
         const initial_buffer_size = 1024; // Much smaller initial allocation
-        std.debug.print("StreamingTreeBuilder: About to allocate {} bytes for initial buffer\n", .{initial_buffer_size * @sizeOf(FieldElement)});
+        // Removed debug print for performance
 
         const current_level = try allocator.alloc(FieldElement, initial_buffer_size);
         @memset(current_level, FieldElement.zero());
 
-        std.debug.print("StreamingTreeBuilder: Successfully allocated initial buffer\n", .{});
+        // Removed debug print for performance
 
         return StreamingTreeBuilder{
             .tree_height = tree_height,
@@ -70,9 +70,60 @@ pub const StreamingTreeBuilder = struct {
             return null;
         }
 
-        // For now, just return the first leaf hash as a placeholder
-        // TODO: Implement proper incremental root computation
-        return self.current_level[0];
+        // Compute the root incrementally using the leaves we have
+        var current_level = try self.allocator.dupe(FieldElement, self.current_level[0..self.leaves_added]);
+
+        var level_size = self.leaves_added;
+        var current_height: u32 = 0;
+
+        while (level_size > 1 and current_height < self.tree_height) {
+            const next_level_size = (level_size + 1) / 2;
+            var next_level = try self.allocator.alloc(FieldElement, next_level_size);
+
+            for (0..next_level_size) |i| {
+                const left_idx = i * 2;
+                const right_idx = left_idx + 1;
+
+                const left = current_level[left_idx];
+                const right = if (right_idx < level_size) current_level[right_idx] else FieldElement.zero();
+
+                // Hash the pair to get parent
+                const pair = try self.allocator.alloc(FieldElement, 2);
+                pair[0] = left;
+                pair[1] = right;
+
+                const tweak = @import("../hash/tweak.zig").PoseidonTweak{
+                    .tree_tweak = .{
+                        .level = @intCast(current_height + 1),
+                        .pos_in_level = @intCast(i),
+                    },
+                };
+
+                const parent_hash = try self.hash.hashFieldElements(
+                    self.allocator,
+                    pair,
+                    tweak,
+                    1,
+                );
+
+                next_level[i] = parent_hash[0];
+
+                // Clean up pair and parent_hash
+                self.allocator.free(pair);
+                self.allocator.free(parent_hash);
+            }
+
+            self.allocator.free(current_level);
+            current_level = next_level;
+            level_size = next_level_size;
+            current_height += 1;
+        }
+
+        // Store result before freeing
+        const result = if (level_size > 0) current_level[0] else FieldElement.zero();
+        // Always free current_level since it was allocated at the beginning
+        self.allocator.free(current_level);
+        return result;
     }
 
     pub fn getTreeLevels(self: *StreamingTreeBuilder) ![][][]FieldElement {
@@ -93,6 +144,6 @@ pub const StreamingTreeBuilder = struct {
     }
 
     pub fn isComplete(self: *const StreamingTreeBuilder) bool {
-        return self.leaves_added == self.leaf_hashes.len;
+        return self.leaves_added == (@as(usize, 1) << @intCast(self.tree_height));
     }
 };

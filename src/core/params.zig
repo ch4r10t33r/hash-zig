@@ -17,6 +17,8 @@ pub const EncodingType = enum {
 /// Key lifetime configuration
 /// Determines how many signatures can be generated with a single key
 pub const KeyLifetime = enum {
+    lifetime_2_3, // 2^3 = 8 signatures (for testing, matches Rust PR #91)
+    lifetime_2_8, // 2^8 = 256 signatures (for compatibility testing)
     lifetime_2_10, // 2^10 = 1,024 signatures
     lifetime_2_16, // 2^16 = 65,536 signatures
     lifetime_2_18, // 2^18 = 262,144 signatures (for benchmarking)
@@ -26,6 +28,8 @@ pub const KeyLifetime = enum {
 
     pub fn treeHeight(self: KeyLifetime) u32 {
         return switch (self) {
+            .lifetime_2_3 => 3,
+            .lifetime_2_8 => 8,
             .lifetime_2_10 => 10,
             .lifetime_2_16 => 16,
             .lifetime_2_18 => 18,

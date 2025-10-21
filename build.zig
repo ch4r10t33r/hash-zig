@@ -109,7 +109,8 @@ pub fn build(b: *std.Build) void {
     const rust_compat_test_module = b.createModule(.{
         .root_source_file = b.path("examples/rust_compat_test.zig"),
         .target = target,
-        .optimize = optimize,
+        // Always run compat test in ReleaseFast
+        .optimize = .ReleaseFast,
     });
     rust_compat_test_module.addImport("hash-zig", hash_zig_module);
 
@@ -122,6 +123,258 @@ pub fn build(b: *std.Build) void {
     const run_rust_compat_test_exe = b.addRunArtifact(rust_compat_test_exe);
     const rust_compat_test_exe_step = b.step("rust-compat-test", "Run Rust cross-implementation compatibility test");
     rust_compat_test_exe_step.dependOn(&run_rust_compat_test_exe.step);
+
+    // Debug version of rust compatibility test
+    const rust_compat_test_debug_module = b.createModule(.{
+        .root_source_file = b.path("examples/rust_compat_test.zig"),
+        .target = target,
+        .optimize = .Debug, // Debug mode for better error traces
+    });
+    rust_compat_test_debug_module.addImport("hash-zig", hash_zig_module);
+
+    const rust_compat_test_debug_exe = b.addExecutable(.{
+        .name = "rust-compat-test-debug",
+        .root_module = rust_compat_test_debug_module,
+    });
+    b.installArtifact(rust_compat_test_debug_exe);
+
+    const run_rust_compat_test_debug_exe = b.addRunArtifact(rust_compat_test_debug_exe);
+    const rust_compat_test_debug_exe_step = b.step("rust-compat-test-debug", "Run Rust cross-implementation compatibility test in debug mode");
+    rust_compat_test_debug_exe_step.dependOn(&run_rust_compat_test_debug_exe.step);
+
+    // Test lifetime 2^3 (8 signatures) - matches Rust PR #91
+    const test_lifetime_2_3_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_lifetime_2_3.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_lifetime_2_3_module.addImport("hash-zig", hash_zig_module);
+
+    const test_lifetime_2_3_exe = b.addExecutable(.{
+        .name = "test-lifetime-2-3",
+        .root_module = test_lifetime_2_3_module,
+    });
+    b.installArtifact(test_lifetime_2_3_exe);
+
+    const run_test_lifetime_2_3_exe = b.addRunArtifact(test_lifetime_2_3_exe);
+    const test_lifetime_2_3_exe_step = b.step("test-lifetime-2-3", "Test lifetime 2^3 (8 signatures) - matches Rust PR #91");
+    test_lifetime_2_3_exe_step.dependOn(&run_test_lifetime_2_3_exe.step);
+
+    // Rust compatibility test for lifetime 2^3 (8 signatures)
+    const rust_compat_test_2_3_module = b.createModule(.{
+        .root_source_file = b.path("examples/rust_compat_test_2_3.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Always run in ReleaseFast
+    });
+    rust_compat_test_2_3_module.addImport("hash-zig", hash_zig_module);
+
+    const rust_compat_test_2_3_exe = b.addExecutable(.{
+        .name = "rust-compat-test-2-3",
+        .root_module = rust_compat_test_2_3_module,
+    });
+    b.installArtifact(rust_compat_test_2_3_exe);
+
+    const run_rust_compat_test_2_3_exe = b.addRunArtifact(rust_compat_test_2_3_exe);
+    const rust_compat_test_2_3_exe_step = b.step("rust-compat-test-2-3", "Run Rust compatibility test for lifetime 2^3 (8 signatures)");
+    rust_compat_test_2_3_exe_step.dependOn(&run_rust_compat_test_2_3_exe.step);
+
+    // Rust compatibility test for lifetime 2^8 (256 signatures)
+    const rust_compat_test_2_8_module = b.createModule(.{
+        .root_source_file = b.path("examples/rust_compat_test_2_8.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Always run in ReleaseFast
+    });
+    rust_compat_test_2_8_module.addImport("hash-zig", hash_zig_module);
+
+    const rust_compat_test_2_8_exe = b.addExecutable(.{
+        .name = "rust-compat-test-2-8",
+        .root_module = rust_compat_test_2_8_module,
+    });
+    b.installArtifact(rust_compat_test_2_8_exe);
+
+    const run_rust_compat_test_2_8_exe = b.addRunArtifact(rust_compat_test_2_8_exe);
+    const rust_compat_test_2_8_exe_step = b.step("rust-compat-test-2-8", "Run Rust compatibility test for lifetime 2^8 (256 signatures)");
+    rust_compat_test_2_8_exe_step.dependOn(&run_rust_compat_test_2_8_exe.step);
+
+    // Rust compatibility test for lifetime 2^8 MATCHED (2^18 tree with 256 active epochs)
+    const rust_compat_test_2_8_matched_module = b.createModule(.{
+        .root_source_file = b.path("examples/rust_compat_test_2_8_matched.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Always run in ReleaseFast
+    });
+    rust_compat_test_2_8_matched_module.addImport("hash-zig", hash_zig_module);
+
+    const rust_compat_test_2_8_matched_exe = b.addExecutable(.{
+        .name = "rust-compat-test-2-8-matched",
+        .root_module = rust_compat_test_2_8_matched_module,
+    });
+    b.installArtifact(rust_compat_test_2_8_matched_exe);
+
+    const run_rust_compat_test_2_8_matched_exe = b.addRunArtifact(rust_compat_test_2_8_matched_exe);
+    const rust_compat_test_2_8_matched_exe_step = b.step("rust-compat-test-2-8-matched", "Run Rust compatibility test for lifetime 2^8 MATCHED (2^18 tree with 256 active epochs)");
+    rust_compat_test_2_8_matched_exe_step.dependOn(&run_rust_compat_test_2_8_matched_exe.step);
+
+    // Debug Zig parameters
+    const debug_zig_parameters_module = b.createModule(.{
+        .root_source_file = b.path("examples/debug_zig_parameters.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    debug_zig_parameters_module.addImport("hash-zig", hash_zig_module);
+
+    const debug_zig_parameters_exe = b.addExecutable(.{
+        .name = "debug-zig-parameters",
+        .root_module = debug_zig_parameters_module,
+    });
+    b.installArtifact(debug_zig_parameters_exe);
+
+    const run_debug_zig_parameters_exe = b.addRunArtifact(debug_zig_parameters_exe);
+    const debug_zig_parameters_exe_step = b.step("debug-zig-parameters", "Debug Zig parameters for lifetime_2_8");
+    debug_zig_parameters_exe_step.dependOn(&run_debug_zig_parameters_exe.step);
+
+    // Test parameter alignment
+    const test_parameter_alignment_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_parameter_alignment.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_parameter_alignment_module.addImport("hash-zig", hash_zig_module);
+
+    const test_parameter_alignment_exe = b.addExecutable(.{
+        .name = "test-parameter-alignment",
+        .root_module = test_parameter_alignment_module,
+    });
+    b.installArtifact(test_parameter_alignment_exe);
+
+    const run_test_parameter_alignment_exe = b.addRunArtifact(test_parameter_alignment_exe);
+    const test_parameter_alignment_exe_step = b.step("test-parameter-alignment", "Test parameter alignment between Rust and Zig");
+    test_parameter_alignment_exe_step.dependOn(&run_test_parameter_alignment_exe.step);
+
+    // Test Rust-compatible Zig implementation
+    const test_rust_compatible_zig_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_rust_compatible_zig.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_rust_compatible_zig_module.addImport("hash-zig", hash_zig_module);
+
+    const test_rust_compatible_zig_exe = b.addExecutable(.{
+        .name = "test-rust-compatible-zig",
+        .root_module = test_rust_compatible_zig_module,
+    });
+    b.installArtifact(test_rust_compatible_zig_exe);
+
+    const run_test_rust_compatible_zig_exe = b.addRunArtifact(test_rust_compatible_zig_exe);
+    const test_rust_compatible_zig_exe_step = b.step("test-rust-compatible-zig", "Test Rust-compatible Zig implementation");
+    test_rust_compatible_zig_exe_step.dependOn(&run_test_rust_compatible_zig_exe.step);
+
+    // Test Rust-compatible integration
+    const test_rust_compat_integration_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_rust_compat_integration.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_rust_compat_integration_module.addImport("hash-zig", hash_zig_module);
+
+    const test_rust_compat_integration_exe = b.addExecutable(.{
+        .name = "test-rust-compat-integration",
+        .root_module = test_rust_compat_integration_module,
+    });
+    b.installArtifact(test_rust_compat_integration_exe);
+
+    const run_test_rust_compat_integration_exe = b.addRunArtifact(test_rust_compat_integration_exe);
+    const test_rust_compat_integration_exe_step = b.step("test-rust-compat-integration", "Test Rust-compatible integration");
+    test_rust_compat_integration_exe_step.dependOn(&run_test_rust_compat_integration_exe.step);
+
+    // Final compatibility test
+    const test_final_compatibility_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_final_compatibility.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_final_compatibility_module.addImport("hash-zig", hash_zig_module);
+
+    const test_final_compatibility_exe = b.addExecutable(.{
+        .name = "test-final-compatibility",
+        .root_module = test_final_compatibility_module,
+    });
+    b.installArtifact(test_final_compatibility_exe);
+
+    const run_test_final_compatibility_exe = b.addRunArtifact(test_final_compatibility_exe);
+    const test_final_compatibility_exe_step = b.step("test-final-compatibility", "Final compatibility test between Rust and Zig");
+    test_final_compatibility_exe_step.dependOn(&run_test_final_compatibility_exe.step);
+
+    // Test all Rust-compatible lifetimes
+    const test_all_rust_compat_lifetimes_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_all_rust_compat_lifetimes.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_all_rust_compat_lifetimes_module.addImport("hash-zig", hash_zig_module);
+
+    const test_all_rust_compat_lifetimes_exe = b.addExecutable(.{
+        .name = "test-all-rust-compat-lifetimes",
+        .root_module = test_all_rust_compat_lifetimes_module,
+    });
+    b.installArtifact(test_all_rust_compat_lifetimes_exe);
+
+    const run_test_all_rust_compat_lifetimes_exe = b.addRunArtifact(test_all_rust_compat_lifetimes_exe);
+    const test_all_rust_compat_lifetimes_exe_step = b.step("test-all-rust-compat-lifetimes", "Test all Rust-compatible lifetimes and functionality");
+    test_all_rust_compat_lifetimes_exe_step.dependOn(&run_test_all_rust_compat_lifetimes_exe.step);
+
+    // Test full Rust compatibility
+    const test_full_rust_compatibility_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_full_rust_compatibility.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_full_rust_compatibility_module.addImport("hash-zig", hash_zig_module);
+
+    const test_full_rust_compatibility_exe = b.addExecutable(.{
+        .name = "test-full-rust-compatibility",
+        .root_module = test_full_rust_compatibility_module,
+    });
+    b.installArtifact(test_full_rust_compatibility_exe);
+
+    const run_test_full_rust_compatibility_exe = b.addRunArtifact(test_full_rust_compatibility_exe);
+    const test_full_rust_compatibility_exe_step = b.step("test-full-rust-compatibility", "Test full Rust compatibility with all components");
+    test_full_rust_compatibility_exe_step.dependOn(&run_test_full_rust_compatibility_exe.step);
+
+    // Test Rust-compatible key generation
+    const test_rust_compat_keygen_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_rust_compat_keygen.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_rust_compat_keygen_module.addImport("hash-zig", hash_zig_module);
+
+    const test_rust_compat_keygen_exe = b.addExecutable(.{
+        .name = "test-rust-compat-keygen",
+        .root_module = test_rust_compat_keygen_module,
+    });
+    b.installArtifact(test_rust_compat_keygen_exe);
+
+    const run_test_rust_compat_keygen_exe = b.addRunArtifact(test_rust_compat_keygen_exe);
+    const test_rust_compat_keygen_exe_step = b.step("test-rust-compat-keygen", "Test Rust-compatible key generation");
+    test_rust_compat_keygen_exe_step.dependOn(&run_test_rust_compat_keygen_exe.step);
+
+    // Test simplified Rust compatibility
+    const test_rust_compat_simple_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_rust_compat_simple.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    test_rust_compat_simple_module.addImport("hash-zig", hash_zig_module);
+
+    const test_rust_compat_simple_exe = b.addExecutable(.{
+        .name = "test-rust-compat-simple",
+        .root_module = test_rust_compat_simple_module,
+    });
+    b.installArtifact(test_rust_compat_simple_exe);
+
+    const run_test_rust_compat_simple_exe = b.addRunArtifact(test_rust_compat_simple_exe);
+    const test_rust_compat_simple_exe_step = b.step("test-rust-compat-simple", "Test simplified Rust compatibility");
+    test_rust_compat_simple_exe_step.dependOn(&run_test_rust_compat_simple_exe.step);
 
     // Debug compatibility test executable module
     const debug_compat_module = b.createModule(.{
@@ -140,6 +393,61 @@ pub fn build(b: *std.Build) void {
     const run_debug_compat_exe = b.addRunArtifact(debug_compat_exe);
     const debug_compat_exe_step = b.step("debug-compat", "Run debug compatibility test");
     debug_compat_exe_step.dependOn(&run_debug_compat_exe.step);
+
+    // Simple compatibility test executable module
+    const simple_compat_module = b.createModule(.{
+        .root_source_file = b.path("examples/simple_compat_test.zig"),
+        .target = target,
+        // Always run compat test in ReleaseFast
+        .optimize = .ReleaseFast,
+    });
+    simple_compat_module.addImport("hash-zig", hash_zig_module);
+
+    const simple_compat_exe = b.addExecutable(.{
+        .name = "simple-compat-test",
+        .root_module = simple_compat_module,
+    });
+    b.installArtifact(simple_compat_exe);
+
+    const run_simple_compat_exe = b.addRunArtifact(simple_compat_exe);
+    const simple_compat_exe_step = b.step("simple-compat-test", "Run simple compatibility test (2^10)");
+    simple_compat_exe_step.dependOn(&run_simple_compat_exe.step);
+
+    // Minimal test executable module
+    const minimal_module = b.createModule(.{
+        .root_source_file = b.path("examples/minimal_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    minimal_module.addImport("hash-zig", hash_zig_module);
+
+    const minimal_exe = b.addExecutable(.{
+        .name = "minimal-test",
+        .root_module = minimal_module,
+    });
+    b.installArtifact(minimal_exe);
+
+    const run_minimal_exe = b.addRunArtifact(minimal_exe);
+    const minimal_exe_step = b.step("minimal-test", "Run minimal test (2^4)");
+    minimal_exe_step.dependOn(&run_minimal_exe.step);
+
+    // Poseidon validation test executable module
+    const poseidon_validation_module = b.createModule(.{
+        .root_source_file = b.path("examples/poseidon_validation_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    poseidon_validation_module.addImport("hash-zig", hash_zig_module);
+
+    const poseidon_validation_exe = b.addExecutable(.{
+        .name = "poseidon-validation-test",
+        .root_module = poseidon_validation_module,
+    });
+    b.installArtifact(poseidon_validation_exe);
+
+    const run_poseidon_validation_exe = b.addRunArtifact(poseidon_validation_exe);
+    const poseidon_validation_exe_step = b.step("poseidon-validation-test", "Run Poseidon2 validation test");
+    poseidon_validation_exe_step.dependOn(&run_poseidon_validation_exe.step);
 
     // Debug native full executable module
     const debug_native_full_module = b.createModule(.{
@@ -167,7 +475,8 @@ pub fn build(b: *std.Build) void {
     const quick_compat_module = b.createModule(.{
         .root_source_file = b.path("examples/quick_compat_test.zig"),
         .target = target,
-        .optimize = optimize,
+        // Always run compat test in ReleaseFast
+        .optimize = .ReleaseFast,
     });
     quick_compat_module.addImport("hash-zig", hash_zig_module);
 
@@ -236,6 +545,78 @@ pub fn build(b: *std.Build) void {
     const run_trace_keygen_exe = b.addRunArtifact(trace_keygen_exe);
     const trace_keygen_exe_step = b.step("trace-keygen", "Complete key generation trace");
     trace_keygen_exe_step.dependOn(&run_trace_keygen_exe.step);
+
+    // Test ShakePRFtoF compatibility executable module
+    const test_shake_prf_compat_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_shake_prf_compatibility.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_shake_prf_compat_module.addImport("hash-zig", hash_zig_module);
+
+    const test_shake_prf_compat_exe = b.addExecutable(.{
+        .name = "test-shake-prf-compat",
+        .root_module = test_shake_prf_compat_module,
+    });
+    b.installArtifact(test_shake_prf_compat_exe);
+
+    const run_test_shake_prf_compat_exe = b.addRunArtifact(test_shake_prf_compat_exe);
+    const test_shake_prf_compat_exe_step = b.step("test-shake-prf-compat", "Test ShakePRFtoF compatibility with Rust");
+    test_shake_prf_compat_exe_step.dependOn(&run_test_shake_prf_compat_exe.step);
+
+    // Test Poseidon2 compatibility executable module
+    const test_poseidon2_compat_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_poseidon2_compatibility.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_poseidon2_compat_module.addImport("hash-zig", hash_zig_module);
+
+    const test_poseidon2_compat_exe = b.addExecutable(.{
+        .name = "test-poseidon2-compat",
+        .root_module = test_poseidon2_compat_module,
+    });
+    b.installArtifact(test_poseidon2_compat_exe);
+
+    const run_test_poseidon2_compat_exe = b.addRunArtifact(test_poseidon2_compat_exe);
+    const test_poseidon2_compat_exe_step = b.step("test-poseidon2-compat", "Test Poseidon2 compatibility with Rust implementation");
+    test_poseidon2_compat_exe_step.dependOn(&run_test_poseidon2_compat_exe.step);
+
+    // Test full compatibility for lifetime 2^8 executable module
+    const test_full_compat_2_8_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_full_compatibility_2_8.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_full_compat_2_8_module.addImport("hash-zig", hash_zig_module);
+
+    const test_full_compat_2_8_exe = b.addExecutable(.{
+        .name = "test-full-compat-2-8",
+        .root_module = test_full_compat_2_8_module,
+    });
+    b.installArtifact(test_full_compat_2_8_exe);
+
+    const run_test_full_compat_2_8_exe = b.addRunArtifact(test_full_compat_2_8_exe);
+    const test_full_compat_2_8_exe_step = b.step("test-full-compat-2-8", "Test full compatibility for lifetime 2^8 between Rust and Zig");
+    test_full_compat_2_8_exe_step.dependOn(&run_test_full_compat_2_8_exe.step);
+
+    // Test simple compatibility for lifetime 2^8 executable module
+    const test_simple_compat_2_8_module = b.createModule(.{
+        .root_source_file = b.path("examples/test_simple_compatibility_2_8.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_simple_compat_2_8_module.addImport("hash-zig", hash_zig_module);
+
+    const test_simple_compat_2_8_exe = b.addExecutable(.{
+        .name = "test-simple-compat-2-8",
+        .root_module = test_simple_compat_2_8_module,
+    });
+    b.installArtifact(test_simple_compat_2_8_exe);
+
+    const run_test_simple_compat_2_8_exe = b.addRunArtifact(test_simple_compat_2_8_exe);
+    const test_simple_compat_2_8_exe_step = b.step("test-simple-compat-2-8", "Test simple compatibility for lifetime 2^8");
+    test_simple_compat_2_8_exe_step.dependOn(&run_test_simple_compat_2_8_exe.step);
 
     // Test domain separator executable module - REMOVED (file doesn't exist)
 

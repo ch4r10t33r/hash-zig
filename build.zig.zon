@@ -6,8 +6,7 @@
 
     .dependencies = .{
         .zig_poseidon = .{
-            .url = "https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz",
-            .hash = "zig_poseidon-0.2.0-CHeW2Pi8AABVfZSqWGjEjT8DEFBk9EwtMnmQ6OCXT4_4",
+            .path = "../zig-poseidon",
         },
     },
 

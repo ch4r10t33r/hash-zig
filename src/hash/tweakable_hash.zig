@@ -198,8 +198,10 @@ pub const TweakableHash = struct {
                     const capacity_value = try poseidon2_mod.Poseidon2.domainSeparator(allocator, lengths, 9); // CAPACITY = 9
                     defer allocator.free(capacity_value);
 
-                    // For sponge, input is: parameter + tweak + flattened_input
-                    return try p.sponge24(allocator, capacity_value, state, output_len);
+                    // For sponge, pass only the input portion (skip parameter + tweak)
+                    const input_start = 7; // Skip parameter (5) + tweak (2)
+                    const input_portion = state[input_start..];
+                    return try p.sponge24(allocator, capacity_value, input_portion, output_len);
                 }
             },
             .sha3 => error.FieldNativeNotSupported,
@@ -237,10 +239,8 @@ pub const TweakableHash = struct {
         // Use Poseidon2 compress for single element (chain hashing)
         return switch (self.hash_impl) {
             .poseidon2 => |*p| {
-                // Single element input - use compress mode
-                const result = try p.compress(self.allocator, &state, 1);
-                defer self.allocator.free(result);
-                return result[0];
+                // Zero-allocation fast path
+                return p.compress1NoAlloc(&state);
             },
             .sha3 => error.FieldNativeNotSupported,
         };

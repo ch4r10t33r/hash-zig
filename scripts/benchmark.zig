@@ -10,17 +10,14 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    std.debug.print("Command line args: {d}\n", .{args.len});
-    for (args, 0..) |arg, i| {
-        std.debug.print("  arg[{}]: {s}\n", .{ i, arg });
-    }
+    // Removed debug prints for performance
 
     var lifetime_power: u8 = 18; // Default to 2^18 for performance testing
     if (args.len > 1) {
         lifetime_power = std.fmt.parseInt(u8, args[1], 10) catch 18;
-        std.debug.print("Parsed lifetime_power: {d}\n", .{lifetime_power});
+        // Removed debug print for performance
     } else {
-        std.debug.print("No args provided, using default lifetime_power: {d}\n", .{lifetime_power});
+        // Removed debug print for performance
     }
 
     std.debug.print("Hash-Zig Performance Benchmark\n", .{});
