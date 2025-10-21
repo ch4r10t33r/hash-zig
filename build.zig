@@ -65,6 +65,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_performance_tests.step);
     test_step.dependOn(&run_rust_compat_tests.step);
 
+    // Basic usage example
+    const basic_example_module = b.createModule(.{
+        .root_source_file = b.path("examples/basic_usage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    basic_example_module.addImport("hash-zig", hash_zig_module);
+
+    const basic_example_exe = b.addExecutable(.{
+        .name = "basic-example",
+        .root_module = basic_example_module,
+    });
+    b.installArtifact(basic_example_exe);
+
+    const run_basic_example_exe = b.addRunArtifact(basic_example_exe);
+    const basic_example_exe_step = b.step("example", "Run basic usage example");
+    basic_example_exe_step.dependOn(&run_basic_example_exe.step);
+
     // Rust compatibility test step (for CI)
     const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests");
     rust_test_step.dependOn(&run_rust_compat_tests.step);
@@ -140,6 +158,24 @@ pub fn build(b: *std.Build) void {
     const run_benchmark_exe = b.addRunArtifact(benchmark_exe);
     const benchmark_exe_step = b.step("benchmark", "Run hash-zig benchmarks");
     benchmark_exe_step.dependOn(&run_benchmark_exe.step);
+
+    // Key generation benchmark script
+    const keygen_benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark_keygen.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    keygen_benchmark_module.addImport("hash-zig", hash_zig_module);
+
+    const keygen_benchmark_exe = b.addExecutable(.{
+        .name = "benchmark-keygen",
+        .root_module = keygen_benchmark_module,
+    });
+    b.installArtifact(keygen_benchmark_exe);
+
+    const run_keygen_benchmark_exe = b.addRunArtifact(keygen_benchmark_exe);
+    const keygen_benchmark_exe_step = b.step("benchmark-keygen", "Run key generation benchmarks");
+    keygen_benchmark_exe_step.dependOn(&run_keygen_benchmark_exe.step);
 
     // Documentation generation
     if (enable_docs) {

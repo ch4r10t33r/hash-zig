@@ -117,6 +117,8 @@ pub fn main() !void {
 }
 ```
 
+**💡 Performance Tip**: For production use with larger lifetimes (2^18, 2^32), build with `zig build -Doptimize=ReleaseFast` for significantly better performance.
+
 ## 🏗️ Architecture
 
 ### Core Components
@@ -139,11 +141,11 @@ The main signature scheme implementation that provides:
 
 ### Lifetime Support
 
-| Lifetime | Signatures | Use Case |
-|----------|------------|----------|
-| `2^8` | 256 | Testing, short-term keys |
-| `2^18` | 262,144 | Medium-term applications |
-| `2^32` | 4,294,967,296 | Long-term, high-volume |
+| Lifetime | Signatures | Use Case | Performance Note |
+|----------|------------|----------|------------------|
+| `2^8` | 256 | Testing, short-term keys | Fast in both debug and optimized builds |
+| `2^18` | 262,144 | Medium-term applications | **Requires optimized build** for reasonable performance |
+| `2^32` | 4,294,967,296 | Long-term, high-volume | **Requires optimized build** for reasonable performance |
 
 ## 📖 API Reference
 
@@ -220,19 +222,50 @@ zig build test-poseidon2-compat
 
 ## 🚀 Performance
 
+### Building for Performance
+
+**⚠️ Important**: For larger lifetimes (2^18, 2^32), always use optimized builds for production:
+
+```bash
+# Optimized build (recommended for production)
+zig build -Doptimize=ReleaseFast
+
+# Debug build (for development only)
+zig build
+```
+
 ### Benchmarking
 
 ```bash
-# Run performance benchmarks
-zig build benchmark
+# Run performance benchmarks (optimized)
+zig build benchmark -Doptimize=ReleaseFast
+
+# Run key generation benchmarks
+zig build benchmark-keygen -Doptimize=ReleaseFast
 ```
 
 ### Performance Characteristics
 
-- **Key Generation**: ~100ms for lifetime 2^8 (on M2 MacBook)
-- **Signing**: ~1ms per signature
-- **Verification**: ~2ms per signature
+**Optimized Build Performance (ReleaseFast)**:
+- **Key Generation (2^8)**: ~1.1 seconds (230 signatures/second) on M2 MacBook
+- **Key Generation (2^18)**: Use optimized build - significantly faster than debug
+- **Key Generation (2^32)**: Use optimized build - required for reasonable performance
+- **Signing**: <1ms per signature (279,000 signatures/second)
+- **Verification**: <1ms per signature (23,800,000 verifications/second)
 - **Memory Usage**: Efficient with proper cleanup
+
+**Debug Build Performance**:
+- **Key Generation (2^8)**: ~14.8 seconds (17 signatures/second) - much slower
+- **Signing**: <1ms per signature (25,900 signatures/second)
+- **Verification**: <1ms per signature (5,900,000 verifications/second)
+- **Larger lifetimes**: Not recommended for production use
+
+### Performance Recommendations
+
+1. **Always use `-Doptimize=ReleaseFast`** for production deployments
+2. **2^8 lifetime**: Suitable for testing and small-scale applications
+3. **2^18 lifetime**: Use optimized builds, suitable for medium-term applications
+4. **2^32 lifetime**: Use optimized builds, suitable for long-term, high-volume applications
 
 ## 🔧 Development
 
@@ -247,6 +280,12 @@ zig build -Ddocs
 
 # Run linting
 zig build lint
+
+# Run basic usage example (with timing)
+zig build example
+
+# Run basic usage example (optimized)
+zig build example -Doptimize=ReleaseFast
 ```
 
 ### Project Structure
@@ -262,6 +301,7 @@ src/
 └── utils/          # Utility functions
 
 examples/
+├── basic_usage.zig                     # Basic usage example with timing
 ├── test_generalized_xmss_compat.zig    # Main compatibility test
 ├── test_shake_prf_compatibility.zig    # PRF compatibility test
 └── test_poseidon2_compatibility.zig    # Hash function compatibility test
