@@ -48,6 +48,15 @@ pub const HashSignatureNative = signature.HashSignatureNative;
 pub const HashSignatureRustCompat = signature.HashSignatureRustCompat;
 pub const HashSignatureShakeCompat = signature.HashSignatureShakeCompat;
 
+// Primary Rust-compatible GeneralizedXMSS implementation (now the main implementation)
+pub const GeneralizedXMSSSignatureScheme = signature.GeneralizedXMSSSignatureScheme;
+pub const GeneralizedXMSSPublicKey = signature.GeneralizedXMSSPublicKey;
+pub const GeneralizedXMSSSecretKey = signature.GeneralizedXMSSSecretKey;
+pub const GeneralizedXMSSSignature = signature.GeneralizedXMSSSignature;
+
+// Legacy implementation (kept for compatibility)
+pub const HashSignatureShakeCompatLegacy = signature.HashSignatureShakeCompatLegacy;
+
 // Rust-compatible exports from zig-poseidon
 pub const TargetSumEncoding = poseidon.TargetSumEncoding;
 pub const TopLevelPoseidonMessageHash = poseidon.TopLevelPoseidonMessageHash;
