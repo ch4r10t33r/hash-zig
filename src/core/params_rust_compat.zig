@@ -58,12 +58,12 @@ pub const ParametersRustCompat = struct {
     num_chains: u32,
     hash_output_len: u32,
     key_lifetime: KeyLifetime,
-    
+
     // Rust-compatible parameters
     chain_hash_output_len_fe: usize, // Number of field elements in chain hash output
     tree_hash_output_len_fe: usize, // Number of field elements in tree hash output
     target_sum_value: u32, // TargetSumEncoding value (375 for Rust)
-    
+
     // Rust Poseidon2 parameters
     poseidon_width: u32, // 5 for Rust
     poseidon_rate: u32, // 8 for Rust
@@ -87,12 +87,12 @@ pub const ParametersRustCompat = struct {
             .num_chains = 22, // Total: 20 message + 2 checksum = 22
             .hash_output_len = 32, // 256-bit output for 128-bit security
             .key_lifetime = key_lifetime,
-            
+
             // Rust-compatible field element parameters
             .chain_hash_output_len_fe = 7, // 7 KoalaBear field elements for chain hashes
             .tree_hash_output_len_fe = 7, // 7 KoalaBear field elements for tree hashes
             .target_sum_value = 375, // Rust TargetSumEncoding value
-            
+
             // Rust Poseidon2 parameters (PoseidonTweakHash<5, 8, 2, 9, 64>)
             .poseidon_width = 5,
             .poseidon_rate = 8,
@@ -117,12 +117,12 @@ pub const ParametersRustCompat = struct {
             .num_chains = 22,
             .hash_output_len = 32,
             .key_lifetime = key_lifetime,
-            
+
             // Standard field element parameters
             .chain_hash_output_len_fe = 7,
             .tree_hash_output_len_fe = 7,
             .target_sum_value = 0, // Not used in standard mode
-            
+
             // Standard Poseidon2 parameters
             .poseidon_width = 16,
             .poseidon_rate = 8,
