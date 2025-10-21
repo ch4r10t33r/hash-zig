@@ -1,0 +1,13 @@
+.{
+    .name = .zig_benchmark,
+    .version = "0.1.0",
+    .fingerprint = 0x5ad108973e6f57b9,
+    .dependencies = .{
+        .hash_zig = .{
+            .path = "../../hash-zig",
+        },
+    },
+    .paths = .{
+        "",
+    },
+}

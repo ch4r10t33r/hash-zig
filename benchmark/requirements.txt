@@ -1,0 +1,12 @@
+# Core dependencies (all from Python standard library)
+# No external packages required for basic functionality
+
+# Optional: Development and testing
+# pytest>=7.0.0
+# black>=22.0.0
+# pylint>=2.12.0
+
+# Optional: Enhanced reporting
+# matplotlib>=3.5.0
+# pandas>=1.4.0
+# tabulate>=0.8.9
