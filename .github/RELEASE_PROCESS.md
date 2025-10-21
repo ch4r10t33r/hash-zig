@@ -44,11 +44,11 @@ release: minor
 
 ## Benefits
 
-- ✅ **Simple and direct** - No complex branch management
-- ✅ **Automatic releases** - Creates releases on every master push
+- ✅ **Controlled releases** - Releases only when explicitly merged to release branch
 - ✅ **Semantic versioning** - Automatic version detection
 - ✅ **Manual override** - Can specify version bump level
-- ✅ **Immediate releases** - No waiting for PR reviews
+- ✅ **Review process** - Pull requests allow for review before release
+- ✅ **Changelog generation** - Automatic changelog from commits
 
 ## Troubleshooting
 
@@ -65,12 +65,10 @@ If you see "Protected branch update failed":
 ### Manual Release
 To create a manual release:
 1. Go to Actions tab
-2. Run the "Release Branch Workflow" manually
-3. Or create a release branch manually and follow the process
+2. Run the "Auto Release on Release Branch" workflow manually
+3. Or create a pull request from main to release branch and merge it
 
 ## Workflow Files
 
-- `release-on-master.yml` - **ACTIVE** - Creates releases directly on master branch updates
-- `release-branch.yml` - **DEPRECATED** - Old branch-based workflow
-- `release-on-pr-merge.yml` - **DEPRECATED** - Old PR-based workflow
-- `release-on-merge.yml` - **DEPRECATED** - Old direct push workflow
+- `auto-release.yml` - **ACTIVE** - Creates releases when PRs are merged to release branch
+- `ci.yml` - **ACTIVE** - Runs tests and CI on main branch

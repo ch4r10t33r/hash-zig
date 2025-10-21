@@ -1,6 +1,6 @@
 # Auto-Release Workflow Setup
 
-This repository uses an automatic release workflow similar to zigeth. The workflow automatically creates releases when changes are pushed to the master branch.
+This repository uses a controlled release workflow. The workflow automatically creates releases when pull requests are merged to the release branch.
 
 ## 🔐 Required GitHub Secret
 
@@ -32,7 +32,7 @@ The workflow requires a Personal Access Token (PAT) with workflow permissions to
 
 The workflow automatically creates a release when:
 
-1. **Merge commits** to master/main
+1. **Pull requests are merged** to the release branch
 2. **Commit messages** containing keywords:
    - `[release]` - Creates a patch release
    - `[patch]` or `fix:` - Patch version bump (0.0.x)
@@ -90,9 +90,9 @@ git commit -m "docs: update README [skip release]"
 
 You can manually trigger a release:
 
-1. Go to Actions → Automatic Release on Master
+1. Go to Actions → Auto Release on Release Branch
 2. Click "Run workflow"
-3. Select branch: `master`
+3. Select branch: `release`
 4. Choose version bump: `major`, `minor`, or `patch`
 5. Click "Run workflow"
 
@@ -151,17 +151,17 @@ View release history:
 - **Workflow runs**: https://github.com/ch4r10t33r/hash-zig/actions/workflows/auto-release.yml
 - **Tags**: https://github.com/ch4r10t33r/hash-zig/tags
 
-## 🆚 Comparison with Old Workflow
+## 🆚 Current Workflow Features
 
-| Feature | Old (release-on-master.yml) | New (auto-release.yml) |
-|---------|----------------------------|------------------------|
-| Version calculation | Semantic based on commits | Semantic + manual override |
-| Artifacts | None | Multi-platform binaries |
-| Release notes | Basic | Comprehensive with examples |
-| Manual trigger | Basic | With version choice |
-| Skip releases | No | Yes (`[skip release]`) |
-| PAT token | No | Yes (required) |
-| Platform builds | None | 5 platforms (Linux, macOS, Windows) |
+| Feature | Current (auto-release.yml) |
+|---------|---------------------------|
+| Trigger | Pull request merge to release branch |
+| Version calculation | Semantic + manual override |
+| Release notes | Comprehensive with examples |
+| Manual trigger | With version choice |
+| Skip releases | Yes (`[skip release]`) |
+| Changelog | Auto-generated from commits |
+| Platform builds | Multi-platform binaries |
 
 ## 🔗 Related
 
