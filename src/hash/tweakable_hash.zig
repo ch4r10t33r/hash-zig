@@ -74,9 +74,43 @@ pub const TweakableHash = struct {
         }
 
         return switch (self.hash_impl) {
-            .poseidon2 => |*p| try p.hashBytes(allocator, tweaked_data),
+            .poseidon2 => |*p| {
+                // Convert bytes to field elements and hash
+                const field_elements = try self.bytesToFieldElements(allocator, tweaked_data);
+                defer allocator.free(field_elements);
+                const hash_result = try p.hashFieldElements(allocator, field_elements);
+                defer allocator.free(hash_result);
+                
+                // Convert field elements back to bytes
+                const result = try allocator.alloc(u8, hash_result.len * 4);
+                for (hash_result, 0..) |fe, i| {
+                    const bytes = std.mem.toBytes(fe.value);
+                    @memcpy(result[i*4..(i+1)*4], &bytes);
+                }
+                return result;
+            },
             .sha3 => |*s| try s.hashBytes(allocator, tweaked_data),
         };
+    }
+
+    /// Convert bytes to field elements for Poseidon2 hashing
+    fn bytesToFieldElements(_: *TweakableHash, allocator: Allocator, data: []const u8) ![]FieldElement {
+        const num_elements = (data.len + 3) / 4; // 4 bytes per field element
+        const field_elements = try allocator.alloc(FieldElement, num_elements);
+        
+        for (0..num_elements) |i| {
+            const start = i * 4;
+            const end = @min(start + 4, data.len);
+            
+            var value: u32 = 0;
+            for (start..end) |j| {
+                value |= @as(u32, data[j]) << @intCast((j - start) * 8);
+            }
+            
+            field_elements[i] = FieldElement{ .value = value % 2130706433 }; // KoalaBear modulus
+        }
+        
+        return field_elements;
     }
 
     /// PRF-based hash using SHAKE-128 (matching Rust's ShakePRFtoF)
@@ -175,10 +209,24 @@ pub const TweakableHash = struct {
                 // 3. Many elements (>2): Poseidon2-24 sponge
                 if (input.len == 1) {
                     // Mode 1: Chain hashing (single field element array)
-                    return try p.compress(allocator, state, output_len);
+                    if (state.len >= 24) {
+                        var state_array: [24]FieldElement = undefined;
+                        @memcpy(state_array[0..state.len], state);
+                        return try p.compress(state_array, output_len);
+                    } else {
+                        // Use hashFieldElements for variable length
+                        return try p.hashFieldElements(allocator, state);
+                    }
                 } else if (input.len == 2) {
                     // Mode 2: Tree node merging (two field element arrays)
-                    return try p.compress24(allocator, state, output_len);
+                    if (state.len >= 24) {
+                        var state_array: [24]FieldElement = undefined;
+                        @memcpy(state_array[0..state.len], state);
+                        return try p.compress(state_array, output_len);
+                    } else {
+                        // Use hashFieldElements for variable length
+                        return try p.hashFieldElements(allocator, state);
+                    }
                 } else {
                     // Mode 3: Leaf generation (many field element arrays)
                     // CRITICAL: NUM_CHUNKS is the number of Domain elements, not total field elements!

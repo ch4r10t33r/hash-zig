@@ -45,6 +45,10 @@ pub const KeyLifetime = enum {
     pub fn maxSignatures(self: KeyLifetime) u64 {
         return @as(u64, 1) << @intCast(self.treeHeight());
     }
+
+    pub fn logLifetime(self: KeyLifetime) u32 {
+        return self.treeHeight();
+    }
 };
 
 pub const ParametersRustCompat = struct {
