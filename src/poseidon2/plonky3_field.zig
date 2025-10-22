@@ -76,11 +76,14 @@ pub const KoalaBearField = struct {
         return KoalaBearField{ .value = halveU32(self.value) };
     }
 
-    // Division by power of 2 (exact from Plonky3)
+    // Division by power of 2 (exact from Plonky3 div_2exp_u64)
     pub fn div2exp(self: KoalaBearField, exponent: u32) KoalaBearField {
         if (exponent <= 32) {
+            // As the monty form of 2^{-exp} is 2^{32 - exp} mod P, for
+            // 0 <= exp <= 32, we can multiply by 2^{-exp} by doing a shift
+            // followed by a monty reduction.
             const long_prod = @as(u64, self.value) << @as(u6, @intCast(32 - exponent));
-            return KoalaBearField{ .value = @as(u32, @intCast(long_prod % KOALABEAR_PRIME)) };
+            return KoalaBearField{ .value = montyReduce(long_prod) };
         } else {
             // For larger values, use repeated halving
             var result = self;
