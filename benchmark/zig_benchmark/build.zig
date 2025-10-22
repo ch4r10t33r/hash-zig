@@ -93,4 +93,14 @@ pub fn build(b: *std.Build) void {
     });
     compare_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(compare_exe);
+
+    // Add trace_keygen binary
+    const trace_exe = b.addExecutable(.{
+        .name = "trace_keygen",
+        .root_source_file = b.path("src/trace_keygen.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    trace_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(trace_exe);
 }

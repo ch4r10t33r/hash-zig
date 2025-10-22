@@ -169,12 +169,12 @@ pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXM
 
     try result.appendSlice("{");
 
-    // Serialize root using controlled access
+    // Serialize root using controlled access (as array to match Rust)
     const root = public_key.getRoot();
-    const root_hex = try serializeFieldElement(allocator, root);
-    defer allocator.free(root_hex);
+    const root_json = try serializeFieldElementArray(allocator, &root);
+    defer allocator.free(root_json);
     try result.appendSlice("\"root\":");
-    try result.appendSlice(root_hex);
+    try result.appendSlice(root_json);
 
     // Serialize parameter using controlled access
     try result.appendSlice(",\"parameter\":");
@@ -202,10 +202,15 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
 
     const obj = parsed.value.object;
 
-    // Parse root
-    const root_obj = obj.get("root") orelse return error.MissingRootField;
-    if (root_obj != .string) return error.InvalidJsonFormat;
-    const root = try deserializeFieldElement(root_obj.string);
+    // Parse root (as array to match Rust)
+    const root_array = obj.get("root") orelse return error.MissingRootField;
+    if (root_array != .array or root_array.array.items.len != 8) return error.InvalidJsonFormat;
+
+    var root: [8]FieldElement = undefined;
+    for (root_array.array.items, 0..) |item, i| {
+        if (item != .string) return error.InvalidJsonFormat;
+        root[i] = try deserializeFieldElement(item.string);
+    }
 
     // Parse parameter
     const param_array = obj.get("parameter") orelse return error.MissingParameterField;

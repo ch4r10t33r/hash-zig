@@ -31,7 +31,7 @@ pub fn main() !void {
     std.debug.print("BENCHMARK_RESULT: {d:.6}\n", .{elapsed_s});
 
     // Generate public key hash for comparison
-    const public_key_bytes = std.mem.asBytes(&keypair.public_key.root.value);
+    const public_key_bytes = std.mem.asBytes(&keypair.public_key.root);
     var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
     hasher.update(public_key_bytes);
     var digest: [32]u8 = undefined;
@@ -42,7 +42,7 @@ pub fn main() !void {
     std.debug.print("\n", .{});
 
     // Test signing and verification
-    const message = [_]u8{0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21} ++ [_]u8{0x00} ** 20; // "Hello World!" + padding
+    const message = [_]u8{ 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21 } ++ [_]u8{0x00} ** 20; // "Hello World!" + padding
     const epoch: u32 = 0;
 
     std.debug.print("Testing signing...\n", .{});
