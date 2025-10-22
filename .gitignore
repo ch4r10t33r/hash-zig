@@ -68,3 +68,10 @@ coverage/
 *.profraw
 
 benchmark/zig_benchmark/.zig-global-cache/
+benchmark/zig_benchmark/.zig-cache/
+benchmark/zig_benchmark/zig-out/
+
+# Rust benchmark build artifacts
+benchmark/rust_benchmark/target/
+benchmark/rust_benchmark/.cargo_home/
+benchmark/rust_benchmark/.cargo/
