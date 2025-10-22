@@ -15,7 +15,7 @@ pub const KoalaBearField = struct {
     value: u32, // Montgomery form value
 
     pub const zero = KoalaBearField{ .value = 0 }; // 0 in Montgomery form is still 0
-    pub const one = KoalaBearField{ .value = 1 }; // 1 in Montgomery form (will be computed at comptime)
+    pub const one = KoalaBearField{ .value = 33554430 }; // 1 in Montgomery form: (1 << 32) % 0x7f000001
 
     // Convert u32 to field element (converts to Montgomery form like Plonky3's MontyField31::new)
     pub fn fromU32(x: u32) KoalaBearField {
