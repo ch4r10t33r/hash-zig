@@ -1,49 +1,45 @@
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha12Rng;
-use hashsig::symmetric::prf::ShakePRFtoF_8_7;
+use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+use hashsig::signature::SignatureScheme;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+use rand::Rng;
+use std::env;
 
 fn main() {
-    println!("=== Chain Computation Debug ===");
+    let seed_hex = env::var("SEED_HEX").unwrap_or_else(|_| "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242".to_string());
     
-    // Use the same seed as the comparison test
-    let seed = [0x42u8; 32];
+    println!("=== Rust Chain Computation Analysis ===");
+    println!("SEED: {}", seed_hex);
     
-    // Initialize RNG
-    let mut rng = ChaCha12Rng::from_seed(seed);
+    // Parse seed
+    let seed_bytes = hex::decode(&seed_hex).expect("Invalid hex seed");
+    let mut seed_array = [0u8; 32];
+    seed_array.copy_from_slice(&seed_bytes[..32]);
     
-    println!("SEED: {:02x?}", seed);
+    let mut rng = StdRng::from_seed(seed_array);
     
-    // Generate parameters and PRF key (same as before)
-    let mut parameter = [0u32; 5];
-    for i in 0..5 {
-        parameter[i] = rng.gen::<u32>();
+    println!("\n=== First 20 RNG values ===");
+    for i in 0..20 {
+        let val = rng.random::<u32>();
+        println!("  [{}] = {} (0x{:x})", i, val, val);
     }
     
-    let mut prf_key = [0u8; 32];
-    rng.fill(&mut prf_key);
+    println!("\n=== Key generation ===");
+    let mut rng2 = StdRng::from_seed(seed_array);
+    let (pk, _sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng2, 0, 256);
+    let pk_json = serde_json::to_string(&pk).unwrap();
     
-    println!("Parameter: {:?}", parameter);
-    println!("PRF key: {:02x?}", prf_key);
-    
-    // Test the first few domain elements and chain computations
-    println!("\nTesting domain elements and chain computations:");
-    
-    // Test domain element generation for epoch 0, chain 0
-    let domain_elements_0_0 = ShakePRFtoF_8_7::get_domain_element(&prf_key, 0, 0);
-    println!("Domain elements for epoch 0, chain 0: {:?}", domain_elements_0_0);
-    
-    // Test domain element generation for epoch 0, chain 1
-    let domain_elements_0_1 = ShakePRFtoF_8_7::get_domain_element(&prf_key, 0, 1);
-    println!("Domain elements for epoch 0, chain 1: {:?}", domain_elements_0_1);
-    
-    // Test domain element generation for epoch 1, chain 0
-    let domain_elements_1_0 = ShakePRFtoF_8_7::get_domain_element(&prf_key, 1, 0);
-    println!("Domain elements for epoch 1, chain 0: {:?}", domain_elements_1_0);
-    
-    // Check RNG state after domain element generation
-    println!("\nRNG state after domain element generation:");
-    for i in 0..10 {
-        let val = rng.gen::<u32>();
-        println!("  [{}] = {}", i, val);
+    // Parse the JSON to extract root values
+    let pk_data: serde_json::Value = serde_json::from_str(&pk_json).unwrap();
+    let root_array = pk_data["root"].as_array().unwrap();
+    let mut root_values = [0u32; 8];
+    for (i, val) in root_array.iter().enumerate() {
+        root_values[i] = val.as_u64().unwrap() as u32;
     }
+    
+    println!("Final root values: {:?}", root_values);
+    
+    println!("\n=== RNG state after key generation ===");
+    let next_val = rng2.random::<u32>();
+    println!("Next RNG value: {} (0x{:x})", next_val, next_val);
 }

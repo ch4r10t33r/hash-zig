@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const poseidon = @import("poseidon");
 const field_types = @import("field.zig");
 const FieldElement = field_types.FieldElement;
 const poseidon2 = @import("../poseidon2/root.zig");
@@ -11,25 +10,18 @@ const poseidon2 = @import("../poseidon2/root.zig");
 // Import Plonky3-compatible Poseidon2 instances (matching Rust hash-sig exactly)
 const Poseidon2KoalaBear24 = poseidon2.Poseidon2KoalaBear24; // Use Plonky3-compatible 24 for message hashing
 const Poseidon2KoalaBear16 = poseidon2.Poseidon2KoalaBear16; // Use Plonky3-compatible 16 for chain compression
-const TargetSumEncoding = poseidon.koalabear.TargetSumEncoding;
-const TopLevelPoseidonMessageHash = poseidon.koalabear.TopLevelPoseidonMessageHash;
 
 // Rust parameters from actual hash-sig implementation
 const WIDTH_24 = 24; // Poseidon2-24 (used in message hashing)
 const WIDTH_16 = 16; // Poseidon2-16 (used in chain compression)
 const OUTPUT_LEN_RUST = 64; // 64 field elements output
-const TARGET_SUM_RUST = 375; // TargetSumEncoding value
 
 pub const Poseidon2RustCompat = struct {
     allocator: Allocator,
-    target_sum_encoding: TargetSumEncoding,
-    top_level_message_hash: TopLevelPoseidonMessageHash,
 
     pub fn init(allocator: Allocator) !Poseidon2RustCompat {
         return .{
             .allocator = allocator,
-            .target_sum_encoding = TargetSumEncoding{ .target_sum = TARGET_SUM_RUST },
-            .top_level_message_hash = TopLevelPoseidonMessageHash{},
         };
     }
 

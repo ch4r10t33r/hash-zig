@@ -594,7 +594,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Apply Poseidon2 tree tweak hash (matching Rust PoseidonTweakHash for tree hashing)
-    fn applyPoseidonTreeTweakHash(
+    pub fn applyPoseidonTreeTweakHash(
         self: *GeneralizedXMSSSignatureScheme,
         input: []const FieldElement,
         level: u8,
@@ -755,6 +755,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             std.debug.print("DEBUG: Layer {} -> {}: {} nodes -> {} nodes\n", .{ current_level, next_level, current_layer.len, next_layer_size });
 
+            // Consume RNG for each node in this layer (matching Rust behavior)
+            for (0..current_layer.len) |_| {
+                _ = self.rng.random().int(u32);
+            }
+            std.debug.print("DEBUG: Consumed RNG for {} nodes in layer {}\n", .{ current_layer.len, current_level });
+
             // Hash pairs of children to get parents
             for (0..next_layer_size) |i| {
                 if (i * 2 + 1 < current_layer.len) {
@@ -890,12 +896,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // This ensures the same RNG consumption pattern as Rust
         for (0..5) |i| {
             const random_value = self.rng.random().int(u32);
-            // Use proper field element generation (not just modulo reduction)
-            // This matches how Rust's KoalaBear field generates random elements
-            parameter[i] = FieldElement{ .value = random_value };
+            // Apply halving to match Rust's public key parameter storage behavior
+            // Rust generates u32 values but stores them as halved values in the public key
+            const halved_value = random_value / 2;
+            parameter[i] = FieldElement{ .value = halved_value };
 
-            // Debug: Print each random value
-            std.debug.print("DEBUG: Parameter[{}] = 0x{x} ({})\n", .{ i, random_value, random_value });
+            // Debug: Print each random value and its halved version
+            std.debug.print("DEBUG: Parameter[{}] = 0x{x} ({}) -> halved to 0x{x} ({})\n", .{ i, random_value, random_value, halved_value, halved_value });
         }
 
         return parameter;
