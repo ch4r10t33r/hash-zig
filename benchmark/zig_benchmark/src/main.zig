@@ -15,7 +15,7 @@ pub fn main() !void {
     std.debug.print("\n", .{});
 
     // Initialize parameters with lifetime 2^18 (matching Rust benchmark config)
-    const params = hash_zig.Parameters.init(.lifetime_2_10);
+    const params = hash_zig.Parameters.init(.lifetime_2_8);
 
     // Read SEED_HEX env var (64 hex chars => 32 bytes). Default to 0x42 repeated
     var seed: [32]u8 = undefined;

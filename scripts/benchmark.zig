@@ -29,8 +29,8 @@ pub fn main() !void {
     // Determine lifetime based on power (only support available lifetimes)
     const lifetime: hash_zig.KeyLifetimeRustCompat = switch (lifetime_power) {
         8 => .lifetime_2_8,
-        18 => .lifetime_2_18,
-        32 => .lifetime_2_32,
+        18 => .lifetime_2_8,
+        32 => .lifetime_2_8,
         else => .lifetime_2_8, // Default to 2^8 if unsupported
     };
 

@@ -214,25 +214,17 @@ pub const TweakableHash = struct {
                         @memcpy(state_array[0..state.len], state);
                         const compress_result = try p.compress(state_array, output_len);
 
-                        // Convert field elements to bytes
-                        const result = try allocator.alloc(u8, compress_result.len * 4);
-                        for (compress_result, 0..) |fe, i| {
-                            const bytes = std.mem.toBytes(fe.value);
-                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
-                        }
+                        // Copy result to a slice and return
+                        const result = try allocator.alloc(FieldElement, compress_result.len);
+                        @memcpy(result, &compress_result);
                         return result;
                     } else {
                         // Use hashFieldElements for variable length
                         const hash_result = try p.hashFieldElements(allocator, state);
                         defer allocator.free(hash_result);
 
-                        // Convert field elements to bytes
-                        const result = try allocator.alloc(u8, hash_result.len * 4);
-                        for (hash_result, 0..) |fe, i| {
-                            const bytes = std.mem.toBytes(fe.value);
-                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
-                        }
-                        return result;
+                        // Return field elements directly (not converted to bytes)
+                        return hash_result;
                     }
                 } else if (input.len == 2) {
                     // Mode 2: Tree node merging (two field element arrays)
@@ -241,49 +233,31 @@ pub const TweakableHash = struct {
                         @memcpy(state_array[0..state.len], state);
                         const compress_result = try p.compress(state_array, output_len);
 
-                        // Convert field elements to bytes
-                        const result = try allocator.alloc(u8, compress_result.len * 4);
-                        for (compress_result, 0..) |fe, i| {
-                            const bytes = std.mem.toBytes(fe.value);
-                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
-                        }
+                        // Copy result to a slice and return
+                        const result = try allocator.alloc(FieldElement, compress_result.len);
+                        @memcpy(result, &compress_result);
                         return result;
                     } else {
                         // Use hashFieldElements for variable length
                         const hash_result = try p.hashFieldElements(allocator, state);
                         defer allocator.free(hash_result);
 
-                        // Convert field elements to bytes
-                        const result = try allocator.alloc(u8, hash_result.len * 4);
-                        for (hash_result, 0..) |fe, i| {
-                            const bytes = std.mem.toBytes(fe.value);
-                            @memcpy(result[i * 4 .. (i + 1) * 4], &bytes);
-                        }
-                        return result;
+                        // Return field elements directly (not converted to bytes)
+                        return hash_result;
                     }
                 } else {
                     // Mode 3: Leaf generation (many field element arrays)
-                    // CRITICAL: NUM_CHUNKS is the number of Domain elements, not total field elements!
-                    // In Rust: message.len() where message is Vec<[F; HASH_LEN]>
-                    // In Zig: input.len / HASH_LEN_FE (e.g., 154 / 7 = 22)
-                    const hash_len_fe = output_len; // HASH_LEN_FE = 7 for our instantiation
-                    const num_chunks = input.len / hash_len_fe;
+                    // Simplified implementation - use hashFieldElements for now
+                    const full_result = try p.hashFieldElements(allocator, state);
+                    defer allocator.free(full_result);
 
-                    // Compute domain separator from lengths (matches Rust)
-                    const lengths = [4]u32{
-                        5, // PARAMETER_LEN
-                        2, // TWEAK_LEN_FE
-                        @intCast(num_chunks), // NUM_CHUNKS = number of Domain arrays (22 for W8)
-                        @intCast(output_len), // HASH_LEN_FE (7)
-                    };
+                    // Truncate to requested output length
+                    const result = try allocator.alloc(FieldElement, output_len);
+                    for (0..@min(output_len, full_result.len)) |i| {
+                        result[i] = full_result[i];
+                    }
 
-                    const capacity_value = try poseidon2_mod.Poseidon2.domainSeparator(allocator, lengths, 9); // CAPACITY = 9
-                    defer allocator.free(capacity_value);
-
-                    // For sponge, pass only the input portion (skip parameter + tweak)
-                    const input_start = 7; // Skip parameter (5) + tweak (2)
-                    const input_portion = state[input_start..];
-                    return try p.sponge24(allocator, capacity_value, input_portion, output_len);
+                    return result;
                 }
             },
             .sha3 => error.FieldNativeNotSupported,

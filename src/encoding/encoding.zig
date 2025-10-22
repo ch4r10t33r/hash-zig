@@ -141,7 +141,7 @@ pub const IncomparableEncoding = struct {
 
 test "winternitz encoding with checksum" {
     const allocator = std.testing.allocator;
-    const parameters = Parameters.init(.lifetime_2_10);
+    const parameters = Parameters.init(.lifetime_2_8);
     const encoding = IncomparableEncoding.init(parameters);
 
     // Test with a 20-byte message hash (for w=8, this produces 20 message chunks)

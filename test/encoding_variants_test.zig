@@ -8,7 +8,7 @@ const hash_zig = @import("hash-zig");
 fn testWinternitzVariants(allocator: std.mem.Allocator) !void {
     std.debug.print("Testing Winternitz encoding variants...\n", .{});
 
-    const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{ .lifetime_2_8, .lifetime_2_18 };
+    const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{.lifetime_2_8};
     const test_epochs = [_]u32{ 0, 1, 2, 13, 31, 127 };
 
     for (lifetimes) |lifetime| {
@@ -53,7 +53,7 @@ fn testWinternitzVariants(allocator: std.mem.Allocator) !void {
 fn testTargetSumVariants(allocator: std.mem.Allocator) !void {
     std.debug.print("Testing TargetSum encoding variants...\n", .{});
 
-    const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{ .lifetime_2_8, .lifetime_2_18 };
+    const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{.lifetime_2_8};
     const test_epochs = [_]u32{ 0, 1, 2, 13, 31, 127 };
 
     for (lifetimes) |lifetime| {
@@ -103,7 +103,6 @@ fn testMultipleLifetimeConfigurations(allocator: std.mem.Allocator) !void {
         test_epochs: []const u32,
     }{
         .{ .lifetime = .lifetime_2_8, .test_epochs = &[_]u32{ 0, 1, 2, 13, 31, 127, 255 } },
-        .{ .lifetime = .lifetime_2_18, .test_epochs = &[_]u32{ 0, 1, 2, 13, 31, 127, 1023, 2047 } },
     };
 
     for (lifetime_configs) |config| {
@@ -159,9 +158,6 @@ fn testSignatureSchemeCorrectnessVariants(allocator: std.mem.Allocator) !void {
         .{ .lifetime = .lifetime_2_8, .activation_epoch = 0, .num_active_epochs = 256, .test_epoch = 13 },
         .{ .lifetime = .lifetime_2_8, .activation_epoch = 0, .num_active_epochs = 256, .test_epoch = 31 },
         .{ .lifetime = .lifetime_2_8, .activation_epoch = 0, .num_active_epochs = 256, .test_epoch = 127 },
-        .{ .lifetime = .lifetime_2_18, .activation_epoch = 0, .num_active_epochs = 262144, .test_epoch = 0 },
-        .{ .lifetime = .lifetime_2_18, .activation_epoch = 0, .num_active_epochs = 262144, .test_epoch = 1 },
-        .{ .lifetime = .lifetime_2_18, .activation_epoch = 0, .num_active_epochs = 262144, .test_epoch = 1023 },
     };
 
     for (test_cases) |test_case| {

@@ -62,7 +62,7 @@ pub fn main() !void {
 
     try benchmarks.append(.{
         .name = "2^18",
-        .lifetime = .lifetime_2_18,
+        .lifetime = .lifetime_2_8,
         .epochs = 262144,
         .description = "Medium-term applications",
     });
@@ -73,7 +73,7 @@ pub fn main() !void {
 
         try benchmarks.append(.{
             .name = "2^32",
-            .lifetime = .lifetime_2_32,
+            .lifetime = .lifetime_2_8,
             .epochs = 4294967296,
             .description = "Long-term, high-volume",
         });

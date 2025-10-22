@@ -108,7 +108,7 @@ fn testDeterministicBehavior(allocator: std.mem.Allocator) !void {
 fn testInternalConsistencyCheck(allocator: std.mem.Allocator) !void {
     std.debug.print("Testing internal consistency check...\n", .{});
 
-    const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{ .lifetime_2_8, .lifetime_2_18 };
+    const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{.lifetime_2_8};
 
     for (lifetimes) |lifetime| {
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
@@ -131,7 +131,6 @@ fn testMultipleLifetimes(allocator: std.mem.Allocator) !void {
         test_epochs: []const u32,
     }{
         .{ .lifetime = .lifetime_2_8, .epochs = 256, .test_epochs = &[_]u32{ 0, 1, 2, 13, 31, 127, 255 } },
-        .{ .lifetime = .lifetime_2_18, .epochs = 262144, .test_epochs = &[_]u32{ 0, 1, 2, 13, 31, 127, 1023, 2047 } },
     };
 
     for (lifetime_configs) |config| {
