@@ -258,6 +258,57 @@ zig build benchmark -Doptimize=ReleaseFast
 zig build benchmark-keygen -Doptimize=ReleaseFast
 ```
 
+#### Key generation benchmarks (multiple lifetimes, fixed 256 keys)
+
+The standalone key-generation benchmark compares lifetime configurations while always generating 256 keys for each:
+
+```bash
+# Debug build (slower, good for development)
+zig run scripts/benchmark_keygen.zig -- -i3
+
+# Include lifetime 2^32 as well (can be slower due to larger trees)
+zig run scripts/benchmark_keygen.zig -- --include-2-32 -i3
+
+# Recommended for accurate results
+zig run scripts/benchmark_keygen.zig -- -i5 -Doptimize=ReleaseFast
+```
+
+What it measures:
+- Lifetime 2^8, 2^18, and optionally 2^32
+- Always generates 256 keys for apples-to-apples comparison
+- Reports average/min/max time and derived keys/second
+
+Example output (abbreviated):
+```
+hash-zig Key Generation Benchmark (Multiple Lifetimes)
+=======================================================
+Iterations per configuration: 3
+Include 2^32 lifetime: true
+Note: All tests generate 256 keys to compare lifetime performance
+
+Benchmarking lifetime 2^8 (generating 256 keys)
+... ✅ 0.01s | ... ✅ 0.02s | ... ✅ 0.01s
+📊 Results for lifetime 2^8 (256 keys):
+  Average time: 0.01 seconds
+  Generation rate: 17,000+ keys/second
+
+Benchmarking lifetime 2^18 (generating 256 keys)
+... ✅ 0.05s | ... ✅ 0.05s | ... ✅ 0.05s
+📊 Results for lifetime 2^18 (256 keys):
+  Average time: 0.05 seconds
+  Generation rate: ~5,000 keys/second
+
+Benchmarking lifetime 2^32 (generating 256 keys)
+... ✅ 0.21s | ... ✅ 0.21s | ... ✅ 0.21s
+📊 Results for lifetime 2^32 (256 keys):
+  Average time: 0.21 seconds
+  Generation rate: ~1,200 keys/second
+```
+
+Notes:
+- 2^32 uses larger internal tree structures and is expected to be slower per key.
+- Use `-Doptimize=ReleaseFast` for realistic throughput numbers.
+
 ### Performance Characteristics
 
 **Optimized Build Performance (ReleaseFast)**:
