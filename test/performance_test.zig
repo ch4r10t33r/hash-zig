@@ -49,7 +49,7 @@ test "lifetime_2_8 key generation, sign, and verify performance" {
     const keygen_time_s = keygen_time_ms / 1000.0;
 
     std.debug.print("⏱️  Key Generation Time: {d:.3} seconds ({d:.2} ms)\n", .{ keygen_time_s, keygen_time_ms });
-    std.debug.print("   Public key root: {}\n", .{keypair.public_key.root.value});
+    std.debug.print("   Public key root: {}\n", .{keypair.public_key.root[0].value});
     std.debug.print("   Activation epoch: {}\n", .{keypair.secret_key.activation_epoch});
     std.debug.print("   Active epochs: {}\n", .{keypair.secret_key.num_active_epochs});
     std.debug.print("✅ Key generation successful\n\n", .{});

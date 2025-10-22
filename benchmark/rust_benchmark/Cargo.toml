@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 hashsig = { git = "https://github.com/b-wagn/hash-sig", branch = "main" }
+p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
+p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
 rand = { version = "0.9", features = ["std_rng"] }
 rand_chacha = "0.9"
 sha3 = "0.10"

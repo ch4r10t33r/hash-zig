@@ -6,10 +6,11 @@ const Allocator = std.mem.Allocator;
 const poseidon = @import("poseidon");
 const field_types = @import("field.zig");
 const FieldElement = field_types.FieldElement;
+const poseidon2_plonky3 = @import("poseidon2_plonky3_compat.zig");
 
-// Import Rust-compatible Poseidon2 instances (matching Rust hash-sig)
-const Poseidon2KoalaBear24 = poseidon.koalabear24_generic.Poseidon2KoalaBear; // Use generic 24 for message hashing
-const Poseidon2KoalaBear16 = poseidon.koalabear16_generic.Poseidon2KoalaBear; // Use generic 16 for chain compression
+// Import Plonky3-compatible Poseidon2 instances (matching Rust hash-sig exactly)
+const Poseidon2KoalaBear24 = poseidon2_plonky3.Poseidon2KoalaBear24Plonky3; // Use Plonky3-compatible 24 for message hashing
+const Poseidon2KoalaBear16 = poseidon2_plonky3.Poseidon2KoalaBear16Plonky3; // Use Plonky3-compatible 16 for chain compression
 const TargetSumEncoding = poseidon.koalabear.TargetSumEncoding;
 const TopLevelPoseidonMessageHash = poseidon.koalabear.TopLevelPoseidonMessageHash;
 
@@ -106,7 +107,7 @@ pub const Poseidon2RustCompat = struct {
         _ = self;
 
         const F = Poseidon2KoalaBear24.Field;
-        var mont_state: [WIDTH_24]F.MontFieldElem = undefined;
+        var mont_state: [WIDTH_24]F = undefined;
 
         // Convert to Montgomery form
         for (0..WIDTH_24) |i| {
@@ -130,7 +131,7 @@ pub const Poseidon2RustCompat = struct {
         _ = self;
 
         const F = Poseidon2KoalaBear16.Field;
-        var mont_state: [WIDTH_16]F.MontFieldElem = undefined;
+        var mont_state: [WIDTH_16]F = undefined;
 
         // Convert to Montgomery form
         for (0..WIDTH_16) |i| {

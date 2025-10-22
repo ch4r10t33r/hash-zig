@@ -1054,7 +1054,7 @@ test "generalized_xmss_keygen" {
     defer keypair.secret_key.deinit();
 
     // Verify key structure
-    try std.testing.expect(keypair.public_key.root.value != 0);
+    try std.testing.expect(keypair.public_key.root[0].value != 0);
     try std.testing.expect(keypair.secret_key.activation_epoch == 0);
     try std.testing.expect(keypair.secret_key.num_active_epochs >= 256);
 }

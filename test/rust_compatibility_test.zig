@@ -23,7 +23,7 @@ test "rust compatibility: GeneralizedXMSS validation (CRITICAL)" {
     var keypair = try sig_scheme.keyGen(0, 256); // activation_epoch=0, num_active_epochs=256
     defer keypair.secret_key.deinit();
     std.debug.print("   ✅ Keypair generated\n", .{});
-    std.debug.print("   🔑 Public key root: {}\n\n", .{keypair.public_key.root.value});
+    std.debug.print("   🔑 Public key root: {}\n\n", .{keypair.public_key.root[0].value});
 
     // Step 3: Test secret key methods
     std.debug.print("3️⃣  Testing secret key methods...\n", .{});

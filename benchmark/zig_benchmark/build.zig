@@ -94,13 +94,36 @@ pub fn build(b: *std.Build) void {
     compare_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(compare_exe);
 
-    // Add trace_keygen binary
-    const trace_exe = b.addExecutable(.{
-        .name = "trace_keygen",
-        .root_source_file = b.path("src/trace_keygen.zig"),
+    // Add test_poseidon2_simple binary
+    const test_poseidon2_simple_exe = b.addExecutable(.{
+        .name = "test_poseidon2_simple",
+        .root_source_file = b.path("src/test_poseidon2_simple.zig"),
         .target = target,
         .optimize = optimize,
     });
-    trace_exe.root_module.addImport("hash-zig", hash_zig_module);
-    b.installArtifact(trace_exe);
+    test_poseidon2_simple_exe.root_module.addImport("poseidon", poseidon_mod);
+    b.installArtifact(test_poseidon2_simple_exe);
+
+    // Add test_plonky3_compat binary
+    const test_plonky3_compat_exe = b.addExecutable(.{
+        .name = "test_plonky3_compat",
+        .root_source_file = b.path("src/test_plonky3_compat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const poseidon2_plonky3_compat_mod = b.addModule("poseidon2_plonky3_compat", .{ .root_source_file = b.path("../../src/hash/poseidon2_plonky3_compat.zig") });
+    poseidon2_plonky3_compat_mod.addImport("poseidon", poseidon_mod);
+    test_plonky3_compat_exe.root_module.addImport("poseidon2_plonky3_compat", poseidon2_plonky3_compat_mod);
+    test_plonky3_compat_exe.root_module.addImport("poseidon", poseidon_mod);
+    b.installArtifact(test_plonky3_compat_exe);
+
+    // Add debug_poseidon2 binary
+    const debug_poseidon2_exe = b.addExecutable(.{
+        .name = "debug_poseidon2",
+        .root_source_file = b.path("src/debug_poseidon2.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    debug_poseidon2_exe.root_module.addImport("poseidon2_plonky3_compat", poseidon2_plonky3_compat_mod);
+    b.installArtifact(debug_poseidon2_exe);
 }
