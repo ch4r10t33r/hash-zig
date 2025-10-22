@@ -1,21 +1,21 @@
 const std = @import("std");
-const poseidon2_plonky3 = @import("src/hash/poseidon2_plonky3_compat.zig");
+const poseidon2 = @import("src/poseidon2/root.zig");
 
 pub fn main() !void {
     std.debug.print("=== Verifying Round Constants ===\n", .{});
 
     std.debug.print("\nExternal Initial Round 0:\n", .{});
-    for (poseidon2_plonky3.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL[0], 0..) |rc, i| {
+    for (poseidon2.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL[0], 0..) |rc, i| {
         if (i < 4) {
             std.debug.print("  RC[{}] = {}\n", .{ i, rc });
         }
     }
 
     std.debug.print("\nInternal Round 0:\n", .{});
-    std.debug.print("  RC = {}\n", .{poseidon2_plonky3.PLONKY3_KOALABEAR_RC16_INTERNAL[0]});
+    std.debug.print("  RC = {}\n", .{poseidon2.PLONKY3_KOALABEAR_RC16_INTERNAL[0]});
 
     std.debug.print("\nExternal Final Round 0:\n", .{});
-    for (poseidon2_plonky3.PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL[0], 0..) |rc, i| {
+    for (poseidon2.PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL[0], 0..) |rc, i| {
         if (i < 4) {
             std.debug.print("  RC[{}] = {}\n", .{ i, rc });
         }

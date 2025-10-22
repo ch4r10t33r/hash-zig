@@ -111,9 +111,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const poseidon2_plonky3_compat_mod = b.addModule("poseidon2_plonky3_compat", .{ .root_source_file = b.path("../../src/hash/poseidon2_plonky3_compat.zig") });
-    poseidon2_plonky3_compat_mod.addImport("poseidon", poseidon_mod);
-    test_plonky3_compat_exe.root_module.addImport("poseidon2_plonky3_compat", poseidon2_plonky3_compat_mod);
+    const poseidon2_compat_mod = b.addModule("poseidon2_compat", .{ .root_source_file = b.path("../../src/poseidon2/root.zig") });
+    poseidon2_compat_mod.addImport("poseidon", poseidon_mod);
+    test_plonky3_compat_exe.root_module.addImport("poseidon2_compat", poseidon2_compat_mod);
     test_plonky3_compat_exe.root_module.addImport("poseidon", poseidon_mod);
     b.installArtifact(test_plonky3_compat_exe);
 
@@ -124,6 +124,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    debug_poseidon2_exe.root_module.addImport("poseidon2_plonky3_compat", poseidon2_plonky3_compat_mod);
+    debug_poseidon2_exe.root_module.addImport("poseidon2_compat", poseidon2_compat_mod);
     b.installArtifact(debug_poseidon2_exe);
 }

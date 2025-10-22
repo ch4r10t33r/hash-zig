@@ -6,11 +6,11 @@ const Allocator = std.mem.Allocator;
 const poseidon = @import("poseidon");
 const field_types = @import("field.zig");
 const FieldElement = field_types.FieldElement;
-const poseidon2_plonky3 = @import("poseidon2_plonky3_compat.zig");
+const poseidon2 = @import("../poseidon2/root.zig");
 
 // Import Plonky3-compatible Poseidon2 instances (matching Rust hash-sig exactly)
-const Poseidon2KoalaBear24 = poseidon2_plonky3.Poseidon2KoalaBear24Plonky3; // Use Plonky3-compatible 24 for message hashing
-const Poseidon2KoalaBear16 = poseidon2_plonky3.Poseidon2KoalaBear16Plonky3; // Use Plonky3-compatible 16 for chain compression
+const Poseidon2KoalaBear24 = poseidon2.Poseidon2KoalaBear24; // Use Plonky3-compatible 24 for message hashing
+const Poseidon2KoalaBear16 = poseidon2.Poseidon2KoalaBear16; // Use Plonky3-compatible 16 for chain compression
 const TargetSumEncoding = poseidon.koalabear.TargetSumEncoding;
 const TopLevelPoseidonMessageHash = poseidon.koalabear.TopLevelPoseidonMessageHash;
 

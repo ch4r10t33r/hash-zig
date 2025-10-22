@@ -1,7 +1,7 @@
 const std = @import("std");
-const poseidon2_plonky3 = @import("poseidon2_plonky3_compat");
+const poseidon2 = @import("poseidon2_compat");
 
-const F = poseidon2_plonky3.Poseidon2KoalaBear16Plonky3.Field;
+const F = poseidon2.Poseidon2KoalaBear16Plonky3.Field;
 
 pub fn main() !void {
     std.debug.print("=== Debugging Poseidon2-16 Implementation ===\n", .{});
@@ -21,7 +21,7 @@ pub fn main() !void {
 
     // Apply first external round
     std.debug.print("\n=== First External Round ===\n", .{});
-    const first_rcs = poseidon2_plonky3.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL[0];
+    const first_rcs = poseidon2.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL[0];
     std.debug.print("Round constants: {any}\n", .{first_rcs});
 
     // Add round constants

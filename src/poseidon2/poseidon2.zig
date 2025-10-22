@@ -148,14 +148,14 @@ pub fn apply_internal_layer_16(state: []F, rc: u32) void {
     // Compute partial sum of state[1..] (exact from Plonky3)
     var part_sum = F.zero;
     for (state[1..]) |elem| {
-        part_sum = part_full_sum.add(elem);
+        part_sum = part_sum.add(elem);
     }
 
     // Compute full sum
-    const full_sum = part_full_sum.add(state[0]);
+    const full_sum = part_sum.add(state[0]);
 
     // Apply internal matrix: state[0] = part_sum - state[0] (exact from Plonky3)
-    state[0] = part_full_sum.sub(state[0]);
+    state[0] = part_sum.sub(state[0]);
 
     // Apply V-based operations for i >= 1 (exact from Plonky3)
     // state[1] += full_sum
@@ -168,19 +168,19 @@ pub fn apply_internal_layer_16(state: []F, rc: u32) void {
     state[3] = state[3].halve().add(full_sum);
 
     // state[4] = full_sum + state[4].double() + state[4]
-    state[4] = full_full_sum.add(state[4].double()).add(state[4]);
+    state[4] = full_sum.add(state[4].double()).add(state[4]);
 
     // state[5] = full_sum + state[5].double().double()
-    state[5] = full_full_sum.add(state[5].double().double());
+    state[5] = full_sum.add(state[5].double().double());
 
     // state[6] = full_sum - state[6].halve()
-    state[6] = full_full_sum.sub(state[6].halve());
+    state[6] = full_sum.sub(state[6].halve());
 
     // state[7] = full_sum - (state[7].double() + state[7])
-    state[7] = full_full_sum.sub(state[7].double().add(state[7]));
+    state[7] = full_sum.sub(state[7].double().add(state[7]));
 
     // state[8] = full_sum - state[8].double().double()
-    state[8] = full_full_sum.sub(state[8].double().double());
+    state[8] = full_sum.sub(state[8].double().double());
 
     // state[9] = state[9].div_2exp_u64(8) + full_sum
     state[9] = state[9].div2exp(8).add(full_sum); // 2^8 = 256
@@ -192,16 +192,16 @@ pub fn apply_internal_layer_16(state: []F, rc: u32) void {
     state[11] = state[11].div2exp(24).add(full_sum); // 2^24 = 16777216
 
     // state[12] = full_sum - state[12].div_2exp_u64(8)
-    state[12] = full_full_sum.sub(state[12].div2exp(8));
+    state[12] = full_sum.sub(state[12].div2exp(8));
 
     // state[13] = full_sum - state[13].div_2exp_u64(3)
-    state[13] = full_full_sum.sub(state[13].div2exp(3));
+    state[13] = full_sum.sub(state[13].div2exp(3));
 
     // state[14] = full_sum - state[14].div_2exp_u64(4)
-    state[14] = full_full_sum.sub(state[14].div2exp(4)); // 2^4 = 16
+    state[14] = full_sum.sub(state[14].div2exp(4)); // 2^4 = 16
 
     // state[15] = full_sum - state[15].div_2exp_u64(24)
-    state[15] = full_full_sum.sub(state[15].div2exp(24));
+    state[15] = full_sum.sub(state[15].div2exp(24));
 }
 
 fn apply_internal_layer_24(state: []F, rc: u32) void {
@@ -214,14 +214,14 @@ fn apply_internal_layer_24(state: []F, rc: u32) void {
     // Compute partial sum of state[1..] (exact from Plonky3)
     var part_sum = F.zero;
     for (state[1..]) |elem| {
-        part_sum = part_full_sum.add(elem);
+        part_sum = part_sum.add(elem);
     }
 
     // Compute full sum
-    const full_sum = part_full_sum.add(state[0]);
+    const full_sum = part_sum.add(state[0]);
 
     // Apply internal matrix: state[0] = part_sum - state[0] (exact from Plonky3)
-    state[0] = part_full_sum.sub(state[0]);
+    state[0] = part_sum.sub(state[0]);
 
     // Apply V-based operations for i >= 1 (exact from Plonky3 for 24-width)
     // state[1] += full_sum

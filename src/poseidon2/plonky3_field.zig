@@ -17,12 +17,12 @@ pub const KoalaBearField = struct {
     pub const zero = KoalaBearField{ .value = 0 };
     pub const one = KoalaBearField{ .value = 1 }; // 1 in normal form
 
-// Convert u32 to field element (exact from Plonky3)
-pub fn fromU32(x: u32) KoalaBearField {
-    // First reduce modulo the prime if necessary
-    const reduced = if (x >= KOALABEAR_PRIME) x % KOALABEAR_PRIME else x;
-    return KoalaBearField{ .value = reduced };
-}
+    // Convert u32 to field element (exact from Plonky3)
+    pub fn fromU32(x: u32) KoalaBearField {
+        // First reduce modulo the prime if necessary
+        const reduced = if (x >= KOALABEAR_PRIME) x % KOALABEAR_PRIME else x;
+        return KoalaBearField{ .value = reduced };
+    }
 
     // Convert from field element to u32 (exact from Plonky3)
     pub fn toU32(self: KoalaBearField) u32 {
