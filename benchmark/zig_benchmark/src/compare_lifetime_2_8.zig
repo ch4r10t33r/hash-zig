@@ -9,9 +9,21 @@ pub fn main() !void {
     std.debug.print("Zig hash-zig Determinism Check (lifetime 2^8)\n", .{});
     std.debug.print("================================================\n", .{});
 
-    // Deterministic 32-byte seed (0x42 repeated) to mirror Rust StdRng example
+    // Read seed from environment variable or use default
     var seed: [32]u8 = undefined;
-    @memset(&seed, 0x42);
+    if (std.process.getEnvVarOwned(allocator, "SEED_HEX")) |seed_hex| {
+        defer allocator.free(seed_hex);
+        if (seed_hex.len == 64) { // 32 bytes = 64 hex chars
+            for (0..32) |i| {
+                const hex_pair = seed_hex[i*2..i*2+2];
+                seed[i] = std.fmt.parseInt(u8, hex_pair, 16) catch 0x42;
+            }
+        } else {
+            @memset(&seed, 0x42); // fallback to default
+        }
+    } else |_| {
+        @memset(&seed, 0x42); // fallback to default
+    }
 
     std.debug.print("SEED: {s}\n", .{std.fmt.fmtSliceHexLower(&seed)});
     std.debug.print("SEED (bytes): {any}\n", .{seed});

@@ -10,15 +10,16 @@ const Cipher = std.crypto.stream.chacha.ChaCha12IETF;
 
 const State = [8 * Cipher.block_length]u8;
 
-state: State,
-offset: usize,
+pub const ChaCha12Rng = struct {
+    state: State,
+    offset: usize,
 
-const nonce = [_]u8{0} ** Cipher.nonce_length;
+    const nonce = [_]u8{0} ** Cipher.nonce_length;
 
-pub const secret_seed_length = Cipher.key_length;
+    pub const secret_seed_length = Cipher.key_length;
 
-/// Initialize from a 32-byte seed (matching Rust's StdRng::from_seed)
-pub fn init(secret_seed: [secret_seed_length]u8) Self {
+    /// Initialize from a 32-byte seed (matching Rust's StdRng::from_seed)
+    pub fn init(secret_seed: [secret_seed_length]u8) Self {
     var self = Self{ .state = undefined, .offset = Cipher.key_length };
     Cipher.stream(&self.state, 0, secret_seed, nonce);
     // Note: Rust's implementation uses the FIRST block (bytes 0-31),

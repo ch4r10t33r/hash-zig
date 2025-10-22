@@ -159,14 +159,14 @@ fn addMod(a: u32, b: u32) u32 {
     const add_result = @addWithOverflow(a, b);
     var sum = add_result[0];
     const add_over = add_result[1];
-    
+
     // If addition overflowed, we need to subtract the overflow amount
     if (add_over != 0) {
         // Overflow means sum = a + b - 2^32
         // We need to reduce modulo KOALABEAR_PRIME
         sum = sum +% (0xffffffff - KOALABEAR_PRIME + 1);
     }
-    
+
     const sub_result = @subWithOverflow(sum, KOALABEAR_PRIME);
     const corr_sum = sub_result[0];
     const over = sub_result[1];
