@@ -15,18 +15,18 @@ pub const KoalaBearField = struct {
     value: u32, // Montgomery form value
 
     pub const zero = KoalaBearField{ .value = 0 };
-    pub const one = KoalaBearField{ .value = 0x7f000001 }; // 1 in Montgomery form
+    pub const one = KoalaBearField{ .value = 1 }; // 1 in normal form
 
-    // Convert u32 to Montgomery form (exact from Plonky3)
-    pub fn fromU32(x: u32) KoalaBearField {
-        // First reduce modulo the prime if necessary
-        const reduced = if (x >= KOALABEAR_PRIME) x % KOALABEAR_PRIME else x;
-        return KoalaBearField{ .value = toMonty(reduced) };
-    }
+// Convert u32 to field element (exact from Plonky3)
+pub fn fromU32(x: u32) KoalaBearField {
+    // First reduce modulo the prime if necessary
+    const reduced = if (x >= KOALABEAR_PRIME) x % KOALABEAR_PRIME else x;
+    return KoalaBearField{ .value = reduced };
+}
 
-    // Convert from Montgomery form to u32 (exact from Plonky3)
+    // Convert from field element to u32 (exact from Plonky3)
     pub fn toU32(self: KoalaBearField) u32 {
-        return fromMonty(self.value);
+        return self.value;
     }
 
     // Convert to Montgomery form for internal operations
@@ -52,7 +52,7 @@ pub const KoalaBearField = struct {
     // Field multiplication (exact from Plonky3)
     pub fn mul(self: KoalaBearField, other: KoalaBearField) KoalaBearField {
         const long_prod = @as(u64, self.value) * @as(u64, other.value);
-        return KoalaBearField{ .value = montyReduce(long_prod) };
+        return KoalaBearField{ .value = @as(u32, @intCast(long_prod % KOALABEAR_PRIME)) };
     }
 
     // Field division (exact from Plonky3)
@@ -62,10 +62,8 @@ pub const KoalaBearField = struct {
 
     // Field inverse (exact from Plonky3)
     pub fn inverse(self: KoalaBearField) KoalaBearField {
-        // Convert from Montgomery form first
-        const normal_value = fromMonty(self.value);
-        const inv = modInverse(normal_value, KOALABEAR_PRIME);
-        return KoalaBearField{ .value = toMonty(inv) };
+        const inv = modInverse(self.value, KOALABEAR_PRIME);
+        return KoalaBearField{ .value = inv };
     }
 
     // Double operation (exact from Plonky3)
@@ -82,7 +80,7 @@ pub const KoalaBearField = struct {
     pub fn div2exp(self: KoalaBearField, exponent: u32) KoalaBearField {
         if (exponent <= 32) {
             const long_prod = @as(u64, self.value) << @as(u6, @intCast(32 - exponent));
-            return KoalaBearField{ .value = montyReduce(long_prod) };
+            return KoalaBearField{ .value = @as(u32, @intCast(long_prod % KOALABEAR_PRIME)) };
         } else {
             // For larger values, use repeated halving
             var result = self;

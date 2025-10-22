@@ -145,60 +145,63 @@ pub fn apply_internal_layer_16(state: []F, rc: u32) void {
     // Apply S-box to state[0]
     state[0] = sbox(state[0]);
 
-    // Compute sum of all elements
-    var sum = F.zero;
-    for (state) |elem| {
-        sum = sum.add(elem);
+    // Compute partial sum of state[1..] (exact from Plonky3)
+    var part_sum = F.zero;
+    for (state[1..]) |elem| {
+        part_sum = part_full_sum.add(elem);
     }
 
-    // Apply internal matrix: state[0] = sum - state[0]
-    state[0] = sum.sub(state[0]);
+    // Compute full sum
+    const full_sum = part_full_sum.add(state[0]);
+
+    // Apply internal matrix: state[0] = part_sum - state[0] (exact from Plonky3)
+    state[0] = part_full_sum.sub(state[0]);
 
     // Apply V-based operations for i >= 1 (exact from Plonky3)
-    // state[1] += sum
-    state[1] = state[1].add(sum);
+    // state[1] += full_sum
+    state[1] = state[1].add(full_sum);
 
-    // state[2] = state[2].double() + sum
-    state[2] = state[2].double().add(sum);
+    // state[2] = state[2].double() + full_sum
+    state[2] = state[2].double().add(full_sum);
 
-    // state[3] = state[3].halve() + sum
-    state[3] = state[3].halve().add(sum);
+    // state[3] = state[3].halve() + full_sum
+    state[3] = state[3].halve().add(full_sum);
 
-    // state[4] = sum + state[4].double() + state[4]
-    state[4] = sum.add(state[4].double()).add(state[4]);
+    // state[4] = full_sum + state[4].double() + state[4]
+    state[4] = full_full_sum.add(state[4].double()).add(state[4]);
 
-    // state[5] = sum + state[5].double().double()
-    state[5] = sum.add(state[5].double().double());
+    // state[5] = full_sum + state[5].double().double()
+    state[5] = full_full_sum.add(state[5].double().double());
 
-    // state[6] = sum - state[6].halve()
-    state[6] = sum.sub(state[6].halve());
+    // state[6] = full_sum - state[6].halve()
+    state[6] = full_full_sum.sub(state[6].halve());
 
-    // state[7] = sum - (state[7].double() + state[7])
-    state[7] = sum.sub(state[7].double().add(state[7]));
+    // state[7] = full_sum - (state[7].double() + state[7])
+    state[7] = full_full_sum.sub(state[7].double().add(state[7]));
 
-    // state[8] = sum - state[8].double().double()
-    state[8] = sum.sub(state[8].double().double());
+    // state[8] = full_sum - state[8].double().double()
+    state[8] = full_full_sum.sub(state[8].double().double());
 
-    // state[9] = state[9].div_2exp_u64(8) + sum
-    state[9] = state[9].div2exp(8).add(sum); // 2^8 = 256
+    // state[9] = state[9].div_2exp_u64(8) + full_sum
+    state[9] = state[9].div2exp(8).add(full_sum); // 2^8 = 256
 
-    // state[10] = state[10].div_2exp_u64(3) + sum
-    state[10] = state[10].div2exp(3).add(sum); // 2^3 = 8
+    // state[10] = state[10].div_2exp_u64(3) + full_sum
+    state[10] = state[10].div2exp(3).add(full_sum); // 2^3 = 8
 
-    // state[11] = state[11].div_2exp_u64(24) + sum
-    state[11] = state[11].div2exp(24).add(sum); // 2^24 = 16777216
+    // state[11] = state[11].div_2exp_u64(24) + full_sum
+    state[11] = state[11].div2exp(24).add(full_sum); // 2^24 = 16777216
 
-    // state[12] = sum - state[12].div_2exp_u64(8)
-    state[12] = sum.sub(state[12].div2exp(8));
+    // state[12] = full_sum - state[12].div_2exp_u64(8)
+    state[12] = full_full_sum.sub(state[12].div2exp(8));
 
-    // state[13] = sum - state[13].div_2exp_u64(3)
-    state[13] = sum.sub(state[13].div2exp(3));
+    // state[13] = full_sum - state[13].div_2exp_u64(3)
+    state[13] = full_full_sum.sub(state[13].div2exp(3));
 
-    // state[14] = sum - state[14].div_2exp_u64(4)
-    state[14] = sum.sub(state[14].div2exp(4)); // 2^4 = 16
+    // state[14] = full_sum - state[14].div_2exp_u64(4)
+    state[14] = full_full_sum.sub(state[14].div2exp(4)); // 2^4 = 16
 
-    // state[15] = sum - state[15].div_2exp_u64(24)
-    state[15] = sum.sub(state[15].div2exp(24));
+    // state[15] = full_sum - state[15].div_2exp_u64(24)
+    state[15] = full_full_sum.sub(state[15].div2exp(24));
 }
 
 fn apply_internal_layer_24(state: []F, rc: u32) void {
@@ -208,84 +211,87 @@ fn apply_internal_layer_24(state: []F, rc: u32) void {
     // Apply S-box to state[0]
     state[0] = sbox(state[0]);
 
-    // Compute sum of all elements
-    var sum = F.zero;
-    for (state) |elem| {
-        sum = sum.add(elem);
+    // Compute partial sum of state[1..] (exact from Plonky3)
+    var part_sum = F.zero;
+    for (state[1..]) |elem| {
+        part_sum = part_full_sum.add(elem);
     }
 
-    // Apply internal matrix: state[0] = sum - state[0]
-    state[0] = sum.sub(state[0]);
+    // Compute full sum
+    const full_sum = part_full_sum.add(state[0]);
+
+    // Apply internal matrix: state[0] = part_sum - state[0] (exact from Plonky3)
+    state[0] = part_full_sum.sub(state[0]);
 
     // Apply V-based operations for i >= 1 (exact from Plonky3 for 24-width)
-    // state[1] += sum
-    state[1] = state[1].add(sum);
+    // state[1] += full_sum
+    state[1] = state[1].add(full_sum);
 
     // state[2] = state[2].double() + sum
-    state[2] = state[2].double().add(sum);
+    state[2] = state[2].double().add(full_sum);
 
     // state[3] = state[3].halve() + sum
-    state[3] = state[3].halve().add(sum);
+    state[3] = state[3].halve().add(full_sum);
 
     // state[4] = sum + state[4].double() + state[4]
-    state[4] = sum.add(state[4].double()).add(state[4]);
+    state[4] = full_sum.add(state[4].double()).add(state[4]);
 
     // state[5] = sum + state[5].double().double()
-    state[5] = sum.add(state[5].double().double());
+    state[5] = full_sum.add(state[5].double().double());
 
     // state[6] = sum - state[6].halve()
-    state[6] = sum.sub(state[6].halve());
+    state[6] = full_sum.sub(state[6].halve());
 
     // state[7] = sum - (state[7].double() + state[7])
-    state[7] = sum.sub(state[7].double().add(state[7]));
+    state[7] = full_sum.sub(state[7].double().add(state[7]));
 
     // state[8] = sum - state[8].double().double()
-    state[8] = sum.sub(state[8].double().double());
+    state[8] = full_sum.sub(state[8].double().double());
 
     // state[9] = state[9].div_2exp_u64(8) + sum
-    state[9] = state[9].div2exp(8).add(sum);
+    state[9] = state[9].div2exp(8).add(full_sum);
 
     // state[10] = state[10].div_2exp_u64(2) + sum
-    state[10] = state[10].div2exp(2).add(sum); // 2^2 = 4
+    state[10] = state[10].div2exp(2).add(full_sum); // 2^2 = 4
 
     // state[11] = state[11].div_2exp_u64(3) + sum
-    state[11] = state[11].div2exp(3).add(sum);
+    state[11] = state[11].div2exp(3).add(full_sum);
 
     // state[12] = state[12].div_2exp_u64(4) + sum
-    state[12] = state[12].div2exp(4).add(sum);
+    state[12] = state[12].div2exp(4).add(full_sum);
 
     // state[13] = state[13].div_2exp_u64(5) + sum
-    state[13] = state[13].div2exp(5).add(sum); // 2^5 = 32
+    state[13] = state[13].div2exp(5).add(full_sum); // 2^5 = 32
 
     // state[14] = state[14].div_2exp_u64(6) + sum
-    state[14] = state[14].div2exp(6).add(sum); // 2^6 = 64
+    state[14] = state[14].div2exp(6).add(full_sum); // 2^6 = 64
 
     // state[15] = state[15].div_2exp_u64(24) + sum
-    state[15] = state[15].div2exp(24).add(sum);
+    state[15] = state[15].div2exp(24).add(full_sum);
 
     // state[16] = sum - state[16].div_2exp_u64(8)
-    state[16] = sum.sub(state[16].div2exp(8));
+    state[16] = full_sum.sub(state[16].div2exp(8));
 
     // state[17] = sum - state[17].div_2exp_u64(3)
-    state[17] = sum.sub(state[17].div2exp(3));
+    state[17] = full_sum.sub(state[17].div2exp(3));
 
     // state[18] = sum - state[18].div_2exp_u64(4)
-    state[18] = sum.sub(state[18].div2exp(4));
+    state[18] = full_sum.sub(state[18].div2exp(4));
 
     // state[19] = sum - state[19].div_2exp_u64(5)
-    state[19] = sum.sub(state[19].div2exp(5));
+    state[19] = full_sum.sub(state[19].div2exp(5));
 
     // state[20] = sum - state[20].div_2exp_u64(6)
-    state[20] = sum.sub(state[20].div2exp(6));
+    state[20] = full_sum.sub(state[20].div2exp(6));
 
     // state[21] = sum - state[21].div_2exp_u64(7)
-    state[21] = sum.sub(state[21].div2exp(7)); // 2^7 = 128
+    state[21] = full_sum.sub(state[21].div2exp(7)); // 2^7 = 128
 
     // state[22] = sum - state[22].div_2exp_u64(9)
-    state[22] = sum.sub(state[22].div2exp(9)); // 2^9 = 512
+    state[22] = full_sum.sub(state[22].div2exp(9)); // 2^9 = 512
 
     // state[23] = sum - state[23].div_2exp_u64(24)
-    state[23] = sum.sub(state[23].div2exp(24));
+    state[23] = full_sum.sub(state[23].div2exp(24));
 }
 
 // Apply external layer (exact Plonky3 logic)
