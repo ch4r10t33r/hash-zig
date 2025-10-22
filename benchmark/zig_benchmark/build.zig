@@ -83,4 +83,14 @@ pub fn build(b: *std.Build) void {
 
     test_same_keypair_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(test_same_keypair_exe);
+
+    // Add compare_lifetime_2_8 binary
+    const compare_exe = b.addExecutable(.{
+        .name = "compare_lifetime_2_8",
+        .root_source_file = b.path("src/compare_lifetime_2_8.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    compare_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(compare_exe);
 }
