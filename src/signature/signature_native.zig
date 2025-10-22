@@ -726,6 +726,56 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return try HashSubTree.init(self.allocator, root_array);
     }
 
+    /// Pad a layer to ensure it starts at an even index and ends at an odd index
+    /// This matches the Rust HashTreeLayer::padded algorithm exactly
+    fn padLayer(self: *GeneralizedXMSSSignatureScheme, nodes: [][8]FieldElement, start_index: usize) !struct { nodes: [][8]FieldElement, start_index: usize } {
+        // End index of the provided contiguous run (inclusive)
+        const end_index = start_index + nodes.len - 1;
+
+        // Do we need a front pad? Start must be even
+        const needs_front = (start_index & 1) == 1;
+
+        // Do we need a back pad? End must be odd
+        const needs_back = (end_index & 1) == 0;
+
+        // The effective start index after optional front padding (always even)
+        const actual_start_index = if (needs_front) start_index - 1 else start_index;
+
+        // Reserve exactly the space we may need: original nodes plus up to two pads
+        var total_capacity = nodes.len;
+        if (needs_front) total_capacity += 1;
+        if (needs_back) total_capacity += 1;
+        var padded_nodes = try self.allocator.alloc([8]FieldElement, total_capacity);
+
+        var output_index: usize = 0;
+
+        // Optional front padding to align to an even start index
+        if (needs_front) {
+            // Generate random node for front padding
+            for (0..8) |i| {
+                padded_nodes[output_index][i] = FieldElement{ .value = self.rng.random().int(u32) };
+            }
+            output_index += 1;
+        }
+
+        // Insert the actual content in order
+        @memcpy(padded_nodes[output_index .. output_index + nodes.len], nodes);
+        output_index += nodes.len;
+
+        // Optional back padding to ensure we end on an odd index
+        if (needs_back) {
+            // Generate random node for back padding
+            for (0..8) |i| {
+                padded_nodes[output_index][i] = FieldElement{ .value = self.rng.random().int(u32) };
+            }
+        }
+
+        return .{
+            .nodes = padded_nodes,
+            .start_index = actual_start_index,
+        };
+    }
+
     /// Build top tree from bottom tree roots and return root as array of 8 field elements
     /// This matches the Rust HashSubTree::new_top_tree algorithm exactly
     fn buildTopTreeAsArray(self: *GeneralizedXMSSSignatureScheme, roots_of_bottom_trees: [][8]FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
@@ -736,8 +786,6 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         std.debug.print("DEBUG: Building tree from layer {} to layer {}\n", .{ lowest_layer, depth });
         std.debug.print("DEBUG: Starting with {} bottom tree roots\n", .{roots_of_bottom_trees.len});
-
-        // RNG state for padding is now consumed before parameter generation in keyGen()
 
         // Each node in the tree is an array of 8 field elements (HASH_LEN_FE = 8)
         // The input is already arrays of 8 field elements
@@ -755,18 +803,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             std.debug.print("DEBUG: Layer {} -> {}: {} nodes -> {} nodes\n", .{ current_level, next_level, current_layer.len, next_layer_size });
 
-            // Consume RNG for each node in this layer (matching Rust behavior)
-            for (0..current_layer.len) |_| {
-                _ = self.rng.random().int(u32);
-            }
-            std.debug.print("DEBUG: Consumed RNG for {} nodes in layer {}\n", .{ current_layer.len, current_level });
-
             // Hash pairs of children to get parents
             for (0..next_layer_size) |i| {
-                if (i * 2 + 1 < current_layer.len) {
+                const left_idx = i * 2;
+                const right_idx = i * 2 + 1;
+
+                if (right_idx < current_layer.len) {
                     // Hash two children together
-                    const left = current_layer[i * 2];
-                    const right = current_layer[i * 2 + 1];
+                    const left = current_layer[left_idx];
+                    const right = current_layer[right_idx];
 
                     // Convert arrays to slices for hashing and concatenate them
                     const left_slice = left[0..];
@@ -780,17 +825,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                     // Use tree tweak for this level and position
                     const parent_pos = @as(u32, @intCast(start_index + i));
-                    const hash_result = try self.applyPoseidonTreeTweakHash(combined_children, @as(u8, @intCast(next_level)), parent_pos, parameter);
+                    const hash_result = try self.applyPoseidonTreeTweakHash(combined_children, @as(u8, @intCast(next_level + 1)), parent_pos, parameter);
                     defer self.allocator.free(hash_result);
 
                     // Copy the result to the next layer (all 8 elements)
                     @memcpy(next_layer[i][0..], hash_result[0..8]);
 
                     std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, next_layer[i][0].value });
-                } else {
+                } else if (left_idx < current_layer.len) {
                     // Odd number of elements, copy the last one
-                    next_layer[i] = current_layer[i * 2];
+                    next_layer[i] = current_layer[left_idx];
                     std.debug.print("DEBUG: Copy [{}] = 0x{x}\n", .{ i, next_layer[i][0].value });
+                } else {
+                    std.debug.print("ERROR: Index out of bounds - left_idx: {}, right_idx: {}, nodes.len: {}\n", .{ left_idx, right_idx, current_layer.len });
+                    return error.IndexOutOfBounds;
                 }
             }
 
