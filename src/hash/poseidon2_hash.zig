@@ -179,7 +179,7 @@ pub const Poseidon2RustCompat = struct {
         }
 
         // Apply Poseidon2-24 compress
-        const output_u32 = Poseidon2KoalaBear24.compress(output_len, input_u32);
+        const output_u32 = Poseidon2KoalaBear24.compress(output_len, &input_u32);
 
         // Convert back to FieldElement array
         var output: [output_len]FieldElement = undefined;
@@ -201,7 +201,7 @@ pub const Poseidon2RustCompat = struct {
         }
 
         // Apply Poseidon2-16 compress
-        const output_u32 = Poseidon2KoalaBear16.compress(output_len, input_u32);
+        const output_u32 = Poseidon2KoalaBear16.compress(output_len, &input_u32);
 
         // Convert back to FieldElement array
         var output: [output_len]FieldElement = undefined;

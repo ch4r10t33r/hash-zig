@@ -27,7 +27,7 @@ pub fn main() !void {
     std.debug.print("✅ Key generation completed\n", .{});
     std.debug.print("⏱️  Key generation time: {d:.2} seconds ({d} ms)\n", .{ keygen_s, keygen_ms });
     std.debug.print("📊 Generation rate: {d:.1} signatures/second\n", .{256.0 / keygen_s});
-    std.debug.print("🔑 Public key root: {}\n", .{keypair.public_key.root.value});
+    std.debug.print("🔑 Public key root: {}\n", .{keypair.public_key.root[0].value});
     std.debug.print("🔐 Secret key epochs: 0 to {}\n\n", .{keypair.secret_key.getActivationInterval().end});
 
     // Prepare a message to sign

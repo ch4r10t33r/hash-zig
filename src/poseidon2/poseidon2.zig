@@ -459,6 +459,31 @@ pub const Poseidon2KoalaBear16Plonky3 = struct {
         poseidon2_16_plonky3(state);
     }
 
+    pub fn compress(_: usize, input: []const u32) [8]u32 {
+        var state: [16]F = undefined;
+
+        // Convert input to field elements
+        for (0..@min(input.len, 16)) |i| {
+            state[i] = F.fromU32(input[i]);
+        }
+
+        // Pad with zeros if input is shorter than 16
+        for (input.len..16) |i| {
+            state[i] = F.zero;
+        }
+
+        // Apply permutation
+        poseidon2_16_plonky3(&state);
+
+        // Convert back to u32 and return first 8 elements
+        var result: [8]u32 = undefined;
+        for (0..8) |i| {
+            result[i] = state[i].toU32();
+        }
+
+        return result;
+    }
+
     pub fn toMontgomery(mont: *F, value: u32) void {
         mont.* = F.fromU32(value);
     }
@@ -473,6 +498,31 @@ pub const Poseidon2KoalaBear24Plonky3 = struct {
 
     pub fn permutation(state: []F) void {
         poseidon2_24_plonky3(state);
+    }
+
+    pub fn compress(_: usize, input: []const u32) [8]u32 {
+        var state: [24]F = undefined;
+
+        // Convert input to field elements
+        for (0..@min(input.len, 24)) |i| {
+            state[i] = F.fromU32(input[i]);
+        }
+
+        // Pad with zeros if input is shorter than 24
+        for (input.len..24) |i| {
+            state[i] = F.zero;
+        }
+
+        // Apply permutation
+        poseidon2_24_plonky3(&state);
+
+        // Convert back to u32 and return first 8 elements
+        var result: [8]u32 = undefined;
+        for (0..8) |i| {
+            result[i] = state[i].toU32();
+        }
+
+        return result;
     }
 
     pub fn toMontgomery(mont: *F, value: u32) void {

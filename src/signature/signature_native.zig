@@ -9,7 +9,7 @@ const ShakePRFtoF_8_7 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_8_7
 const Poseidon2RustCompat = @import("../hash/poseidon2_hash.zig").Poseidon2RustCompat;
 const serialization = @import("serialization.zig");
 const KOALABEAR_PRIME = @import("../core/field.zig").KOALABEAR_PRIME;
-const ChaCha12Rng = @import("../prf/chacha12_rng.zig");
+const ChaCha12Rng = @import("../prf/chacha12_rng.zig").ChaCha12Rng;
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;
@@ -74,10 +74,10 @@ pub const LIFETIME_2_32_HASHING_PARAMS = LifetimeParams{
 
 // Hash SubTree structure (simplified for now)
 pub const HashSubTree = struct {
-    root_value: FieldElement,
+    root_value: [8]FieldElement,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, root_value: FieldElement) !*HashSubTree {
+    pub fn init(allocator: Allocator, root_value: [8]FieldElement) !*HashSubTree {
         const self = try allocator.create(HashSubTree);
         self.* = HashSubTree{
             .root_value = root_value,
@@ -90,7 +90,7 @@ pub const HashSubTree = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn root(self: *const HashSubTree) FieldElement {
+    pub fn root(self: *const HashSubTree) [8]FieldElement {
         return self.root_value;
     }
 };
@@ -446,8 +446,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Get chain start using ShakePRFtoF
                 const domain_elements = ShakePRFtoF_8_7.getDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
 
+                // Debug: Print domain elements for first epoch and chain
+                if (epoch == 0 and chain_index == 0) {
+                    std.debug.print("DEBUG: Domain elements for epoch=0, chain=0: {any}\n", .{domain_elements});
+                }
+
                 // Walk the chain to get the chain end
-                chain_ends[chain_index] = try self.computeHashChain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
+                const chain_end = try self.computeHashChain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
+
+                // Debug: Print chain end for first epoch and chain
+                if (epoch == 0 and chain_index == 0) {
+                    std.debug.print("DEBUG: Chain end for epoch=0, chain=0: 0x{x}\n", .{chain_end.value});
+                }
+
+                chain_ends[chain_index] = chain_end;
             }
 
             // Hash all chain ends to get the leaf hash for this epoch
@@ -467,26 +479,24 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         chain_index: u8,
         parameter: [5]FieldElement,
     ) !FieldElement {
-        var current_state = try self.allocator.alloc(FieldElement, 8);
-        defer self.allocator.free(current_state);
-
-        // Initialize with domain elements
+        // Convert domain elements to field elements
+        var current: [8]FieldElement = undefined;
         for (0..8) |i| {
-            current_state[i] = FieldElement{ .value = domain_elements[i] };
+            current[i] = FieldElement{ .value = domain_elements[i] };
         }
 
-        // Walk the chain for BASE-1 steps
-        for (0..self.lifetime_params.base - 1) |_| {
-            const next_state = try self.applyPoseidonTweakHash(current_state, epoch, chain_index, parameter);
-            defer self.allocator.free(next_state);
+        // Walk the chain for BASE-1 steps (matching Rust chain function)
+        for (0..self.lifetime_params.base - 1) |j| {
+            const pos_in_chain = @as(u8, @intCast(j + 1));
+
+            // Apply chain tweak hash (matching Rust TH::apply with chain_tweak)
+            const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
 
             // Update current state
-            for (0..8) |i| {
-                current_state[i] = next_state[i];
-            }
+            current = next;
         }
 
-        return current_state[0];
+        return current[0];
     }
 
     /// Apply Poseidon2 tweak hash (matching Rust PoseidonTweakHash)
@@ -497,11 +507,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         chain_index: u8,
         parameter: [5]FieldElement,
     ) ![]FieldElement {
-        // Convert epoch and chain_index to field elements for tweak
-        const tweak = [_]FieldElement{
-            FieldElement{ .value = @as(u32, @intCast(epoch)) },
-            FieldElement{ .value = @as(u32, @intCast(chain_index)) },
-        };
+        // Convert epoch and chain_index to field elements for tweak using Rust's encoding
+        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | 0x00
+        const pos_in_chain = 0; // For chain computation, pos_in_chain is always 0
+        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | 0x00;
+
+        // Convert to field elements using base-p representation
+        const tweak = tweakToFieldElements(tweak_encoding);
 
         // Prepare combined input: parameter + tweak + message
         const total_input_len = 5 + 2 + input.len;
@@ -538,6 +550,46 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             result[i] = hash_result[i];
         }
 
+        return result;
+    }
+
+    /// Apply Poseidon2 chain tweak hash (matching Rust chain_tweak)
+    fn applyPoseidonChainTweakHash(
+        self: *GeneralizedXMSSSignatureScheme,
+        input: [8]FieldElement,
+        epoch: u32,
+        chain_index: u8,
+        pos_in_chain: u8,
+        parameter: [5]FieldElement,
+    ) ![8]FieldElement {
+        // Convert epoch, chain_index, and pos_in_chain to field elements for tweak using Rust's encoding
+        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | 0x00
+        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | 0x00;
+
+        // Convert to field elements using base-p representation
+        const tweak = tweakToFieldElements(tweak_encoding);
+
+        // Prepare combined input: parameter + tweak + message
+        const total_input_len = 5 + 2 + 8;
+        var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
+        defer self.allocator.free(combined_input);
+
+        // Copy parameter
+        @memcpy(combined_input[0..5], parameter[0..5]);
+
+        // Copy tweak
+        @memcpy(combined_input[5..7], tweak[0..2]);
+
+        // Copy input (single element as array)
+        @memcpy(combined_input[7..15], input[0..8]);
+
+        // Apply Poseidon2 hash
+        const hash_result = try self.poseidon2.hashFieldElements(self.allocator, combined_input);
+        defer self.allocator.free(hash_result);
+
+        // Return first 8 elements as the result
+        var result: [8]FieldElement = undefined;
+        @memcpy(result[0..8], hash_result[0..8]);
         return result;
     }
 
@@ -598,48 +650,68 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Hash chain ends using Poseidon2
-    fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, _: [5]FieldElement) !FieldElement {
-        // Use Poseidon2-24 for hashing many chain ends
-        const input_len = @min(chain_ends.len, 24);
-        const hash_result = try self.poseidon2.hashFieldElements(self.allocator, chain_ends[0..input_len]);
-        defer self.allocator.free(hash_result);
-        return hash_result[0];
+    fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, parameter: [5]FieldElement) !FieldElement {
+        // Hash chain ends using the chain hash function
+        // For now, just hash the first two chain ends (simplified approach)
+        if (chain_ends.len >= 2) {
+            const hash_result = try self.applyPoseidonTweakHash(chain_ends[0..2], 0, 0, parameter);
+            defer self.allocator.free(hash_result);
+            return hash_result[0];
+        } else {
+            return chain_ends[0];
+        }
     }
 
-    /// Build bottom tree from leaf hashes
-    fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) !FieldElement {
-        if (leaf_hashes.len == 1) {
-            return leaf_hashes[0];
+    /// Build bottom tree from leaf hashes and return as array of 8 field elements
+    fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
+        // Convert single field elements to arrays of 8 field elements
+        var leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_hashes.len);
+        defer self.allocator.free(leaf_nodes);
+
+        for (0..leaf_hashes.len) |i| {
+            // Convert single field element to array of 8 field elements
+            // First element is the actual value, rest are zeros
+            leaf_nodes[i][0] = leaf_hashes[i];
+            for (1..8) |j| {
+                leaf_nodes[i][j] = FieldElement{ .value = 0 };
+            }
         }
 
-        // Build tree layer by layer
-        var current_level = try self.allocator.alloc(FieldElement, leaf_hashes.len);
-        @memcpy(current_level, leaf_hashes);
+        if (leaf_nodes.len == 1) {
+            return leaf_nodes[0];
+        }
 
-        var level_size = leaf_hashes.len;
+        // Build tree layer by layer (matching Rust exactly)
+        var current_level = try self.allocator.alloc([8]FieldElement, leaf_nodes.len);
+        @memcpy(current_level, leaf_nodes);
+
+        var level_size = leaf_nodes.len;
+        var level: usize = 0;
         while (level_size > 1) {
-            const next_level_size = (level_size + 1) / 2;
-            var next_level = try self.allocator.alloc(FieldElement, next_level_size);
+            // Process pairs of nodes (matching Rust par_chunks_exact(2))
+            const next_level_size = level_size / 2;
+            var next_level = try self.allocator.alloc([8]FieldElement, next_level_size);
 
+            // Process pairs of nodes
             for (0..next_level_size) |i| {
-                if (i * 2 + 1 < level_size) {
-                    // Hash two elements together
-                    const left = current_level[i * 2];
-                    const right = current_level[i * 2 + 1];
-                    const pair = [_]FieldElement{ left, right };
+                const left = current_level[i * 2];
+                const right = current_level[i * 2 + 1];
 
-                    const hash_result = try self.applyPoseidonTweakHash(&pair, 0, 0, parameter);
-                    defer self.allocator.free(hash_result);
-                    next_level[i] = hash_result[0];
-                } else {
-                    // Odd number of elements, copy the last one
-                    next_level[i] = current_level[i * 2];
-                }
+                // Concatenate left and right arrays
+                var input = try self.allocator.alloc(FieldElement, 16);
+                defer self.allocator.free(input);
+                @memcpy(input[0..8], left[0..8]);
+                @memcpy(input[8..16], right[0..8]);
+
+                const hash_result = try self.applyPoseidonTreeTweakHash(input, @intCast(level + 1), @intCast(i), parameter);
+                defer self.allocator.free(hash_result);
+                next_level[i] = hash_result[0..8].*;
             }
 
             self.allocator.free(current_level);
             current_level = next_level;
             level_size = next_level_size;
+            level += 1;
         }
 
         const root = current_level[0];
@@ -648,15 +720,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Build top tree from bottom tree roots
-    fn buildTopTree(self: *GeneralizedXMSSSignatureScheme, bottom_tree_roots: []FieldElement, parameter: [5]FieldElement) !*HashSubTree {
-        const root_array = try self.buildBottomTreeAsArray(bottom_tree_roots, parameter);
-        // Use the first element as the single root for the HashSubTree
-        return try HashSubTree.init(self.allocator, root_array[0]);
+    fn buildTopTree(self: *GeneralizedXMSSSignatureScheme, bottom_tree_roots: [][8]FieldElement, parameter: [5]FieldElement) !*HashSubTree {
+        const root_array = try self.buildTopTreeAsArray(bottom_tree_roots, parameter);
+        // Use the entire array as the root for the HashSubTree
+        return try HashSubTree.init(self.allocator, root_array);
     }
 
     /// Build top tree from bottom tree roots and return root as array of 8 field elements
     /// This matches the Rust HashSubTree::new_top_tree algorithm exactly
-    fn buildTopTreeAsArray(self: *GeneralizedXMSSSignatureScheme, roots_of_bottom_trees: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
+    fn buildTopTreeAsArray(self: *GeneralizedXMSSSignatureScheme, roots_of_bottom_trees: [][8]FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
         // For lifetime 2^8: depth = 8, lowest_layer = 4, start_index = 0
         const depth = 8;
         const lowest_layer = 4;
@@ -665,42 +737,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         std.debug.print("DEBUG: Building tree from layer {} to layer {}\n", .{ lowest_layer, depth });
         std.debug.print("DEBUG: Starting with {} bottom tree roots\n", .{roots_of_bottom_trees.len});
 
-        // Consume RNG state for padding to match Rust's HashTreeLayer::padded function
-        // This is critical for matching the Rust implementation exactly
-        const needs_front_padding = (start_index % 2) != 0;
-        const needs_back_padding = (start_index + roots_of_bottom_trees.len) % 2 != 0;
-
-        if (needs_front_padding) {
-            // Consume RNG state for front padding (matching Rust TH::rand_domain)
-            // HASH_LEN = 7 for PoseidonTweakW1L5
-            // Generate proper field elements, not just consume RNG state
-            for (0..7) |_| {
-                _ = self.rng.random().int(u32);
-            }
-            std.debug.print("DEBUG: Consumed RNG state for front padding\n", .{});
-        }
-
-        if (needs_back_padding) {
-            // Consume RNG state for back padding (matching Rust TH::rand_domain)
-            // HASH_LEN = 7 for PoseidonTweakW1L5
-            // Generate proper field elements, not just consume RNG state
-            for (0..7) |_| {
-                _ = self.rng.random().int(u32);
-            }
-            std.debug.print("DEBUG: Consumed RNG state for back padding\n", .{});
-        }
+        // RNG state for padding is now consumed before parameter generation in keyGen()
 
         // Each node in the tree is an array of 8 field elements (HASH_LEN_FE = 8)
-        // We need to convert the single field elements to arrays of 8 field elements
+        // The input is already arrays of 8 field elements
         var current_layer = try self.allocator.alloc([8]FieldElement, roots_of_bottom_trees.len);
 
-        // Convert single field elements to arrays of 8 field elements
-        for (roots_of_bottom_trees, 0..) |root, i| {
-            current_layer[i][0] = root;
-            for (1..8) |j| {
-                current_layer[i][j] = FieldElement{ .value = 0 };
-            }
-        }
+        // Copy the arrays directly
+        @memcpy(current_layer, roots_of_bottom_trees);
         var current_level: usize = lowest_layer;
 
         // Build tree from layer 4 to layer 7 (parent of root level 8)
@@ -849,9 +893,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Use proper field element generation (not just modulo reduction)
             // This matches how Rust's KoalaBear field generates random elements
             parameter[i] = FieldElement{ .value = random_value };
+
+            // Debug: Print each random value
+            std.debug.print("DEBUG: Parameter[{}] = 0x{x} ({})\n", .{ i, random_value, random_value });
         }
 
         return parameter;
+    }
+
+    /// Generate random domain elements for padding (matching Rust TH::rand_domain)
+    fn generateRandomDomain(self: *GeneralizedXMSSSignatureScheme, count: usize) ![8]FieldElement {
+        var result: [8]FieldElement = undefined;
+        for (0..count) |i| {
+            result[i] = FieldElement{ .value = self.rng.random().int(u32) };
+        }
+        // Fill remaining with zeros
+        for (count..8) |i| {
+            result[i] = FieldElement{ .value = 0 };
+        }
+        return result;
     }
 
     /// Key generation (matching Rust key_gen exactly)
@@ -879,12 +939,36 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const expanded_activation_epoch = activation_epoch;
         const expanded_num_active_epochs = num_active_epochs;
 
-        // Generate random parameter and PRF key
+        // Generate random parameter and PRF key (matching Rust order exactly)
         const parameter = try self.generateRandomParameter();
         const prf_key = try self.generateRandomPRFKey();
 
-        // Generate bottom trees and collect their roots
-        var roots_of_bottom_trees = try self.allocator.alloc(FieldElement, num_bottom_trees);
+        // Consume RNG state for padding AFTER parameter generation to match Rust's HashTreeLayer::padded
+        // This happens in Rust's HashSubTree::new_top_tree call, which occurs after parameter generation
+        // The parameters that end up in the public key are generated BEFORE this padding consumption
+        const needs_front_padding = (0 % 2) != 0; // start_index = 0
+        const needs_back_padding = (0 + num_bottom_trees) % 2 != 0;
+
+        if (needs_front_padding) {
+            // Consume RNG state for front padding (matching Rust TH::rand_domain)
+            // HASH_LEN = 8 for lifetime_2_to_the_8
+            for (0..8) |_| {
+                _ = self.rng.random().int(u32);
+            }
+            std.debug.print("DEBUG: Consumed RNG state for front padding (8 elements)\n", .{});
+        }
+
+        if (needs_back_padding) {
+            // Consume RNG state for back padding (matching Rust TH::rand_domain)
+            // HASH_LEN = 8 for lifetime_2_to_the_8
+            for (0..8) |_| {
+                _ = self.rng.random().int(u32);
+            }
+            std.debug.print("DEBUG: Consumed RNG state for back padding (8 elements)\n", .{});
+        }
+
+        // Generate bottom trees and collect their roots as arrays of 8 field elements
+        var roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);
         defer self.allocator.free(roots_of_bottom_trees);
 
         std.debug.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
@@ -895,27 +979,28 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const left_bottom_tree_index = expansion_result.start;
         const left_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, left_bottom_tree_index, parameter);
         roots_of_bottom_trees[0] = left_bottom_tree.root();
-        std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ left_bottom_tree_index, roots_of_bottom_trees[0].value });
+        std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ left_bottom_tree_index, roots_of_bottom_trees[0][0].value });
 
         const right_bottom_tree_index = expansion_result.start + 1;
         const right_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, right_bottom_tree_index, parameter);
         roots_of_bottom_trees[1] = right_bottom_tree.root();
-        std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1].value });
+        std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
 
         // Generate remaining bottom trees
         for (expansion_result.start + 2..expansion_result.end) |bottom_tree_index| {
             const bottom_tree = try self.bottomTreeFromPrfKey(prf_key, bottom_tree_index, parameter);
             roots_of_bottom_trees[bottom_tree_index - expansion_result.start] = bottom_tree.root();
-            std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root().value });
+            std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
             bottom_tree.deinit(); // Clean up individual trees
         }
 
         // Build top tree from bottom tree roots and get root as array
+        // This matches Rust's HashSubTree::new_top_tree call which happens after parameter generation
         std.debug.print("DEBUG: Building top tree from {} bottom tree roots\n", .{roots_of_bottom_trees.len});
         const root_array = try self.buildTopTreeAsArray(roots_of_bottom_trees, parameter);
 
-        // Create a simple top tree for the secret key (using the first root element)
-        const top_tree = try HashSubTree.init(self.allocator, root_array[0]);
+        // Create a simple top tree for the secret key (using the entire root array)
+        const top_tree = try HashSubTree.init(self.allocator, root_array);
 
         // Create public and secret keys
         const public_key = GeneralizedXMSSPublicKey.init(root_array, parameter);
@@ -1042,6 +1127,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 };
 
 // Test functions
+/// Convert tweak encoding to field elements using base-p representation (matching Rust)
+fn tweakToFieldElements(tweak_encoding: u128) [2]FieldElement {
+    const KOALABEAR_ORDER_U64 = 0x7f000001; // 2^31 - 2^24 + 1
+
+    var acc = tweak_encoding;
+    var result: [2]FieldElement = undefined;
+
+    for (0..2) |i| {
+        const digit = @as(u64, @intCast(acc % KOALABEAR_ORDER_U64));
+        acc /= KOALABEAR_ORDER_U64;
+        result[i] = FieldElement{ .value = @as(u32, @intCast(digit)) };
+    }
+
+    return result;
+}
+
 test "generalized_xmss_keygen" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

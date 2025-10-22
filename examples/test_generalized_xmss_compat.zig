@@ -22,7 +22,7 @@ pub fn main() !void {
     defer keypair.secret_key.deinit();
 
     std.debug.print("✅ Key generation successful\n", .{});
-    std.debug.print("  - Public key root: {}\n", .{keypair.public_key.root.value});
+    std.debug.print("  - Public key root: {}\n", .{keypair.public_key.root[0].value});
     std.debug.print("  - Activation epoch: {}\n", .{keypair.secret_key.activation_epoch});
     std.debug.print("  - Num active epochs: {}\n", .{keypair.secret_key.num_active_epochs});
 

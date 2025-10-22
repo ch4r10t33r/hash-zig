@@ -15,7 +15,7 @@ pub fn main() !void {
         defer allocator.free(seed_hex);
         if (seed_hex.len == 64) { // 32 bytes = 64 hex chars
             for (0..32) |i| {
-                const hex_pair = seed_hex[i*2..i*2+2];
+                const hex_pair = seed_hex[i * 2 .. i * 2 + 2];
                 seed[i] = std.fmt.parseInt(u8, hex_pair, 16) catch 0x42;
             }
         } else {
