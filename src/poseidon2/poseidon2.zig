@@ -306,9 +306,25 @@ pub fn apply_external_layer_16(state: []F, rcs: [16]u32) void {
         elem.* = sbox(elem.*);
     }
 
-    // Apply MDS matrix in 4x4 blocks
+    // Apply MDS matrix in 4x4 blocks (first step)
     for (0..4) |i| {
         apply_mat4(state, i * 4);
+    }
+
+    // Apply outer circulant matrix (second step)
+    // Precompute the four sums of every four elements
+    var sums: [4]F = undefined;
+    for (0..4) |k| {
+        sums[k] = F.zero;
+        var j: usize = 0;
+        while (j < 16) : (j += 4) {
+            sums[k] = sums[k].add(state[j + k]);
+        }
+    }
+
+    // Add the appropriate sum to each element
+    for (0..16) |i| {
+        state[i] = state[i].add(sums[i % 4]);
     }
 }
 
