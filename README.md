@@ -18,6 +18,7 @@ A pure Zig implementation of **Generalized XMSS** hash-based signatures with **1
 - **Top-Bottom Tree Architecture**: Implements the complete Merkle tree construction with parallel processing
 - **Secret Key Management**: Full support for activation intervals and key advancement
 - **Verified Compatibility**: Comprehensive test suite ensures identical behavior with Rust implementation
+- **Proper Encapsulation**: Private fields with controlled access methods, matching Rust's security model
 
 ### 🔐 **Cryptographic Components**
 - **Poseidon2 Hash Function**: KoalaBear field with Montgomery arithmetic (via [zig-poseidon](https://github.com/blockblaz/zig-poseidon))
@@ -32,6 +33,7 @@ A pure Zig implementation of **Generalized XMSS** hash-based signatures with **1
 - **Memory Safe**: Proper memory management with no leaks
 - **Pure Zig**: Minimal dependencies, fully type-safe
 - **Comprehensive Testing**: Full test suite with compatibility verification
+- **Built-in Benchmark Suite**: Performance comparison and cross-compatibility testing with Rust implementation
 
 ## 📋 Table of Contents
 
@@ -41,6 +43,7 @@ A pure Zig implementation of **Generalized XMSS** hash-based signatures with **1
 - [API Reference](#api-reference)
 - [Testing](#testing)
 - [Performance](#performance)
+- [Built-in Benchmark Suite](#built-in-benchmark-suite)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -134,9 +137,9 @@ The main signature scheme implementation that provides:
 - `verify(public_key, epoch, message, signature)` - Verify signatures
 
 #### **Data Structures**
-- **GeneralizedXMSSPublicKey**: Contains root and parameters
-- **GeneralizedXMSSSecretKey**: Contains PRF key, parameters, and tree state
-- **GeneralizedXMSSSignature**: Contains Merkle path, randomness, and hashes
+- **GeneralizedXMSSPublicKey**: Contains root and parameters (private fields with controlled access)
+- **GeneralizedXMSSSecretKey**: Contains PRF key, parameters, and tree state (private fields with controlled access)
+- **GeneralizedXMSSSignature**: Contains Merkle path, randomness, and hashes (private fields with controlled access)
 
 #### **Cryptographic Primitives**
 - **ShakePRFtoF**: SHAKE128-based PRF for key derivation
@@ -159,11 +162,12 @@ The main signature scheme implementation that provides:
 // Generate a keypair for lifetime 2^8
 const keypair = try scheme.keyGen(0, 256);
 
-// Access the public key
+// Access the public key (using controlled access methods)
 const public_key = keypair.public_key;
-std.debug.print("Root: {}\n", .{public_key.root.value});
+const root = public_key.getRoot();
+std.debug.print("Root: {}\n", .{root.value});
 
-// Access the secret key
+// Access the secret key (using controlled access methods)
 const secret_key = keypair.secret_key;
 const activation_interval = secret_key.getActivationInterval();
 const prepared_interval = secret_key.getPreparedInterval(8);
@@ -178,6 +182,11 @@ const signature = try scheme.sign(secret_key, 0, message);
 
 // Verify the signature
 const is_valid = try scheme.verify(&public_key, 0, message, signature);
+
+// Access signature components (using controlled access methods)
+const path = signature.getPath();
+const rho = signature.getRho();
+const hashes = signature.getHashes();
 ```
 
 ### Secret Key Management
@@ -248,6 +257,57 @@ zig build benchmark -Doptimize=ReleaseFast
 # Run key generation benchmarks
 zig build benchmark-keygen -Doptimize=ReleaseFast
 ```
+
+#### Key generation benchmarks (multiple lifetimes, fixed 256 keys)
+
+The standalone key-generation benchmark compares lifetime configurations while always generating 256 keys for each:
+
+```bash
+# Debug build (slower, good for development)
+zig run scripts/benchmark_keygen.zig -- -i3
+
+# Include lifetime 2^32 as well (can be slower due to larger trees)
+zig run scripts/benchmark_keygen.zig -- --include-2-32 -i3
+
+# Recommended for accurate results
+zig run scripts/benchmark_keygen.zig -- -i5 -Doptimize=ReleaseFast
+```
+
+What it measures:
+- Lifetime 2^8, 2^18, and optionally 2^32
+- Always generates 256 keys for apples-to-apples comparison
+- Reports average/min/max time and derived keys/second
+
+Example output (abbreviated):
+```
+hash-zig Key Generation Benchmark (Multiple Lifetimes)
+=======================================================
+Iterations per configuration: 3
+Include 2^32 lifetime: true
+Note: All tests generate 256 keys to compare lifetime performance
+
+Benchmarking lifetime 2^8 (generating 256 keys)
+... ✅ 0.01s | ... ✅ 0.02s | ... ✅ 0.01s
+📊 Results for lifetime 2^8 (256 keys):
+  Average time: 0.01 seconds
+  Generation rate: 17,000+ keys/second
+
+Benchmarking lifetime 2^18 (generating 256 keys)
+... ✅ 0.05s | ... ✅ 0.05s | ... ✅ 0.05s
+📊 Results for lifetime 2^18 (256 keys):
+  Average time: 0.05 seconds
+  Generation rate: ~5,000 keys/second
+
+Benchmarking lifetime 2^32 (generating 256 keys)
+... ✅ 0.21s | ... ✅ 0.21s | ... ✅ 0.21s
+📊 Results for lifetime 2^32 (256 keys):
+  Average time: 0.21 seconds
+  Generation rate: ~1,200 keys/second
+```
+
+Notes:
+- 2^32 uses larger internal tree structures and is expected to be slower per key.
+- Use `-Doptimize=ReleaseFast` for realistic throughput numbers.
 
 ### Performance Characteristics
 

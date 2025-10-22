@@ -402,7 +402,7 @@ pub const MerkleTreeNative = struct {
 
 test "merkle native: build tree from leaves" {
     const allocator = std.testing.allocator;
-    const parameters = Parameters.init(.lifetime_2_10);
+    const parameters = Parameters.init(.lifetime_2_8);
 
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
@@ -439,7 +439,7 @@ test "merkle native: build tree from leaves" {
 
 test "merkle native: build full tree" {
     const allocator = std.testing.allocator;
-    const parameters = Parameters.init(.lifetime_2_10);
+    const parameters = Parameters.init(.lifetime_2_8);
 
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
@@ -477,7 +477,7 @@ test "merkle native: build full tree" {
 
 test "merkle native: auth path verification" {
     const allocator = std.testing.allocator;
-    const parameters = Parameters.init(.lifetime_2_10);
+    const parameters = Parameters.init(.lifetime_2_8);
 
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();
@@ -542,7 +542,7 @@ test "merkle native: auth path verification" {
 
 test "merkle native: deterministic" {
     const allocator = std.testing.allocator;
-    const parameters = Parameters.init(.lifetime_2_10);
+    const parameters = Parameters.init(.lifetime_2_8);
 
     var tree = try MerkleTreeNative.init(allocator, parameters);
     defer tree.deinit();

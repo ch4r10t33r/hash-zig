@@ -43,7 +43,9 @@ pub fn serializeFieldElementArray(allocator: Allocator, elements: []const FieldE
     try result.append('[');
     for (json_parts.items, 0..) |part, i| {
         if (i > 0) try result.append(',');
+        try result.append('"');
         try result.appendSlice(part);
+        try result.append('"');
     }
     try result.append(']');
 
@@ -80,23 +82,26 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
 
     try result.appendSlice("{");
 
-    // Serialize path
+    // Serialize path using controlled access
+    const path = signature.getPath();
     try result.appendSlice("\"path\":{");
     try result.appendSlice("\"nodes\":");
-    const path_json = try serializeFieldElementArray(allocator, signature.path.path);
+    const path_json = try serializeFieldElementArray(allocator, path.path);
     defer allocator.free(path_json);
     try result.appendSlice(path_json);
     try result.appendSlice("}");
 
-    // Serialize rho
+    // Serialize rho using controlled access
     try result.appendSlice(",\"rho\":");
-    const rho_json = try serializeFieldElementArray(allocator, &signature.rho);
+    const rho = signature.getRho();
+    const rho_json = try serializeFieldElementArray(allocator, &rho);
     defer allocator.free(rho_json);
     try result.appendSlice(rho_json);
 
-    // Serialize hashes
+    // Serialize hashes using controlled access
     try result.appendSlice(",\"hashes\":");
-    const hashes_json = try serializeFieldElementArray(allocator, signature.hashes);
+    const hashes = signature.getHashes();
+    const hashes_json = try serializeFieldElementArray(allocator, hashes);
     defer allocator.free(hashes_json);
     try result.appendSlice(hashes_json);
 
@@ -164,15 +169,17 @@ pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXM
 
     try result.appendSlice("{");
 
-    // Serialize root
-    const root_hex = try serializeFieldElement(allocator, public_key.root);
+    // Serialize root using controlled access
+    const root = public_key.getRoot();
+    const root_hex = try serializeFieldElement(allocator, root);
     defer allocator.free(root_hex);
     try result.appendSlice("\"root\":");
     try result.appendSlice(root_hex);
 
-    // Serialize parameter
+    // Serialize parameter using controlled access
     try result.appendSlice(",\"parameter\":");
-    const param_json = try serializeFieldElementArray(allocator, &public_key.parameter);
+    const parameter = public_key.getParameter();
+    const param_json = try serializeFieldElementArray(allocator, &parameter);
     defer allocator.free(param_json);
     try result.appendSlice(param_json);
 
@@ -220,26 +227,30 @@ pub fn serializeSecretKey(allocator: Allocator, secret_key: *const GeneralizedXM
 
     try result.appendSlice("{");
 
-    // Serialize PRF key as hex
-    const prf_key_hex = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{std.fmt.fmtSliceHexLower(&secret_key.prf_key)});
+    // Serialize PRF key using controlled access
+    const prf_key = secret_key.getPrfKey();
+    const prf_key_hex = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{std.fmt.fmtSliceHexLower(&prf_key)});
     defer allocator.free(prf_key_hex);
     try result.appendSlice("\"prf_key\":");
     try result.appendSlice(prf_key_hex);
 
-    // Serialize activation parameters
+    // Serialize activation parameters using controlled access
     try result.appendSlice(",\"activation_epoch\":");
-    const epoch_str = try std.fmt.allocPrint(allocator, "{}", .{secret_key.activation_epoch});
+    const activation_epoch = secret_key.getActivationEpoch();
+    const epoch_str = try std.fmt.allocPrint(allocator, "{}", .{activation_epoch});
     defer allocator.free(epoch_str);
     try result.appendSlice(epoch_str);
 
     try result.appendSlice(",\"num_active_epochs\":");
-    const epochs_str = try std.fmt.allocPrint(allocator, "{}", .{secret_key.num_active_epochs});
+    const num_active_epochs = secret_key.getNumActiveEpochs();
+    const epochs_str = try std.fmt.allocPrint(allocator, "{}", .{num_active_epochs});
     defer allocator.free(epochs_str);
     try result.appendSlice(epochs_str);
 
-    // Serialize parameter
+    // Serialize parameter using controlled access
     try result.appendSlice(",\"parameter\":");
-    const param_json = try serializeFieldElementArray(allocator, &secret_key.parameter);
+    const parameter = secret_key.getParameter();
+    const param_json = try serializeFieldElementArray(allocator, &parameter);
     defer allocator.free(param_json);
     try result.appendSlice(param_json);
 
@@ -271,6 +282,9 @@ test "serialize and deserialize FieldElement array" {
 
     const serialized = try serializeFieldElementArray(allocator, &original);
     defer allocator.free(serialized);
+
+    // Debug: print the generated JSON
+    std.debug.print("Generated JSON: {s}\n", .{serialized});
 
     const deserialized = try deserializeFieldElementArray(allocator, serialized);
     defer allocator.free(deserialized);

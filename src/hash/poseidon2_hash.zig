@@ -58,8 +58,10 @@ pub const Poseidon2RustCompat = struct {
         }
 
         // Pad with zeros if input is shorter than WIDTH_24
-        for (input.len..WIDTH_24) |i| {
-            input_u32[i] = 0;
+        if (input.len < WIDTH_24) {
+            for (input.len..WIDTH_24) |i| {
+                input_u32[i] = 0;
+            }
         }
 
         // Apply Poseidon2-24 permutation

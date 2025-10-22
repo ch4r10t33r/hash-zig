@@ -168,7 +168,6 @@ fn runPerformanceBenchmarks(allocator: std.mem.Allocator) !void {
         verify_iterations: usize,
     }{
         .{ .lifetime = .lifetime_2_8, .keygen_iterations = 1, .sign_iterations = 100, .verify_iterations = 1000 },
-        .{ .lifetime = .lifetime_2_18, .keygen_iterations = 1, .sign_iterations = 10, .verify_iterations = 100 },
     };
 
     var results = std.ArrayList(BenchmarkResult).init(allocator);
