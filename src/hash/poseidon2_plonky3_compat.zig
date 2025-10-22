@@ -289,7 +289,7 @@ fn apply_internal_layer_24(state: []F, rc: u32) void {
 }
 
 // Apply external layer (exact Plonky3 logic)
-fn apply_external_layer_16(state: []F, rcs: [16]u32) void {
+pub fn apply_external_layer_16(state: []F, rcs: [16]u32) void {
     // Add round constants
     for (0..16) |i| {
         state[i] = state[i].add(F.fromU32(rcs[i]));
