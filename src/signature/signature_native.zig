@@ -8,6 +8,7 @@ const ParametersRustCompat = @import("../core/params_rust_compat.zig").Parameter
 const ShakePRFtoF_8_7 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
 const Poseidon2RustCompat = @import("../hash/poseidon2_hash.zig").Poseidon2RustCompat;
 const serialization = @import("serialization.zig");
+const ChaCha12Rng = @import("../prf/chacha12_rng.zig");
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;
@@ -312,6 +313,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     lifetime_params: LifetimeParams,
     poseidon2: *Poseidon2RustCompat,
     allocator: Allocator,
+    rng: ChaCha12Rng,
 
     pub fn init(allocator: Allocator, lifetime: @import("../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
@@ -329,11 +331,44 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .lifetime_params = lifetime_params,
             .poseidon2 = try allocator.create(Poseidon2RustCompat),
             .allocator = allocator,
+            .rng = ChaCha12Rng.init(initDefaultSeed()),
         };
 
         self.poseidon2.* = poseidon2;
 
         return self;
+    }
+
+    pub fn initWithSeed(allocator: Allocator, lifetime: @import("../core/params_rust_compat.zig").KeyLifetime, seed: [32]u8) !*GeneralizedXMSSSignatureScheme {
+        const poseidon2 = try Poseidon2RustCompat.init(allocator);
+        const lifetime_params = switch (lifetime) {
+            .lifetime_2_8 => LIFETIME_2_8_PARAMS,
+            .lifetime_2_18 => LIFETIME_2_18_PARAMS,
+            .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
+            else => return error.UnsupportedLifetime,
+        };
+        const self = try allocator.create(GeneralizedXMSSSignatureScheme);
+        self.* = GeneralizedXMSSSignatureScheme{
+            .lifetime_params = lifetime_params,
+            .poseidon2 = try allocator.create(Poseidon2RustCompat),
+            .allocator = allocator,
+            .rng = ChaCha12Rng.init(seed),
+        };
+        self.poseidon2.* = poseidon2;
+        return self;
+    }
+
+    fn initDefaultSeed() [32]u8 {
+        var seed: [32]u8 = undefined;
+        const now = @as(u64, @intCast(std.time.timestamp()));
+        // Expand timestamp into 32 bytes deterministically
+        var tmp = now;
+        var i: usize = 0;
+        while (i < 32) : (i += 1) {
+            tmp = tmp ^ (tmp << 13) ^ (tmp >> 7) ^ (tmp << 17);
+            seed[i] = @as(u8, @truncate(tmp >> @intCast((i & 7) * 8)));
+        }
+        return seed;
     }
 
     pub fn deinit(self: *GeneralizedXMSSSignatureScheme) void {
@@ -562,29 +597,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Generate random PRF key (matching Rust PRF::key_gen)
-    fn generateRandomPRFKey(_: *GeneralizedXMSSSignatureScheme) ![32]u8 {
+    fn generateRandomPRFKey(self: *GeneralizedXMSSSignatureScheme) ![32]u8 {
         var prf_key: [32]u8 = undefined;
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-        const rng = prng.random();
-
-        for (0..32) |i| {
-            prf_key[i] = rng.int(u8);
-        }
-
+        self.rng.fill(&prf_key);
         return prf_key;
     }
 
     /// Generate random parameter (matching Rust TH::rand_parameter)
-    fn generateRandomParameter(_: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
+    fn generateRandomParameter(self: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
         var parameter: [5]FieldElement = undefined;
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-        const rng = prng.random();
-
-        for (0..5) |i| {
-            const random_value = rng.int(u32);
-            parameter[i] = FieldElement{ .value = random_value % 2130706433 }; // KoalaBear modulus
+        var bytes: [20]u8 = undefined;
+        self.rng.fill(&bytes);
+        var i: usize = 0;
+        while (i < 5) : (i += 1) {
+            const off = i * 4;
+            var buf4: [4]u8 = undefined;
+            @memcpy(buf4[0..], bytes[off .. off + 4]);
+            const val = std.mem.readInt(u32, &buf4, .little);
+            parameter[i] = FieldElement{ .value = val % 2130706433 };
         }
-
         return parameter;
     }
 
