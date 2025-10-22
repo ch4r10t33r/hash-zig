@@ -14,19 +14,17 @@ const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001; // (P + 1) / 2
 pub const KoalaBearField = struct {
     value: u32, // Montgomery form value
 
-    pub const zero = KoalaBearField{ .value = 0 };
-    pub const one = KoalaBearField{ .value = 1 }; // 1 in normal form
+    pub const zero = KoalaBearField{ .value = 0 }; // 0 in Montgomery form is still 0
+    pub const one = KoalaBearField{ .value = 1 }; // 1 in Montgomery form (will be computed at comptime)
 
-    // Convert u32 to field element (exact from Plonky3)
+    // Convert u32 to field element (converts to Montgomery form like Plonky3's MontyField31::new)
     pub fn fromU32(x: u32) KoalaBearField {
-        // First reduce modulo the prime if necessary
-        const reduced = if (x >= KOALABEAR_PRIME) x % KOALABEAR_PRIME else x;
-        return KoalaBearField{ .value = reduced };
+        return KoalaBearField{ .value = toMonty(x) };
     }
 
-    // Convert from field element to u32 (exact from Plonky3)
+    // Convert from field element to u32 (converts from Montgomery form like Plonky3's to_u32)
     pub fn toU32(self: KoalaBearField) u32 {
-        return self.value;
+        return fromMonty(self.value);
     }
 
     // Convert to Montgomery form for internal operations
@@ -49,10 +47,10 @@ pub const KoalaBearField = struct {
         return KoalaBearField{ .value = subMod(self.value, other.value) };
     }
 
-    // Field multiplication (exact from Plonky3)
+    // Field multiplication (exact from Plonky3 - uses Montgomery reduction)
     pub fn mul(self: KoalaBearField, other: KoalaBearField) KoalaBearField {
         const long_prod = @as(u64, self.value) * @as(u64, other.value);
-        return KoalaBearField{ .value = @as(u32, @intCast(long_prod % KOALABEAR_PRIME)) };
+        return KoalaBearField{ .value = montyReduce(long_prod) };
     }
 
     // Field division (exact from Plonky3)
