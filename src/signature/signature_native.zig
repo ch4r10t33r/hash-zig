@@ -448,7 +448,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                 // Debug: Print domain elements for all epochs and chains in first bottom tree
                 if (bottom_tree_index == 0) {
-                    std.debug.print("DEBUG: Bottom tree {} epoch {} chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_index, epoch, chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
+                    // std.debug.print("DEBUG: Bottom tree {} epoch {} chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_index, epoch, chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
                 }
 
                 // Walk the chain to get the chain end
@@ -478,7 +478,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Compute hash chain (matching Rust chain function)
-    fn computeHashChain(
+    pub fn computeHashChain(
         self: *GeneralizedXMSSSignatureScheme,
         domain_elements: [8]u32,
         epoch: u32,
@@ -493,7 +493,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: Print initial state for first bottom tree, epoch 0, chain 0
         if (epoch == 0 and chain_index == 0) {
-            std.debug.print("DEBUG: Chain initial state epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value });
+            // std.debug.print("DEBUG: Chain initial state epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value });
         }
 
         // Walk the chain for BASE-1 steps (matching Rust chain function)
@@ -505,7 +505,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: Print chain step for first bottom tree, epoch 0, chain 0
             if (epoch == 0 and chain_index == 0) {
-                std.debug.print("DEBUG: Chain step {} epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}] -> [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j + 1, epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value, next[0].value, next[1].value, next[2].value, next[3].value, next[4].value, next[5].value, next[6].value, next[7].value });
+                // std.debug.print("DEBUG: Chain step {} epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}] -> [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j + 1, epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value, next[0].value, next[1].value, next[2].value, next[3].value, next[4].value, next[5].value, next[6].value, next[7].value });
             }
 
             // Update current state
@@ -771,12 +771,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Hash chain ends using Poseidon2
     pub fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, parameter: [5]FieldElement) !FieldElement {
         // Debug: Print chain ends for first bottom tree, epoch 0
-        std.debug.print("DEBUG: hashChainEnds called with {} chain ends: [", .{chain_ends.len});
-        for (0..chain_ends.len) |i| {
-            if (i > 0) std.debug.print(", ", .{});
-            std.debug.print("0x{x}", .{chain_ends[i].value});
-        }
-        std.debug.print("]\n", .{});
+        // std.debug.print("DEBUG: hashChainEnds called with {} chain ends: [", .{chain_ends.len});
+        // for (0..chain_ends.len) |i| {
+        //     if (i > 0) std.debug.print(", ", .{});
+        //     std.debug.print("0x{x}", .{chain_ends[i].value});
+        // }
+        // std.debug.print("]\n", .{});
 
         // Hash chain ends using the chain hash function
         // For now, just hash the first two chain ends (simplified approach)
@@ -785,11 +785,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             defer self.allocator.free(hash_result);
 
             // Debug: Print hash result
-            std.debug.print("DEBUG: hashChainEnds result: 0x{x}\n", .{hash_result[0].value});
+            // std.debug.print("DEBUG: hashChainEnds result: 0x{x}\n", .{hash_result[0].value});
 
             return hash_result[0];
         } else {
-            std.debug.print("DEBUG: hashChainEnds result (single): 0x{x}\n", .{chain_ends[0].value});
+            // std.debug.print("DEBUG: hashChainEnds result (single): 0x{x}\n", .{chain_ends[0].value});
             return chain_ends[0];
         }
     }
@@ -797,13 +797,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Build bottom tree from leaf hashes and return as array of 8 field elements
     /// This matches the Rust HashSubTree::new_subtree algorithm exactly
     pub fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement, bottom_tree_index: usize) ![8]FieldElement {
-        // For bottom trees: depth = 4, lowest_layer = 0, start_index = bottom_tree_index * 16
+        // For bottom trees: build full 8-layer tree (0->8), then truncate to 4 layers (0->4)
         // This matches Rust: new_subtree builds 0->8, then truncates to 0->4
-        const depth = 4;
+        const full_depth = 8; // Build full 8-layer tree like Rust
+        // TODO: Implement proper truncation to 4 layers like Rust
         const lowest_layer = 0;
         const start_index = bottom_tree_index * 16; // Each bottom tree has 16 leaves
 
-        std.debug.print("DEBUG: Building bottom tree from layer {} to layer {}\n", .{ lowest_layer, depth });
+        std.debug.print("DEBUG: Building bottom tree from layer {} to layer {}\n", .{ lowest_layer, full_depth });
         std.debug.print("DEBUG: Starting with {} leaf hashes\n", .{leaf_hashes.len});
 
         // Convert single field elements to arrays of 8 field elements
@@ -827,10 +828,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         std.debug.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
 
         // Build tree layer by layer (matching Rust exactly)
+        // Track all layers for proper truncation
+        var layers = std.ArrayList(PaddedLayer).init(self.allocator);
+        defer {
+            for (layers.items) |layer| {
+                self.allocator.free(layer.nodes);
+            }
+            layers.deinit();
+        }
+
         var current_layer = initial_padded;
         var current_level: usize = lowest_layer;
 
-        while (current_level < depth) {
+        while (current_level < full_depth) {
             const next_level = current_level + 1;
 
             std.debug.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, next_level, current_layer.nodes.len, current_layer.start_index });
@@ -865,7 +875,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Copy the result to the parents array (all 8 elements)
                 @memcpy(parents[i][0..], hash_result[0..8]);
 
-                std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
+                // std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
             }
 
             // Free the current layer before creating the new one
@@ -880,17 +890,55 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             std.debug.print("DEBUG: After padding: {} nodes (start_index: {})\n", .{ current_layer.nodes.len, current_layer.start_index });
 
+            // Store this layer for truncation
+            // We need to store a copy of the layer, not the original
+            const layer_copy = PaddedLayer{
+                .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len),
+                .start_index = current_layer.start_index,
+            };
+            @memcpy(layer_copy.nodes, current_layer.nodes);
+            try layers.append(layer_copy);
+
             current_level = next_level;
         }
 
-        // The root is the first node of the top layer, which is an array of 8 field elements
-        const root_array = current_layer.nodes[0];
-        std.debug.print("DEBUG: Final bottom tree root array: {any}\n", .{root_array});
+        // CRITICAL: Truncate to final_depth = 4 layers like Rust does
+        // Rust truncates to depth/2 = 4 layers and gets root from layer 4
+        // According to Rust: bottom_tree_root = bottom_tree.layers[depth / 2].nodes[bottom_tree_index % 2]
+        // where depth = 8, so depth/2 = 4, and we need the root from layer 4
+
+        // Get the root from layer 4
+        // layers.items[0] = result of layer 0->1 (i.e., layer 1)
+        // layers.items[1] = layer 2
+        // layers.items[2] = layer 3
+        // layers.items[3] = layer 4
+        // layers.items[4] = layer 5
+        // So layer 4 is at index 3, not 4!
+        const target_layer_index = (full_depth / 2) - 1; // 8 / 2 - 1 = 3
+        std.debug.print("DEBUG: Looking for root in layer {} (stored layers: {})\n", .{ target_layer_index + 1, layers.items.len });
+
+        if (target_layer_index >= layers.items.len) {
+            std.debug.print("ERROR: target_layer_index {} >= layers.len {}\n", .{ target_layer_index, layers.items.len });
+            // Fallback to current layer
+            const truncated_root = current_layer.nodes[0];
+            std.debug.print("DEBUG: Using fallback root from current layer: {any}\n", .{truncated_root});
+            self.allocator.free(current_layer.nodes);
+            return truncated_root;
+        }
+
+        const target_layer = layers.items[target_layer_index];
+        std.debug.print("DEBUG: Target layer has {} nodes\n", .{target_layer.nodes.len});
+
+        // Get the root from the correct position in layer 4
+        // Rust uses: bottom_tree_index % 2 to select which of the 2 nodes to use
+        const root_index = bottom_tree_index % 2;
+        const truncated_root = target_layer.nodes[root_index];
+        std.debug.print("DEBUG: Final bottom tree root array (truncated from 8-layer to 4-layer, from layer {}): {any}\n", .{ target_layer_index, truncated_root });
 
         // Free the final layer
         self.allocator.free(current_layer.nodes);
 
-        return root_array;
+        return truncated_root;
     }
 
     /// Build top tree from bottom tree roots
@@ -1039,7 +1087,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Copy the result to the parents array (all 8 elements)
                 @memcpy(parents[i][0..], hash_result[0..8]);
 
-                std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
+                // std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
             }
 
             std.debug.print("DEBUG: Completed processing {} parents\n", .{parents_len});
@@ -1098,17 +1146,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     const right = current_level[i * 2 + 1];
                     const pair = [_]FieldElement{ left, right };
 
-                    std.debug.print("DEBUG: Hashing pair [{}] = 0x{x} + 0x{x}\n", .{ i, left.value, right.value });
+                    // std.debug.print("DEBUG: Hashing pair [{}] = 0x{x} + 0x{x}\n", .{ i, left.value, right.value });
 
                     const hash_result = try self.applyPoseidonTweakHash(&pair, 0, 0, parameter);
                     defer self.allocator.free(hash_result);
                     next_level[i] = hash_result[0];
 
-                    std.debug.print("DEBUG: Result [{}] = 0x{x}\n", .{ i, next_level[i].value });
+                    // std.debug.print("DEBUG: Result [{}] = 0x{x}\n", .{ i, next_level[i].value });
                 } else {
                     // Odd number of elements, copy the last one
                     next_level[i] = current_level[i * 2];
-                    std.debug.print("DEBUG: Copying [{}] = 0x{x}\n", .{ i, next_level[i].value });
+                    // std.debug.print("DEBUG: Copying [{}] = 0x{x}\n", .{ i, next_level[i].value });
                 }
             }
 
@@ -1126,13 +1174,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Copy existing elements
         for (0..@min(8, level_size)) |i| {
             result[i] = current_level[i];
-            std.debug.print("DEBUG: result[{}] = 0x{x}\n", .{ i, result[i].value });
+            // std.debug.print("DEBUG: result[{}] = 0x{x}\n", .{ i, result[i].value });
         }
 
         // Fill remaining with zeros if we have fewer than 8 elements
         for (level_size..8) |i| {
             result[i] = FieldElement{ .value = 0 };
-            std.debug.print("DEBUG: result[{}] = 0x{x} (zero)\n", .{ i, result[i].value });
+            // std.debug.print("DEBUG: result[{}] = 0x{x} (zero)\n", .{ i, result[i].value });
         }
 
         self.allocator.free(current_level);
@@ -1274,7 +1322,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         std.debug.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
         std.debug.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
-        std.debug.print("DEBUG: Parameter: {any}\n", .{parameter});
+        // std.debug.print("DEBUG: Parameter: {any}\n", .{parameter});
 
         std.debug.print("DEBUG: Expansion result: start={}, end={}\n", .{ expansion_result.start, expansion_result.end });
 
@@ -1282,18 +1330,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const left_bottom_tree_index = expansion_result.start;
         const left_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, left_bottom_tree_index, parameter);
         roots_of_bottom_trees[0] = left_bottom_tree.root();
-        std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ left_bottom_tree_index, roots_of_bottom_trees[0][0].value });
+        // std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ left_bottom_tree_index, roots_of_bottom_trees[0][0].value });
 
         const right_bottom_tree_index = expansion_result.start + 1;
         const right_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, right_bottom_tree_index, parameter);
         roots_of_bottom_trees[1] = right_bottom_tree.root();
-        std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
+        // std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
 
         // Generate remaining bottom trees
         for (expansion_result.start + 2..expansion_result.end) |bottom_tree_index| {
             const bottom_tree = try self.bottomTreeFromPrfKey(prf_key, bottom_tree_index, parameter);
             roots_of_bottom_trees[bottom_tree_index - expansion_result.start] = bottom_tree.root();
-            std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
+            // std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
             bottom_tree.deinit(); // Clean up individual trees
         }
 
