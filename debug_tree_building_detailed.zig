@@ -6,27 +6,50 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Use the same seed as Rust
-    const seed_hex = "4242424242424242424242424242424242424242424242424242424242424242";
-    var seed: [32]u8 = undefined;
-    for (0..32) |i| {
-        const hi = std.fmt.parseInt(u8, seed_hex[i * 2 .. i * 2 + 1], 16) catch 0;
-        const lo = std.fmt.parseInt(u8, seed_hex[i * 2 + 1 .. i * 2 + 2], 16) catch 0;
-        seed[i] = (hi << 4) | lo;
-    }
+    std.debug.print("=== Detailed Tree Building Analysis ===\n", .{});
 
-    std.debug.print("SEED (bytes): {any}\n", .{seed});
-
-    // Create signature scheme
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
+    // Create scheme with same seed as benchmark
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, [_]u8{0x42} ** 32);
     defer scheme.deinit();
 
-    // Generate keypair
-    const keypair = try scheme.keyGen(seed);
+    std.debug.print("Scheme RNG state: {any}\n", .{scheme.getRngState()});
 
-    // Print the public key
-    const pk_json = try hash_zig.serializePublicKey(allocator, &keypair.public_key);
-    defer allocator.free(pk_json);
+    // Generate parameters (should match Rust exactly)
+    const parameters = try scheme.generateRandomParameter();
+    std.debug.print("Parameters: {any}\n", .{parameters});
 
-    std.debug.print("Public Key (JSON): {s}\n", .{pk_json});
+    // Generate PRF key (should match Rust exactly)
+    const prf_key = try scheme.generateRandomPRFKey();
+    std.debug.print("PRF key: {}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+
+    // Test domain element generation for epoch 0, chain 0
+    std.debug.print("\n=== Testing Domain Element Generation ===\n", .{});
+    const domain_elements = try scheme.generateRandomDomain(8);
+    std.debug.print("Domain elements: {any}\n", .{domain_elements});
+
+    // Test chain computation for epoch 0, chain 0
+    std.debug.print("\n=== Testing Chain Computation ===\n", .{});
+    const chain_end = try scheme.applyPoseidonChainTweakHash(domain_elements, 0, // epoch
+        0, // chain_index
+        0, // pos_in_chain
+        parameters);
+    std.debug.print("Chain end: 0x{x}\n", .{chain_end[0].value});
+
+    // Test bottom tree building
+    std.debug.print("\n=== Testing Bottom Tree Building ===\n", .{});
+    var leaf_hashes = [_]hash_zig.FieldElement{chain_end[0]};
+    const bottom_tree_root = try scheme.buildBottomTree(&leaf_hashes, parameters);
+    std.debug.print("Bottom tree root: 0x{x}\n", .{bottom_tree_root[0].value});
+
+    // Test top tree building with multiple bottom tree roots
+    std.debug.print("\n=== Testing Top Tree Building ===\n", .{});
+    var bottom_tree_roots: [16][8]hash_zig.FieldElement = undefined;
+    for (0..16) |i| {
+        for (0..8) |j| {
+            bottom_tree_roots[i][j] = hash_zig.FieldElement{ .value = @intCast(i * 8 + j) };
+        }
+    }
+
+    const top_tree_root = try scheme.buildTopTreeAsArray(&bottom_tree_roots, parameters);
+    std.debug.print("Top tree root: {any}\n", .{top_tree_root});
 }

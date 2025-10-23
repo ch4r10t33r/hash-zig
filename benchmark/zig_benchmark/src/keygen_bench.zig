@@ -15,8 +15,8 @@ pub fn main() !void {
     for (seed) |b| std.debug.print("{x:0>2}", .{b});
     std.debug.print("\n", .{});
 
-    // Initialize the signature scheme for lifetime 2^8
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
+    // Initialize the signature scheme for lifetime 2^8 with fixed seed
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
     defer scheme.deinit();
 
     std.debug.print("Generating keypair for lifetime 2^8 (256 signatures)...\n", .{});

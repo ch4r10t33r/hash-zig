@@ -34,6 +34,10 @@ pub fn main() !void {
     var scheme2 = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
     defer scheme2.deinit();
 
+    // Add debug output for RNG state
+    std.debug.print("Scheme1 RNG state after creation: {any}\n", .{scheme1.getRngState()});
+    std.debug.print("Scheme2 RNG state after creation: {any}\n", .{scheme2.getRngState()});
+
     const kp1 = try scheme1.keyGen(0, 256);
     defer kp1.secret_key.deinit();
 

@@ -11,13 +11,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Add poseidon dependency
-    const zig_poseidon_dep = b.dependency("zig_poseidon", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const poseidon_mod = zig_poseidon_dep.module("poseidon");
-    hash_zig_module.addImport("poseidon", poseidon_mod);
+    // Removed zig_poseidon dependency - using built-in Poseidon2 implementation
 
     const exe = b.addExecutable(.{
         .name = "keygen_bench",
