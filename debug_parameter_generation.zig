@@ -2,39 +2,28 @@ const std = @import("std");
 const hash_zig = @import("src/root.zig");
 
 pub fn main() !void {
-    std.debug.print("=== Parameter Generation Debug ===\n", .{});
+    std.debug.print("=== Parameter Generation RNG Consumption ===\n", .{});
 
-    // Use the same seed as the comparison test
+    // Use same seed as Rust
     const seed = [_]u8{0x42} ** 32;
+    std.debug.print("SEED: {any}\n\n", .{seed});
 
-    // Initialize RNG
-    var rng = hash_zig.prf.ChaCha12Rng.init(seed);
+    // Create scheme with fixed seed
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    std.debug.print("SEED: {x}\n", .{std.fmt.fmtSliceHexUpper(&seed)});
-    std.debug.print("SEED (bytes): {any}\n", .{seed});
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
 
-    // Generate parameters exactly like in the key generation
-    std.debug.print("\nGenerating parameters...\n", .{});
+    // Print initial RNG state
+    std.debug.print("Initial RNG state: {any}\n", .{scheme.getRngState()});
 
-    var parameter: [5]hash_zig.core.FieldElement = undefined;
-    for (0..5) |i| {
-        const val = rng.random().int(u32);
-        parameter[i] = hash_zig.core.FieldElement{ .value = val };
-        std.debug.print("Parameter[{}] = {} (0x{x})\n", .{ i, val, val });
-    }
+    // Generate parameters and track RNG consumption
+    std.debug.print("\n=== Parameter Generation ===\n", .{});
+    const parameter = try scheme.generateRandomParameter();
+    std.debug.print("Parameters: {any}\n", .{parameter});
+    std.debug.print("RNG state after parameter generation: {any}\n", .{scheme.getRngState()});
 
-    std.debug.print("\nParameter array: {any}\n", .{parameter});
-
-    // Generate PRF key
-    std.debug.print("\nGenerating PRF key...\n", .{});
-    var prf_key: [32]u8 = undefined;
-    rng.fill(&prf_key);
-    std.debug.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
-
-    // Check RNG state after parameter and PRF key generation
-    std.debug.print("\nRNG state after parameter and PRF key generation:\n", .{});
-    for (0..10) |i| {
-        const val = rng.random().int(u32);
-        std.debug.print("  [{}] = {}\n", .{ i, val });
-    }
+    // Clean up memory
+    scheme.deinit();
 }
