@@ -5,22 +5,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
 
-    // Get the zig-poseidon dependency
-    const zig_poseidon_dep = b.dependency("zig_poseidon", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const poseidon_mod = zig_poseidon_dep.module("poseidon");
-
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    // Add poseidon module to hash-zig module
-    hash_zig_module.addImport("poseidon", poseidon_mod);
 
     // Library
     const lib = b.addLibrary(.{

@@ -554,7 +554,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Apply Poseidon2 chain tweak hash (matching Rust chain_tweak)
-    fn applyPoseidonChainTweakHash(
+    pub fn applyPoseidonChainTweakHash(
         self: *GeneralizedXMSSSignatureScheme,
         input: [8]FieldElement,
         epoch: u32,
@@ -640,9 +640,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const hash_result = try self.poseidon2.hashFieldElements(self.allocator, combined_input);
         defer self.allocator.free(hash_result);
 
-        // Return result with capacity elements
-        const result = try self.allocator.alloc(FieldElement, self.lifetime_params.capacity);
-        for (0..self.lifetime_params.capacity) |i| {
+        // Return result with hash_len_fe elements (8 for tree hashing)
+        const result = try self.allocator.alloc(FieldElement, self.lifetime_params.hash_len_fe);
+        for (0..self.lifetime_params.hash_len_fe) |i| {
             result[i] = hash_result[i];
         }
 
@@ -650,7 +650,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Hash chain ends using Poseidon2
-    fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, parameter: [5]FieldElement) !FieldElement {
+    pub fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, parameter: [5]FieldElement) !FieldElement {
         // Hash chain ends using the chain hash function
         // For now, just hash the first two chain ends (simplified approach)
         if (chain_ends.len >= 2) {
@@ -663,7 +663,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Build bottom tree from leaf hashes and return as array of 8 field elements
-    fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
+    pub fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
         // Convert single field elements to arrays of 8 field elements
         var leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_hashes.len);
         defer self.allocator.free(leaf_nodes);
@@ -751,11 +751,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Optional front padding to align to an even start index
         if (needs_front) {
-            // Generate random node for front padding
-            for (0..8) |i| {
-                padded_nodes[output_index][i] = FieldElement{ .value = self.rng.random().int(u32) };
-            }
+            // Generate random node for front padding (matching Rust rng.random() for arrays)
+            const random_domain = try self.generateRandomDomain(8);
+            @memcpy(padded_nodes[output_index][0..8], random_domain[0..8]);
             output_index += 1;
+            std.debug.print("DEBUG: padLayer: Added front padding node at index {}\n", .{output_index - 1});
         }
 
         // Insert the actual content in order
@@ -764,11 +764,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Optional back padding to ensure we end on an odd index
         if (needs_back) {
-            // Generate random node for back padding
-            for (0..8) |i| {
-                padded_nodes[output_index][i] = FieldElement{ .value = self.rng.random().int(u32) };
-            }
+            // Generate random node for back padding (matching Rust rng.random() for arrays)
+            const random_domain = try self.generateRandomDomain(8);
+            @memcpy(padded_nodes[output_index][0..8], random_domain[0..8]);
+            std.debug.print("DEBUG: padLayer: Added back padding node at index {}\n", .{output_index});
         }
+
+        std.debug.print("DEBUG: padLayer: start_index={}, nodes.len={}, end_index={}\n", .{ start_index, nodes.len, end_index });
+        std.debug.print("DEBUG: padLayer: needs_front={}, needs_back={}, actual_start_index={}\n", .{ needs_front, needs_back, actual_start_index });
+        std.debug.print("DEBUG: padLayer: total_capacity={}, padded_nodes.len={}\n", .{ total_capacity, padded_nodes.len });
 
         return .{
             .nodes = padded_nodes,
@@ -776,9 +780,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         };
     }
 
+    /// Get RNG state for debugging
+    pub fn getRngState(self: *GeneralizedXMSSSignatureScheme) [5]u32 {
+        // Create a copy of the RNG to avoid consuming the original state
+        var rng_copy = self.rng;
+        var result: [5]u32 = undefined;
+        for (0..5) |i| {
+            result[i] = rng_copy.random().int(u32);
+        }
+        return result;
+    }
+
     /// Build top tree from bottom tree roots and return root as array of 8 field elements
     /// This matches the Rust HashSubTree::new_top_tree algorithm exactly
-    fn buildTopTreeAsArray(self: *GeneralizedXMSSSignatureScheme, roots_of_bottom_trees: [][8]FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
+    pub fn buildTopTreeAsArray(self: *GeneralizedXMSSSignatureScheme, roots_of_bottom_trees: [][8]FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
         // For lifetime 2^8: depth = 8, lowest_layer = 4, start_index = 0
         const depth = 8;
         const lowest_layer = 4;
@@ -787,71 +802,84 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         std.debug.print("DEBUG: Building tree from layer {} to layer {}\n", .{ lowest_layer, depth });
         std.debug.print("DEBUG: Starting with {} bottom tree roots\n", .{roots_of_bottom_trees.len});
 
-        // Each node in the tree is an array of 8 field elements (HASH_LEN_FE = 8)
-        // The input is already arrays of 8 field elements
-        var current_layer = try self.allocator.alloc([8]FieldElement, roots_of_bottom_trees.len);
+        // Convert bottom tree roots to the format expected by the tree building algorithm
+        const lowest_layer_nodes = try self.allocator.alloc([8]FieldElement, roots_of_bottom_trees.len);
+        @memcpy(lowest_layer_nodes, roots_of_bottom_trees);
 
-        // Copy the arrays directly
-        @memcpy(current_layer, roots_of_bottom_trees);
+        // Start with the lowest layer, padded accordingly (matching Rust HashTreeLayer::padded)
+        const initial_padded = try self.padLayer(lowest_layer_nodes, start_index);
+        self.allocator.free(lowest_layer_nodes);
+
+        std.debug.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
+
+        // Build tree layer by layer (matching Rust exactly)
+        var current_layer = initial_padded;
         var current_level: usize = lowest_layer;
 
-        // Build tree from layer 4 to layer 7 (parent of root level 8)
         while (current_level < depth - 1) {
             const next_level = current_level + 1;
-            const next_layer_size = (current_layer.len + 1) / 2;
-            var next_layer = try self.allocator.alloc([8]FieldElement, next_layer_size);
 
-            std.debug.print("DEBUG: Layer {} -> {}: {} nodes -> {} nodes\n", .{ current_level, next_level, current_layer.len, next_layer_size });
+            std.debug.print("DEBUG: Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, next_level, current_layer.nodes.len, current_layer.start_index });
 
-            // Hash pairs of children to get parents
-            for (0..next_layer_size) |i| {
+            // Parent layer starts at half the previous start index (matching Rust)
+            const parent_start = current_layer.start_index >> 1;
+
+            // Compute all parents by pairing children two-by-two (matching Rust par_chunks_exact(2))
+            const parents_len = current_layer.nodes.len / 2; // This is guaranteed to be exact due to padding
+            var parents = try self.allocator.alloc([8]FieldElement, parents_len);
+
+            std.debug.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
+
+            for (0..parents_len) |i| {
+                // Hash two children together (matching Rust exactly)
                 const left_idx = i * 2;
                 const right_idx = i * 2 + 1;
 
-                if (right_idx < current_layer.len) {
-                    // Hash two children together
-                    const left = current_layer[left_idx];
-                    const right = current_layer[right_idx];
+                const left = current_layer.nodes[left_idx];
+                const right = current_layer.nodes[right_idx];
 
-                    // Convert arrays to slices for hashing and concatenate them
-                    const left_slice = left[0..];
-                    const right_slice = right[0..];
+                // Convert arrays to slices for hashing and concatenate them
+                const left_slice = left[0..];
+                const right_slice = right[0..];
 
-                    // Concatenate left and right children for hashing (matching Rust implementation)
-                    var combined_children = try self.allocator.alloc(FieldElement, left_slice.len + right_slice.len);
-                    defer self.allocator.free(combined_children);
-                    @memcpy(combined_children[0..left_slice.len], left_slice);
-                    @memcpy(combined_children[left_slice.len..], right_slice);
+                // Concatenate left and right children for hashing (matching Rust implementation)
+                var combined_children = try self.allocator.alloc(FieldElement, left_slice.len + right_slice.len);
+                defer self.allocator.free(combined_children);
+                @memcpy(combined_children[0..left_slice.len], left_slice);
+                @memcpy(combined_children[left_slice.len..], right_slice);
 
-                    // Use tree tweak for this level and position
-                    const parent_pos = @as(u32, @intCast(start_index + i));
-                    const hash_result = try self.applyPoseidonTreeTweakHash(combined_children, @as(u8, @intCast(next_level + 1)), parent_pos, parameter);
-                    defer self.allocator.free(hash_result);
+                // Use tree tweak for this level and position (matching Rust exactly)
+                const parent_pos = @as(u32, @intCast(parent_start + i));
+                const hash_result = try self.applyPoseidonTreeTweakHash(combined_children, @as(u8, @intCast(current_level + 1)), parent_pos, parameter);
+                defer self.allocator.free(hash_result);
 
-                    // Copy the result to the next layer (all 8 elements)
-                    @memcpy(next_layer[i][0..], hash_result[0..8]);
+                // Copy the result to the parents array (all 8 elements)
+                @memcpy(parents[i][0..], hash_result[0..8]);
 
-                    std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, next_layer[i][0].value });
-                } else if (left_idx < current_layer.len) {
-                    // Odd number of elements, copy the last one
-                    next_layer[i] = current_layer[left_idx];
-                    std.debug.print("DEBUG: Copy [{}] = 0x{x}\n", .{ i, next_layer[i][0].value });
-                } else {
-                    std.debug.print("ERROR: Index out of bounds - left_idx: {}, right_idx: {}, nodes.len: {}\n", .{ left_idx, right_idx, current_layer.len });
-                    return error.IndexOutOfBounds;
-                }
+                std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
             }
 
-            self.allocator.free(current_layer);
-            current_layer = next_layer;
+            // Free the current layer before creating the new one
+            self.allocator.free(current_layer.nodes);
+
+            // Add the new layer with padding so next iteration also has even start and length (matching Rust)
+            const new_layer = try self.padLayer(parents, parent_start);
+            self.allocator.free(parents);
+
+            current_layer = new_layer;
+
+            std.debug.print("DEBUG: After padding: {} nodes (start_index: {})\n", .{ current_layer.nodes.len, current_layer.start_index });
+
             current_level = next_level;
         }
 
         // The root is the first node of the top layer, which is an array of 8 field elements
-        const root_array = current_layer[0];
+        const root_array = current_layer.nodes[0];
         std.debug.print("DEBUG: Final root array: {any}\n", .{root_array});
 
-        self.allocator.free(current_layer);
+        // Free the final layer
+        self.allocator.free(current_layer.nodes);
+
         return root_array;
     }
 
@@ -926,7 +954,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Generate random PRF key (matching Rust PRF::key_gen)
-    fn generateRandomPRFKey(self: *GeneralizedXMSSSignatureScheme) ![32]u8 {
+    pub fn generateRandomPRFKey(self: *GeneralizedXMSSSignatureScheme) ![32]u8 {
         // Generate 32 bytes using rng.fill() which matches Rust rng.random() for arrays
         var prf_key: [32]u8 = undefined;
         self.rng.fill(&prf_key);
@@ -935,7 +963,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Generate random parameter (matching Rust TH::rand_parameter)
     /// Rust generates field elements using rng.random() for the entire array
-    fn generateRandomParameter(self: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
+    pub fn generateRandomParameter(self: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
         // Generate 5 field elements using rng.random() for the entire array (matching Rust exactly)
         // This matches Rust's rng.random::<[KoalaBear; 5]>() call
         var parameter: [5]FieldElement = undefined;
@@ -944,23 +972,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // This ensures the same RNG consumption pattern as Rust
         for (0..5) |i| {
             const random_value = self.rng.random().int(u32);
-            // Apply halving to match Rust's public key parameter storage behavior
-            // Rust generates u32 values but stores them as halved values in the public key
-            const halved_value = random_value / 2;
-            parameter[i] = FieldElement{ .value = halved_value };
+            // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
+            // This ensures the value is less than the KoalaBear modulus (2^31 - 2^24 + 1)
+            const field_value = random_value >> 1;
+            parameter[i] = FieldElement{ .value = field_value };
 
-            // Debug: Print each random value and its halved version
-            std.debug.print("DEBUG: Parameter[{}] = 0x{x} ({}) -> halved to 0x{x} ({})\n", .{ i, random_value, random_value, halved_value, halved_value });
+            // Debug: Print each random value
+            std.debug.print("DEBUG: Parameter[{}] = 0x{x} ({}) from random 0x{x}\n", .{ i, field_value, field_value, random_value });
         }
 
         return parameter;
     }
 
     /// Generate random domain elements for padding (matching Rust TH::rand_domain)
-    fn generateRandomDomain(self: *GeneralizedXMSSSignatureScheme, count: usize) ![8]FieldElement {
+    pub fn generateRandomDomain(self: *GeneralizedXMSSSignatureScheme, count: usize) ![8]FieldElement {
         var result: [8]FieldElement = undefined;
         for (0..count) |i| {
-            result[i] = FieldElement{ .value = self.rng.random().int(u32) };
+            const random_value = self.rng.random().int(u32);
+            // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
+            result[i] = FieldElement{ .value = random_value >> 1 };
         }
         // Fill remaining with zeros
         for (count..8) |i| {

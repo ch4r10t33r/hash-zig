@@ -1,48 +1,63 @@
 const std = @import("std");
 const hash_zig = @import("src/root.zig");
+const ShakePRFtoF_8_7 = hash_zig.ShakePRFtoF_8_7;
+const FieldElement = hash_zig.FieldElement;
 
 pub fn main() !void {
-    std.debug.print("=== Chain Computation Debug ===\n", .{});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    // Use the same seed as the comparison test
-    const seed = [_]u8{0x42} ** 32;
+    std.debug.print("=== Testing Chain Computation ===\n", .{});
 
-    // Initialize RNG
-    var rng = hash_zig.prf.ChaCha12Rng.init(seed);
+    // Use the same PRF key and parameters as the benchmark
+    const prf_key = [_]u8{
+        0x7e, 0x26, 0xe9, 0xc3, 0x88, 0xd1, 0x2b, 0xe8,
+        0x17, 0x90, 0xcc, 0xc9, 0x32, 0x42, 0x4b, 0x20,
+        0xdb, 0x4e, 0x16, 0xb9, 0x62, 0x60, 0xac, 0x40,
+        0x6e, 0x21, 0x2b, 0x36, 0x25, 0x14, 0x9e, 0xad,
+    };
 
-    std.debug.print("SEED: {x}\n", .{std.fmt.fmtSliceHexUpper(&seed)});
+    const parameter = [_]FieldElement{
+        FieldElement{ .value = 1128497561 },
+        FieldElement{ .value = 1847509114 },
+        FieldElement{ .value = 1994249188 },
+        FieldElement{ .value = 1874424621 },
+        FieldElement{ .value = 1302548296 },
+    };
 
-    // Generate parameters and PRF key (same as before)
-    var parameter: [5]hash_zig.core.FieldElement = undefined;
-    for (0..5) |i| {
-        parameter[i] = hash_zig.core.FieldElement{ .value = rng.random().int(u32) };
+    // Create a scheme to test chain computation
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, [_]u8{0x42} ** 32);
+    defer scheme.deinit();
+
+    std.debug.print("Testing chain computation for epoch=0, chain=0:\n", .{});
+
+    // Get domain elements
+    const domain_elements = ShakePRFtoF_8_7.getDomainElement(prf_key, 0, 0);
+    std.debug.print("Domain elements: {any}\n", .{domain_elements});
+
+    // Convert to field elements
+    var current: [8]FieldElement = undefined;
+    for (0..8) |i| {
+        current[i] = FieldElement{ .value = domain_elements[i] };
+    }
+    std.debug.print("Initial field elements: {any}\n", .{current});
+
+    // Simulate chain computation (BASE-1 steps)
+    const base = 8; // From LIFETIME_2_8_PARAMS
+    for (0..base - 1) |j| {
+        const pos_in_chain = @as(u8, @intCast(j + 1));
+        std.debug.print("\nChain step {} (pos_in_chain={}):\n", .{ j, pos_in_chain });
+        std.debug.print("  Input: {any}\n", .{current});
+
+        // Apply chain tweak hash
+        const next = try scheme.applyPoseidonChainTweakHash(current, 0, 0, pos_in_chain, parameter);
+        std.debug.print("  Output: {any}\n", .{next});
+
+        // Update current state
+        current = next;
     }
 
-    var prf_key: [32]u8 = undefined;
-    rng.fill(&prf_key);
-
-    std.debug.print("Parameter: {any}\n", .{parameter});
-    std.debug.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
-
-    // Test the first few domain elements and chain computations
-    std.debug.print("\nTesting domain elements and chain computations:\n", .{});
-
-    // Test domain element generation for epoch 0, chain 0
-    const domain_elements_0_0 = hash_zig.prf.ShakePRFtoF_8_7.getDomainElement(prf_key, 0, 0);
-    std.debug.print("Domain elements for epoch 0, chain 0: {any}\n", .{domain_elements_0_0});
-
-    // Test domain element generation for epoch 0, chain 1
-    const domain_elements_0_1 = hash_zig.prf.ShakePRFtoF_8_7.getDomainElement(prf_key, 0, 1);
-    std.debug.print("Domain elements for epoch 0, chain 1: {any}\n", .{domain_elements_0_1});
-
-    // Test domain element generation for epoch 1, chain 0
-    const domain_elements_1_0 = hash_zig.prf.ShakePRFtoF_8_7.getDomainElement(prf_key, 1, 0);
-    std.debug.print("Domain elements for epoch 1, chain 0: {any}\n", .{domain_elements_1_0});
-
-    // Check RNG state after domain element generation
-    std.debug.print("\nRNG state after domain element generation:\n", .{});
-    for (0..10) |i| {
-        const val = rng.random().int(u32);
-        std.debug.print("  [{}] = {}\n", .{ i, val });
-    }
+    std.debug.print("\nFinal chain end: {any}\n", .{current});
+    std.debug.print("Chain end value: 0x{x}\n", .{current[0].value});
 }

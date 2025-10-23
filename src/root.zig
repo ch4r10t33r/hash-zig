@@ -13,7 +13,7 @@ pub const wots = @import("wots/mod.zig");
 pub const merkle = @import("merkle/mod.zig");
 pub const signature = @import("signature/mod.zig");
 pub const utils = @import("utils/mod.zig");
-pub const poseidon = @import("poseidon");
+pub const poseidon2 = @import("poseidon2/root.zig");
 
 // Note: SIMD implementations (simd_signature, simd_winternitz, etc.) are available
 // as separate modules in build.zig. Access them via:
@@ -60,8 +60,8 @@ pub const serialization = @import("signature/serialization.zig");
 pub const HashSignatureShakeCompatLegacy = signature.HashSignatureShakeCompatLegacy;
 
 // Rust-compatible exports from zig-poseidon
-pub const TargetSumEncoding = poseidon.TargetSumEncoding;
-pub const TopLevelPoseidonMessageHash = poseidon.TopLevelPoseidonMessageHash;
+pub const TargetSumEncoding = poseidon2.TargetSumEncoding;
+pub const TopLevelPoseidonMessageHash = poseidon2.TopLevelPoseidonMessageHash;
 
 // Export modules for testing
 pub const chacha12_rng = @import("prf/chacha12_rng.zig");

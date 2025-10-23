@@ -75,3 +75,5 @@ benchmark/zig_benchmark/zig-out/
 benchmark/rust_benchmark/target/
 benchmark/rust_benchmark/.cargo_home/
 benchmark/rust_benchmark/.cargo/
+context.md
+debug_*
