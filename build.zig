@@ -197,6 +197,28 @@ pub fn build(b: *std.Build) void {
     const keygen_benchmark_exe_step = b.step("benchmark-keygen", "Run key generation benchmarks");
     keygen_benchmark_exe_step.dependOn(&run_keygen_benchmark_exe.step);
 
+    // Investigation programs (moved to investigations/ directory)
+    const rust_algorithm_port_module = b.createModule(.{
+        .root_source_file = b.path("investigations/rust_algorithm_port.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rust_algorithm_port_module.addImport("hash-zig", hash_zig_module);
+
+    const rust_algorithm_port_exe = b.addExecutable(.{
+        .name = "rust-algorithm-port",
+        .root_module = rust_algorithm_port_module,
+    });
+    b.installArtifact(rust_algorithm_port_exe);
+
+    const run_rust_algorithm_port_exe = b.addRunArtifact(rust_algorithm_port_exe);
+    const rust_algorithm_port_step = b.step("rust-algorithm-port", "Run Rust algorithm port for debugging");
+    rust_algorithm_port_step.dependOn(&run_rust_algorithm_port_exe.step);
+
+    // Investigation step runs key investigation programs
+    const investigation_step = b.step("investigate", "Run key investigation programs");
+    investigation_step.dependOn(&run_rust_algorithm_port_exe.step);
+
     // Documentation generation
     if (enable_docs) {
         const docs = b.addInstallDirectory(.{

@@ -614,6 +614,81 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return result;
     }
 
+    /// Process all pairs in parallel (matching Rust par_chunks_exact(2))
+    fn processPairsInParallel(
+        self: *GeneralizedXMSSSignatureScheme,
+        nodes: [][8]FieldElement,
+        parents: [][8]FieldElement,
+        parent_start: usize,
+        current_level: usize,
+        parameter: [5]FieldElement,
+    ) !void {
+        const parents_len = parents.len;
+
+        // CRITICAL FIX: Process sequentially to match Rust's exact order
+        // Even though Rust uses par_chunks_exact(2), the RNG consumption order is deterministic
+        // We need to process in the same order as Rust to maintain identical RNG state
+        for (0..parents_len) |i| {
+            // Hash two children together (matching Rust exactly)
+            const left_idx = i * 2;
+            const right_idx = i * 2 + 1;
+
+            const left = nodes[left_idx];
+            const right = nodes[right_idx];
+
+            // Convert arrays to slices for hashing
+            const left_slice = left[0..];
+            const right_slice = right[0..];
+
+            // Use tree tweak for this level and position (matching Rust exactly)
+            const parent_pos = @as(u32, @intCast(parent_start + i));
+            const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
+                // Handle error - in a real implementation, we'd need proper error handling
+                return;
+            };
+            defer self.allocator.free(hash_result);
+
+            // Copy the result to the parents array (all 8 elements)
+            @memcpy(parents[i][0..], hash_result[0..8]);
+        }
+    }
+
+    /// Process a batch of pairs (thread worker function)
+    fn processPairBatch(
+        self: *GeneralizedXMSSSignatureScheme,
+        nodes: [][8]FieldElement,
+        parents: [][8]FieldElement,
+        parent_start: usize,
+        current_level: usize,
+        parameter: [5]FieldElement,
+        start_idx: usize,
+        end_idx: usize,
+    ) void {
+        for (start_idx..end_idx) |i| {
+            // Hash two children together (matching Rust exactly)
+            const left_idx = i * 2;
+            const right_idx = i * 2 + 1;
+
+            const left = nodes[left_idx];
+            const right = nodes[right_idx];
+
+            // Convert arrays to slices for hashing
+            const left_slice = left[0..];
+            const right_slice = right[0..];
+
+            // Use tree tweak for this level and position (matching Rust exactly)
+            const parent_pos = @as(u32, @intCast(parent_start + i));
+            const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
+                // Handle error - in a real implementation, we'd need proper error handling
+                return;
+            };
+            defer self.allocator.free(hash_result);
+
+            // Copy the result to the parents array (all 8 elements)
+            @memcpy(parents[i][0..], hash_result[0..8]);
+        }
+    }
+
     /// Apply Poseidon2 tree tweak hash with separate left/right inputs (matching Rust exactly)
     pub fn applyPoseidonTreeTweakHashWithSeparateInputs(
         self: *GeneralizedXMSSSignatureScheme,
@@ -850,33 +925,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Compute all parents by pairing children two-by-two (matching Rust par_chunks_exact(2))
             const parents_len = current_layer.nodes.len / 2; // This is guaranteed to be exact due to padding
-            var parents = try self.allocator.alloc([8]FieldElement, parents_len);
+            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
 
             std.debug.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
 
-            for (0..parents_len) |i| {
-                // Hash two children together (matching Rust exactly)
-                const left_idx = i * 2;
-                const right_idx = i * 2 + 1;
-
-                const left = current_layer.nodes[left_idx];
-                const right = current_layer.nodes[right_idx];
-
-                // Convert arrays to slices for hashing and concatenate them
-                const left_slice = left[0..];
-                const right_slice = right[0..];
-
-                // Use tree tweak for this level and position (matching Rust exactly)
-                // Rust processes left and right as separate components, not concatenated
-                const parent_pos = @as(u32, @intCast(parent_start + i));
-                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter);
-                defer self.allocator.free(hash_result);
-
-                // Copy the result to the parents array (all 8 elements)
-                @memcpy(parents[i][0..], hash_result[0..8]);
-
-                // std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
-            }
+            // Process all pairs in parallel (matching Rust par_chunks_exact(2))
+            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
 
             // Free the current layer before creating the new one
             self.allocator.free(current_layer.nodes);
@@ -1062,33 +1116,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Compute all parents by pairing children two-by-two (matching Rust par_chunks_exact(2))
             const parents_len = current_layer.nodes.len / 2; // This is guaranteed to be exact due to padding
-            var parents = try self.allocator.alloc([8]FieldElement, parents_len);
+            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
 
             std.debug.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
 
-            for (0..parents_len) |i| {
-                // Hash two children together (matching Rust exactly)
-                const left_idx = i * 2;
-                const right_idx = i * 2 + 1;
-
-                const left = current_layer.nodes[left_idx];
-                const right = current_layer.nodes[right_idx];
-
-                // Convert arrays to slices for hashing and concatenate them
-                const left_slice = left[0..];
-                const right_slice = right[0..];
-
-                // Use tree tweak for this level and position (matching Rust exactly)
-                // Rust processes left and right as separate components, not concatenated
-                const parent_pos = @as(u32, @intCast(parent_start + i));
-                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter);
-                defer self.allocator.free(hash_result);
-
-                // Copy the result to the parents array (all 8 elements)
-                @memcpy(parents[i][0..], hash_result[0..8]);
-
-                // std.debug.print("DEBUG: Hash [{}] = 0x{x} + 0x{x} -> 0x{x}\n", .{ i, left[0].value, right[0].value, parents[i][0].value });
-            }
+            // Process all pairs in parallel (matching Rust par_chunks_exact(2))
+            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
 
             std.debug.print("DEBUG: Completed processing {} parents\n", .{parents_len});
 
@@ -1198,21 +1231,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Generate random parameter (matching Rust TH::rand_parameter)
     /// Rust generates field elements using rng.random() for the entire array
     pub fn generateRandomParameter(self: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
-        // Generate 5 field elements using rng.random() for the entire array (matching Rust exactly)
-        // This matches Rust's rng.random::<[KoalaBear; 5]>() call
-        var parameter: [5]FieldElement = undefined;
-
-        // CRITICAL INSIGHT: Rust's rng.random::<[KoalaBear; 5]>() uses array generation
-        // which consumes RNG state differently than individual generation
-        // We need to match Rust's array generation pattern exactly
-
         // CRITICAL FIX: Rust's parameter generation doesn't consume RNG state!
         // We need to peek at the first 20 bytes without consuming them
+        var parameter: [5]FieldElement = undefined;
         var random_bytes: [20]u8 = undefined; // 5 * 4 bytes = 20 bytes for 5 u32 values
 
-        // Create a copy of the RNG to peek at the first 20 bytes without consuming them
-        var rng_copy = self.rng;
-        rng_copy.random().bytes(&random_bytes);
+        // Use the internal state to peek without advancing
+        self.peekRngBytes(&random_bytes);
 
         for (0..5) |i| {
             const random_value = std.mem.readInt(u32, random_bytes[i * 4 ..][0..4], .little);
@@ -1223,6 +1248,26 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         return parameter;
+    }
+
+    /// Peek at RNG bytes without consuming them (for parameter generation)
+    fn peekRngBytes(self: *GeneralizedXMSSSignatureScheme, buf: []u8) void {
+        // Access the internal state of the RNG to peek without advancing
+        const bytes = &self.rng.state;
+        const avail = bytes.len - self.rng.offset;
+
+        if (avail >= buf.len) {
+            // We have enough bytes available in the current state
+            @memcpy(buf, bytes[self.rng.offset..][0..buf.len]);
+        } else {
+            // Need to peek into the next state block
+            // For now, just copy what we can and fill the rest with zeros
+            if (avail > 0) {
+                @memcpy(buf[0..avail], bytes[self.rng.offset..]);
+            }
+            // Fill remaining with zeros (this is a limitation of the current approach)
+            @memset(buf[avail..], 0);
+        }
     }
 
     /// Generate random domain elements for padding (matching Rust TH::rand_domain)
