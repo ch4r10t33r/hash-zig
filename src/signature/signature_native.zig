@@ -627,7 +627,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Match Rust: let tweak_level = (level as u8) + 1;
         const tweak_level = level + 1;
         const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
-        std.debug.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ level, pos_in_level, tweak_bigint });
+        std.debug.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
 
         // Convert to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
@@ -671,6 +671,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const hash_result = try self.poseidon2.hashFieldElements(self.allocator, combined_input);
         defer self.allocator.free(hash_result);
 
+        // DETAILED HASH LOGGING: Log input and output for debugging
+        std.debug.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
+        for (combined_input, 0..) |fe, i| {
+            std.debug.print("{}:0x{x}", .{ i, fe.value });
+            if (i < combined_input.len - 1) std.debug.print(", ", .{});
+        }
+        std.debug.print("\n", .{});
+
+        std.debug.print("DEBUG: Hash output ({} elements): ", .{hash_result.len});
+        for (hash_result, 0..) |fe, i| {
+            std.debug.print("{}:0x{x}", .{ i, fe.value });
+            if (i < hash_result.len - 1) std.debug.print(", ", .{});
+        }
+        std.debug.print("\n", .{});
+
         // Return result with hash_len_fe elements (8 for tree hashing)
         const result = try self.allocator.alloc(FieldElement, self.lifetime_params.hash_len_fe);
         for (0..self.lifetime_params.hash_len_fe) |i| {
@@ -691,7 +706,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Match Rust: let tweak_level = (level as u8) + 1;
         const tweak_level = level + 1;
         const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
-        std.debug.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ level, pos_in_level, tweak_bigint });
+        std.debug.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
 
         // Convert to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
@@ -728,6 +743,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Apply Poseidon2-24 for tree hashing (matching Rust implementation)
         const hash_result = try self.poseidon2.hashFieldElements(self.allocator, combined_input);
         defer self.allocator.free(hash_result);
+
+        // DETAILED HASH LOGGING: Log input and output for debugging
+        std.debug.print("DEBUG: Tree Hash input ({} elements): ", .{combined_input.len});
+        for (combined_input, 0..) |fe, i| {
+            std.debug.print("{}:0x{x}", .{ i, fe.value });
+            if (i < combined_input.len - 1) std.debug.print(", ", .{});
+        }
+        std.debug.print("\n", .{});
+
+        std.debug.print("DEBUG: Tree Hash output ({} elements): ", .{hash_result.len});
+        for (hash_result, 0..) |fe, i| {
+            std.debug.print("{}:0x{x}", .{ i, fe.value });
+            if (i < hash_result.len - 1) std.debug.print(", ", .{});
+        }
+        std.debug.print("\n", .{});
 
         // Return result with hash_len_fe elements (8 for tree hashing)
         const result = try self.allocator.alloc(FieldElement, self.lifetime_params.hash_len_fe);
@@ -829,7 +859,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Use tree tweak for this level and position (matching Rust exactly)
                 // Rust processes left and right as separate components, not concatenated
                 const parent_pos = @as(u32, @intCast(parent_start + i));
-                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level + 1)), parent_pos, parameter);
+                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter);
                 defer self.allocator.free(hash_result);
 
                 // Copy the result to the parents array (all 8 elements)
@@ -1003,7 +1033,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Use tree tweak for this level and position (matching Rust exactly)
                 // Rust processes left and right as separate components, not concatenated
                 const parent_pos = @as(u32, @intCast(parent_start + i));
-                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level + 1)), parent_pos, parameter);
+                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter);
                 defer self.allocator.free(hash_result);
 
                 // Copy the result to the parents array (all 8 elements)
@@ -1128,10 +1158,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // which consumes RNG state differently than individual generation
         // We need to match Rust's array generation pattern exactly
 
-        // Generate all 5 field elements in a single RNG call (matching Rust's array generation)
-        // This matches Rust's rng.random::<[KoalaBear; 5]>() call exactly
+        // CRITICAL FIX: Rust's parameter generation doesn't consume RNG state!
+        // We need to peek at the first 20 bytes without consuming them
         var random_bytes: [20]u8 = undefined; // 5 * 4 bytes = 20 bytes for 5 u32 values
-        self.rng.random().bytes(&random_bytes);
+
+        // Create a copy of the RNG to peek at the first 20 bytes without consuming them
+        var rng_copy = self.rng;
+        rng_copy.random().bytes(&random_bytes);
 
         for (0..5) |i| {
             const random_value = std.mem.readInt(u32, random_bytes[i * 4 ..][0..4], .little);
@@ -1242,6 +1275,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         std.debug.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
         std.debug.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
         std.debug.print("DEBUG: Parameter: {any}\n", .{parameter});
+
+        std.debug.print("DEBUG: Expansion result: start={}, end={}\n", .{ expansion_result.start, expansion_result.end });
 
         // Generate left and right bottom trees (first two)
         const left_bottom_tree_index = expansion_result.start;
