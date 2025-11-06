@@ -228,35 +228,58 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
     const nodes_array = maybe_nodes orelse return error.MissingNodesField;
     if (nodes_array != .array) return error.InvalidJsonFormat;
 
-    // Expect array of arrays where each inner array has 8 elements
+    // Expect array of arrays where each inner array has 7 or 8 elements (depending on lifetime)
     const path_nodes = try allocator.alloc([8]FieldElement, nodes_array.array.items.len);
     for (nodes_array.array.items, 0..) |node_val, i| {
-        if (node_val != .array or node_val.array.items.len != 8) return error.InvalidJsonFormat;
-        for (node_val.array.items, 0..) |fe_val, j| {
-            path_nodes[i][j] = try parseFieldElementFromJsonValue(fe_val);
+        if (node_val != .array) return error.InvalidJsonFormat;
+        const node_len = node_val.array.items.len;
+        if (node_len < 7 or node_len > 8) return error.InvalidJsonFormat;
+        
+        // Copy node elements (7 or 8)
+        for (0..node_len) |j| {
+            path_nodes[i][j] = try parseFieldElementFromJsonValue(node_val.array.items[j]);
+        }
+        // Pad with zeros if node has 7 elements (for lifetime 2^18)
+        for (node_len..8) |j| {
+            path_nodes[i][j] = FieldElement{ .value = 0 };
         }
     }
 
     const path = try HashTreeOpening.init(allocator, path_nodes);
 
-    // Parse rho
+    // Parse rho (6 for lifetime 2^18, 7 for lifetime 2^8)
     const rho_array = obj.get("rho") orelse return error.MissingRhoField;
-    if (rho_array != .array or rho_array.array.items.len != 7) return error.InvalidJsonFormat;
+    if (rho_array != .array) return error.InvalidJsonFormat;
+    const rho_len = rho_array.array.items.len;
+    if (rho_len < 6 or rho_len > 7) return error.InvalidJsonFormat;
 
     var rho: [7]FieldElement = undefined;
-    for (rho_array.array.items, 0..) |item, i| {
-        rho[i] = try parseFieldElementFromJsonValue(item);
+    for (0..rho_len) |i| {
+        rho[i] = try parseFieldElementFromJsonValue(rho_array.array.items[i]);
+    }
+    // Pad with zeros if rho has 6 elements (for lifetime 2^18)
+    for (rho_len..7) |i| {
+        rho[i] = FieldElement{ .value = 0 };
     }
 
-    // Parse hashes as array of arrays-of-8
+    // Parse hashes as array of arrays (7 or 8 elements depending on lifetime)
+    // Hash length can vary: 7 for lifetime 2^18, 8 for lifetime 2^8
     const hashes_array = obj.get("hashes") orelse return error.MissingHashesField;
     if (hashes_array != .array) return error.InvalidJsonFormat;
 
     const hashes_domains = try allocator.alloc([8]FieldElement, hashes_array.array.items.len);
     for (hashes_array.array.items, 0..) |domain_val, i| {
-        if (domain_val != .array or domain_val.array.items.len != 8) return error.InvalidJsonFormat;
-        for (domain_val.array.items, 0..) |fe_val, j| {
-            hashes_domains[i][j] = try parseFieldElementFromJsonValue(fe_val);
+        if (domain_val != .array) return error.InvalidJsonFormat;
+        const domain_len = domain_val.array.items.len;
+        if (domain_len < 7 or domain_len > 8) return error.InvalidJsonFormat;
+        
+        // Copy domain elements (7 or 8)
+        for (0..domain_len) |j| {
+            hashes_domains[i][j] = try parseFieldElementFromJsonValue(domain_val.array.items[j]);
+        }
+        // Pad with zeros if domain has 7 elements (for lifetime 2^18)
+        for (domain_len..8) |j| {
+            hashes_domains[i][j] = FieldElement{ .value = 0 };
         }
     }
 
@@ -304,12 +327,20 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
     const obj = parsed.value.object;
 
     // Parse root (as array to match Rust)
+    // Root length can vary: 7 for lifetime 2^18, 8 for lifetime 2^8
     const root_array = obj.get("root") orelse return error.MissingRootField;
-    if (root_array != .array or root_array.array.items.len != 8) return error.InvalidJsonFormat;
+    if (root_array != .array) return error.InvalidJsonFormat;
+    const root_len = root_array.array.items.len;
+    if (root_len < 7 or root_len > 8) return error.InvalidJsonFormat;
 
     var root: [8]FieldElement = undefined;
-    for (root_array.array.items, 0..) |item, i| {
-        root[i] = try parseFieldElementFromJsonValue(item);
+    // Copy root elements (7 or 8)
+    for (0..root_len) |i| {
+        root[i] = try parseFieldElementFromJsonValue(root_array.array.items[i]);
+    }
+    // Pad with zeros if root has 7 elements (for lifetime 2^18)
+    for (root_len..8) |i| {
+        root[i] = FieldElement{ .value = 0 };
     }
 
     // Parse parameter

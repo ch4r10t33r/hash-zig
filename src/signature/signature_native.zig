@@ -480,8 +480,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 chain_domains[chain_index] = chain_end_domain;
             }
 
-            // Reduce chain domains to a single 8-wide leaf domain using tree-tweak hashing
-            const leaf_domain = try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)));
+            // Reduce chain domains to a single leaf domain using tree-tweak hashing
+            const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)));
+            defer self.allocator.free(leaf_domain_slice);
+            // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+            var leaf_domain: [8]FieldElement = undefined;
+            const hash_len = self.lifetime_params.hash_len_fe;
+            for (0..hash_len) |i| {
+                leaf_domain[i] = leaf_domain_slice[i];
+            }
+            for (hash_len..8) |i| {
+                leaf_domain[i] = FieldElement{ .value = 0 };
+            }
             leaf_domains[epoch - epoch_range_start] = leaf_domain;
 
             // Debug: Print leaf domain head for all epochs in first bottom tree
@@ -697,8 +707,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const right = nodes[right_idx];
 
             // Convert arrays to slices for hashing
-            const left_slice = left[0..];
-            const right_slice = right[0..];
+            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            const hash_len = self.lifetime_params.hash_len_fe;
+            const left_slice = left[0..hash_len];
+            const right_slice = right[0..hash_len];
 
             // Use tree tweak for this level and position (matching Rust exactly)
             const parent_pos = @as(u32, @intCast(parent_start + i));
@@ -717,8 +729,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 std.debug.print("ZIG_BUILDTREE_DEBUG:   parent[0]=0x{x:0>8}\n", .{hash_result[0].value});
             }
 
-            // Copy the result to the parents array (all 8 elements)
-            @memcpy(parents[i][0..], hash_result[0..8]);
+            // Copy the result to the parents array (only hash_len_fe elements, pad rest with zeros)
+            for (0..hash_len) |j| {
+                parents[i][j] = hash_result[j];
+            }
+            for (hash_len..8) |j| {
+                parents[i][j] = FieldElement{ .value = 0 };
+            }
         }
     }
 
@@ -816,11 +833,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Use Poseidon2-24 compress (feed-forward) with zero-padding to width 24,
-        // then take the first 8 elements (matching Rust poseidon_compress::<_, 24, 8>)
+        // then take the first hash_len_fe elements (matching Rust poseidon_compress::<_, 24, HASH_LEN>)
         var padded: [24]FieldElement = [_]FieldElement{FieldElement{ .value = 0 }} ** 24;
         for (combined_input, 0..) |fe, i| {
             padded[i] = fe;
         }
+        // compress requires comptime output_len, so use max (8) and slice to hash_len_fe
         const full_out = try self.poseidon2.compress(padded, 8);
         // DETAILED HASH LOGGING
         std.debug.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
@@ -829,15 +847,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (i < combined_input.len - 1) std.debug.print(", ", .{});
         }
         std.debug.print("\n", .{});
-        std.debug.print("DEBUG: Hash output ({} elements): ", .{full_out.len});
-        for (full_out, 0..) |fe, i| {
-            std.debug.print("{}:0x{x}", .{ i, fe.value });
-            if (i < full_out.len - 1) std.debug.print(", ", .{});
+        const hash_len = self.lifetime_params.hash_len_fe;
+        std.debug.print("DEBUG: Hash output (first {} of {} elements): ", .{ hash_len, full_out.len });
+        for (0..hash_len) |i| {
+            std.debug.print("{}:0x{x}", .{ i, full_out[i].value });
+            if (i < hash_len - 1) std.debug.print(", ", .{});
         }
         std.debug.print("\n", .{});
 
-        const result = try self.allocator.alloc(FieldElement, self.lifetime_params.hash_len_fe);
-        for (0..self.lifetime_params.hash_len_fe) |i| {
+        const result = try self.allocator.alloc(FieldElement, hash_len);
+        for (0..hash_len) |i| {
             result[i] = full_out[i];
         }
         return result;
@@ -1000,14 +1019,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return domain;
     }
 
-    /// Reduce 64 chain domains ([8] each) into a single 8-wide leaf domain using Poseidon sponge
+    /// Reduce 64 chain domains ([8] each) into a single leaf domain using Poseidon sponge
     /// This matches Rust's TH::apply when message.len() > 2 (sponge mode)
+    /// Returns hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
     pub fn reduceChainDomainsToLeafDomain(
         self: *GeneralizedXMSSSignatureScheme,
         chain_domains_in: [][8]FieldElement,
         parameter: [5]FieldElement,
         epoch: u32,
-    ) ![8]FieldElement {
+    ) ![]FieldElement {
         if (chain_domains_in.len == 0) return error.InvalidInput;
 
         // Implement the sponge mode matching Rust exactly:
@@ -1136,7 +1156,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Apply Poseidon2-24 sponge (matching Rust's poseidon_sponge)
         const WIDTH: usize = 24;
         const RATE: usize = WIDTH - CAPACITY; // 24 - capacity
-        const OUTPUT_LEN: usize = 8; // Domain size (always 8, not HASH_LEN_FE)
+        const OUTPUT_LEN: usize = self.lifetime_params.hash_len_fe; // Domain size (7 for lifetime 2^18, 8 for lifetime 2^8)
 
         // Pad input to multiple of rate (matching Rust's input_vector.resize)
         const input_remainder = combined_input_monty.len % RATE;
@@ -1256,7 +1276,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Take first OUTPUT_LEN elements (matching Rust's &out[0..OUT_LEN])
-        var result: [OUTPUT_LEN]FieldElement = undefined;
+        var result = try self.allocator.alloc(FieldElement, OUTPUT_LEN);
         for (0..OUTPUT_LEN) |i| {
             result[i] = FieldElement{ .value = out.items[i].toU32() }; // Convert Montgomery to canonical
         }
@@ -2722,7 +2742,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(e)), @as(u8, @intCast(chain_index)), secret_key.parameter);
                 chain_domains[chain_index] = chain_end_domain;
             }
-            const leaf_domain = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
+            const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
+            defer self.allocator.free(leaf_domain_slice);
+            // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+            var leaf_domain: [8]FieldElement = undefined;
+            const hash_len = self.lifetime_params.hash_len_fe;
+            for (0..hash_len) |i| {
+                leaf_domain[i] = leaf_domain_slice[i];
+            }
+            for (hash_len..8) |i| {
+                leaf_domain[i] = FieldElement{ .value = 0 };
+            }
             leaf_domains_bt[e - epoch_range_start] = leaf_domain;
 
             // Debug: log leaf domain for the signing epoch
@@ -2914,15 +2944,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // The sum check is only for signing (to ensure we find a valid encoding)
         const rho = signature.getRho();
 
-        // Debug: log rho values
-        std.debug.print("ZIG_VERIFY_DEBUG: Signature rho: ", .{});
-        for (rho) |fe| {
-            std.debug.print("0x{x:0>8} ", .{fe.value});
+        // Debug: log rho values (only first rand_len_fe elements are used)
+        const rand_len = self.lifetime_params.rand_len_fe;
+        std.debug.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements): ", .{rand_len});
+        for (0..rand_len) |i| {
+            std.debug.print("0x{x:0>8} ", .{rho[i].value});
         }
         std.debug.print("\n", .{});
 
         // Use parameter as-is (canonical); Poseidon handles Montgomery internally
-        const chunks = try self.applyTopLevelPoseidonMessageHash(public_key.parameter, epoch, &rho, message);
+        // Only use first rand_len_fe elements of rho (6 for lifetime 2^18, 7 for lifetime 2^8)
+        const rho_slice = rho[0..rand_len];
+        const chunks = try self.applyTopLevelPoseidonMessageHash(public_key.parameter, epoch, rho_slice, message);
         defer self.allocator.free(chunks);
 
         // Allocate and copy chunks (take first dimension elements)
@@ -3002,13 +3035,23 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
         }
 
-        // 3) Reduce 64 chain domains to a single 8-wide leaf domain using tree-tweak hashing
-        var current_domain = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
+        // 3) Reduce 64 chain domains to a single leaf domain using tree-tweak hashing
+        const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
+        defer self.allocator.free(leaf_domain_slice);
+        // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+        var current_domain: [8]FieldElement = undefined;
+        const hash_len = self.lifetime_params.hash_len_fe;
+        for (0..hash_len) |i| {
+            current_domain[i] = leaf_domain_slice[i];
+        }
+        for (hash_len..8) |i| {
+            current_domain[i] = FieldElement{ .value = 0 };
+        }
 
         // Debug: log leaf domain
         std.debug.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
-        for (current_domain) |fe| {
-            std.debug.print("0x{x:0>8} ", .{fe.value});
+        for (0..hash_len) |i| {
+            std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
         }
         std.debug.print("\n", .{});
 
@@ -3037,8 +3080,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const is_right = !is_left;
 
             // Build children array (matching Rust exactly: [current_node, opening.co_path[l]] for left, [opening.co_path[l], current_node] for right)
-            const left_slice = if (is_left) current_domain[0..] else sibling_domain[0..];
-            const right_slice = if (is_left) sibling_domain[0..] else current_domain[0..];
+            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            // hash_len is already declared above
+            const left_slice = if (is_left) current_domain[0..hash_len] else sibling_domain[0..hash_len];
+            const right_slice = if (is_left) sibling_domain[0..hash_len] else current_domain[0..hash_len];
 
             // Determine new position (position of the parent) - shift BEFORE computing tweak (matching Rust)
             position >>= 1;
@@ -3057,8 +3102,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Debug: log parent after hashing
             std.debug.print("ZIG_VERIFY_DEBUG:   parent[0]=0x{x:0>8}\n", .{parent[0].value});
 
-            // Copy back first 8 elements into current_domain
-            for (0..8) |i| current_domain[i] = parent[i];
+            // Copy back hash_len_fe elements into current_domain (7 for lifetime 2^18, 8 for lifetime 2^8)
+            // current_domain is [8]FieldElement, but we only use the first hash_len_fe elements
+            // hash_len is already declared above
+            for (0..hash_len) |i| current_domain[i] = parent[i];
             level += 1;
         }
         std.debug.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
@@ -3070,8 +3117,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // to canonical for comparison.
         // current_domain is canonical (from Poseidon compress which converts Montgomery to canonical)
         // (F is already declared above)
+        // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
+        const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
-        for (0..8) |i| {
+        for (0..root_len) |i| {
             // Treat JSON root value as Montgomery (matching Rust's serde behavior)
             // Then convert to canonical for comparison with current_domain
             const json_root_as_monty_u32 = public_key.root[i].value;
@@ -3088,12 +3137,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             std.debug.print("ZIG_VERIFY_DEBUG: Root matches! Verification successful.\n", .{});
         } else {
             std.debug.print("ZIG_VERIFY_DEBUG: Root mismatch! Computed root: ", .{});
-            for (current_domain) |fe| {
-                std.debug.print("0x{x:0>8} ", .{fe.value});
+            for (0..root_len) |i| {
+                std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
             }
             std.debug.print("\nZIG_VERIFY_DEBUG: Expected root: ", .{});
-            for (public_key.root) |fe| {
-                std.debug.print("0x{x:0>8} ", .{fe.value});
+            for (0..root_len) |i| {
+                std.debug.print("0x{x:0>8} ", .{public_key.root[i].value});
             }
             std.debug.print("\n", .{});
         }

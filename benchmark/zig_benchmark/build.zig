@@ -56,6 +56,17 @@ pub fn build(b: *std.Build) void {
     verify_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(verify_exe);
 
+    // Add verification binary for lifetime 2^18
+    const verify_18_exe = b.addExecutable(.{
+        .name = "verify_signature_18",
+        .root_source_file = b.path("src/verify_signature_18.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    verify_18_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(verify_18_exe);
+
     // Add internal test binary
     const test_internal_exe = b.addExecutable(.{
         .name = "test_internal",
