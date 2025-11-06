@@ -41,3 +41,7 @@ path = "src/leaf_domain_debug.rs"
 name = "verify_signature_debug"
 path = "src/verify_signature_debug.rs"
 
+[[bin]]
+name = "verify_signature_debug_18"
+path = "src/bin/verify_signature_debug_18.rs"
+

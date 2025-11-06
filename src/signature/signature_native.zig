@@ -653,8 +653,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const plonky3_field = @import("../poseidon2/plonky3_field.zig");
         const F = plonky3_field.KoalaBearField;
 
+        // Only use hash_len_fe elements from input (7 for lifetime 2^18, 8 for lifetime 2^8)
+        const hash_len = self.lifetime_params.hash_len_fe;
+
         // Prepare combined input: parameter (convert to Montgomery) + tweak (convert to Montgomery) + input (already Montgomery)
-        const total_input_len = 5 + 2 + 8;
+        const total_input_len = 5 + 2 + hash_len;
         var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
         defer self.allocator.free(combined_input);
 
@@ -670,17 +673,23 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             combined_input[5 + i] = FieldElement{ .value = monty.value }; // Store Montgomery value
         }
 
-        // Copy input (already in Montgomery form)
-        @memcpy(combined_input[7..15], input[0..8]);
+        // Copy input (already in Montgomery form) - only hash_len_fe elements
+        @memcpy(combined_input[7 .. 7 + hash_len], input[0..hash_len]);
 
         // Apply Poseidon2-16 hash (matching Rust's poseidon_compress with CHAIN_COMPRESSION_WIDTH=16)
         // Rust uses poseidon2_16() for chain hashing, not poseidon2_24()
         const hash_result = try self.poseidon2.hashFieldElements16(self.allocator, combined_input);
         defer self.allocator.free(hash_result);
 
-        // Return first 8 elements as the result (matching Rust's HASH_LEN=8)
+        // Return first hash_len_fe elements as the result (7 for lifetime 2^18, 8 for lifetime 2^8)
+        // But return type is [8]FieldElement, so pad with zeros if hash_len_fe < 8
         var result: [8]FieldElement = undefined;
-        @memcpy(result[0..8], hash_result[0..8]);
+        for (0..hash_len) |i| {
+            result[i] = hash_result[i];
+        }
+        for (hash_len..8) |i| {
+            result[i] = FieldElement{ .value = 0 };
+        }
         return result;
     }
 
@@ -1041,14 +1050,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const HASH_LEN: u32 = @intCast(self.lifetime_params.hash_len_fe);
 
         // Flatten all domains into a single slice (matching Rust: message.iter().flatten())
-        const flattened_len = chain_domains_in.len * 8;
+        // Only use hash_len_fe elements from each domain (7 for lifetime 2^18, 8 for lifetime 2^8)
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const flattened_len = chain_domains_in.len * hash_len;
         var flattened_input = try self.allocator.alloc(FieldElement, flattened_len);
         defer self.allocator.free(flattened_input);
 
         var flat_idx: usize = 0;
         for (chain_domains_in) |domain| {
-            for (domain) |fe| {
-                flattened_input[flat_idx] = fe;
+            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            for (0..hash_len) |j| {
+                flattened_input[flat_idx] = domain[j];
                 flat_idx += 1;
             }
         }
@@ -2987,18 +2999,24 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var final_chain_domains = try self.allocator.alloc([8]FieldElement, hashes.len);
         defer self.allocator.free(final_chain_domains);
 
+        const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
         for (hashes, 0..) |domain, i| {
             // Convert canonical FieldElement values to Montgomery form for chain walking
             // JSON has canonical values, but Rust's chain walking uses Montgomery values
             // We need to convert canonical to Montgomery and keep in Montgomery form
             // Since FieldElement is just u32, we store the Montgomery value directly
+            // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
             var current: [8]FieldElement = undefined;
-            for (0..8) |j| {
+            for (0..hash_len) |j| {
                 // domain[j].value is canonical, convert to Montgomery
                 const monty = F.fromU32(domain[j].value);
                 // Store Montgomery value directly (monty.value is the Montgomery representation)
                 // We can't use toU32() because that converts back to canonical
                 current[j] = FieldElement{ .value = monty.value };
+            }
+            // Pad remaining elements with zeros
+            for (hash_len..8) |j| {
+                current[j] = FieldElement{ .value = 0 };
             }
             const start_pos_in_chain: u8 = x[i];
             const steps: u8 = base_minus_one - start_pos_in_chain;
@@ -3019,10 +3037,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
                 // next is canonical (from compress), but current must remain in Montgomery form
                 // Convert next back to Montgomery to maintain consistency throughout chain walking
+                // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
                 // (F is already declared above)
-                for (0..8) |k| {
+                for (0..hash_len) |k| {
                     const monty = F.fromU32(next[k].value); // Convert canonical to Montgomery
                     current[k] = FieldElement{ .value = monty.value }; // Store Montgomery value directly
+                }
+                // Pad remaining elements with zeros
+                for (hash_len..8) |k| {
+                    current[k] = FieldElement{ .value = 0 };
                 }
                 if (i == 0) {
                     std.debug.print("ZIG_VERIFY_DEBUG: Chain {} step {}: next[0]=0x{x:0>8}\n", .{ i, j, current[0].value });
@@ -3031,7 +3054,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             final_chain_domains[i] = current;
             if (i == 0 or i == 2) {
-                std.debug.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery form)\n", .{ i, current[0].value });
+                // Convert Montgomery to canonical for comparison with Rust
+                const monty_f = F{ .value = current[0].value };
+                const canonical = monty_f.toU32();
+                std.debug.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
             }
         }
 
@@ -3039,8 +3065,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
         defer self.allocator.free(leaf_domain_slice);
         // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+        // hash_len is already declared above (line 2999)
         var current_domain: [8]FieldElement = undefined;
-        const hash_len = self.lifetime_params.hash_len_fe;
         for (0..hash_len) |i| {
             current_domain[i] = leaf_domain_slice[i];
         }
