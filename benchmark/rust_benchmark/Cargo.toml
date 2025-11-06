@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-hashsig = { git = "https://github.com/b-wagn/hash-sig", branch = "main" }
+hashsig = { path = "../rust-hash-sig-source" }
 p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
 p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
 p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
@@ -32,4 +32,12 @@ path = "src/sign_message.rs"
 [[bin]]
 name = "verify_signature"
 path = "src/verify_signature.rs"
+
+[[bin]]
+name = "leaf_domain_debug"
+path = "src/leaf_domain_debug.rs"
+
+[[bin]]
+name = "verify_signature_debug"
+path = "src/verify_signature_debug.rs"
 

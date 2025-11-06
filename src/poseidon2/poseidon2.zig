@@ -462,9 +462,8 @@ fn mds_light_permutation_24(state: []F) void {
 
 // Main permutation function for 24-width
 pub fn poseidon2_24_plonky3(state: []F) void {
-    // Initial MDS transformation (before any rounds)
+    // Try pre-apply MDS light (if Plonky3 variant requires it)
     mds_light_permutation_24(state);
-
     // Initial external rounds
     for (0..4) |i| {
         apply_external_layer_24(state, PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL[i]);
@@ -491,19 +490,28 @@ pub const Poseidon2KoalaBear16Plonky3 = struct {
 
     pub fn compress(_: usize, input: []const u32) [8]u32 {
         var state: [16]F = undefined;
+        var padded_input: [16]F = undefined;
 
-        // Convert input to field elements
+        // Convert input to field elements and pad
         for (0..@min(input.len, 16)) |i| {
-            state[i] = F.fromU32(input[i]);
+            const fe = F.fromU32(input[i]);
+            state[i] = fe;
+            padded_input[i] = fe;
         }
 
         // Pad with zeros if input is shorter than 16
         for (input.len..16) |i| {
             state[i] = F.zero;
+            padded_input[i] = F.zero;
         }
 
         // Apply permutation
         poseidon2_16_plonky3(&state);
+
+        // Feed-forward: Add the input back into the state element-wise (matching Rust's poseidon_compress)
+        for (0..16) |i| {
+            state[i] = state[i].add(padded_input[i]);
+        }
 
         // Convert back to u32 and return first 8 elements
         var result: [8]u32 = undefined;
@@ -530,25 +538,34 @@ pub const Poseidon2KoalaBear24Plonky3 = struct {
         poseidon2_24_plonky3(state);
     }
 
-    pub fn compress(_: usize, input: []const u32) [8]u32 {
+    pub fn compress(_: usize, input: []const u32) [24]u32 {
         var state: [24]F = undefined;
+        var padded_input: [24]F = undefined;
 
-        // Convert input to field elements
+        // Convert input to field elements and pad
         for (0..@min(input.len, 24)) |i| {
-            state[i] = F.fromU32(input[i]);
+            const fe = F.fromU32(input[i]);
+            state[i] = fe;
+            padded_input[i] = fe;
         }
 
         // Pad with zeros if input is shorter than 24
         for (input.len..24) |i| {
             state[i] = F.zero;
+            padded_input[i] = F.zero;
         }
 
-        // Apply permutation
+        // Apply permutation (matching Rust's perm.permute_mut(&mut state))
         poseidon2_24_plonky3(&state);
 
-        // Convert back to u32 and return first 8 elements
-        var result: [8]u32 = undefined;
-        for (0..8) |i| {
+        // Feed-forward: Add the input back into the state element-wise (matching Rust's poseidon_compress)
+        for (0..24) |i| {
+            state[i] = state[i].add(padded_input[i]);
+        }
+
+        // Convert back to u32 and return full state (caller will slice to output_len)
+        var result: [24]u32 = undefined;
+        for (0..24) |i| {
             result[i] = state[i].toU32();
         }
 

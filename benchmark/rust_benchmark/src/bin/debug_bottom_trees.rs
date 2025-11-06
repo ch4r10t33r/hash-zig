@@ -25,14 +25,11 @@ fn main() {
     // Generate keypair to access internal state
     let (pk, sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
     
-    // Try to access internal state for debugging
-    // Note: This might not be possible due to private fields
-    println!("Public key root: {:?}", pk.root);
-    println!("Public key parameter: {:?}", pk.parameter);
+    // Use getter methods to access internal state
+    println!("Public key root: {:?}", pk.get_root());
+    println!("Public key parameter: {:?}", pk.get_parameter());
     
-    // The secret key might have access to bottom tree information
-    // This is a simplified approach - in reality we'd need to modify the Rust crate
-    // to expose the bottom tree roots for debugging
-    println!("Secret key activation epoch: {}", sk.activation_epoch);
-    println!("Secret key num active epochs: {}", sk.num_active_epochs);
+    // Access secret key fields via getters if available
+    // Note: These fields may not have public getters, so we'll skip them for now
+    println!("Keypair generated successfully");
 }

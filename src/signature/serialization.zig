@@ -24,6 +24,59 @@ pub fn deserializeFieldElement(hex_str: []const u8) !FieldElement {
     return FieldElement.fromU32(value);
 }
 
+/// Flexibly parse a FieldElement from a generic JSON value.
+/// Accepts:
+/// - string: hex (with or without 0x) or decimal
+/// - integer/number
+/// - object: tries common wrappers like {"value": X} or single-field unwrap
+/// - array of length 1: unwrap first element
+fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
+    switch (val) {
+        .string => |s| {
+            if (std.mem.startsWith(u8, s, "0x") or std.mem.startsWith(u8, s, "0X")) {
+                return deserializeFieldElement(s);
+            }
+            // try decimal first, then hex fallback
+            if (std.fmt.parseInt(u32, s, 10)) |dec| {
+                return FieldElement.fromU32(dec);
+            } else |_| {}
+            const value = try std.fmt.parseInt(u32, s, 16);
+            return FieldElement.fromU32(value);
+        },
+        .integer => |i| {
+            if (i < 0) return error.InvalidJsonFormat;
+            const as_u64: u64 = @intCast(i);
+            const as_u32: u32 = @intCast(@min(as_u64, @as(u64, std.math.maxInt(u32))));
+            return FieldElement.fromU32(as_u32);
+        },
+        .float => |f| {
+            const clamped: f64 = if (f < 0) 0 else f;
+            const as_u32: u32 = @intFromFloat(@min(clamped, @as(f64, @floatFromInt(std.math.maxInt(u32)))));
+            return FieldElement.fromU32(as_u32);
+        },
+        .object => |o| {
+            if (o.get("value")) |inner| {
+                return parseFieldElementFromJsonValue(inner);
+            }
+            // if single-field object, unwrap its first value
+            if (o.count() == 1) {
+                var it = o.iterator();
+                if (it.next()) |entry| {
+                    return parseFieldElementFromJsonValue(entry.value_ptr.*);
+                }
+            }
+            return error.InvalidJsonFormat;
+        },
+        .array => |arr| {
+            if (arr.items.len == 1) {
+                return parseFieldElementFromJsonValue(arr.items[0]);
+            }
+            return error.InvalidJsonFormat;
+        },
+        else => return error.InvalidJsonFormat,
+    }
+}
+
 /// Serialize a FieldElement array to JSON array of hex strings
 pub fn serializeFieldElementArray(allocator: Allocator, elements: []const FieldElement) ![]u8 {
     var json_parts = std.ArrayList([]u8).init(allocator);
@@ -66,10 +119,7 @@ pub fn deserializeFieldElementArray(allocator: Allocator, json_str: []const u8) 
 
     const elements = try allocator.alloc(FieldElement, parsed.value.array.items.len);
     for (parsed.value.array.items, 0..) |item, i| {
-        if (item != .string) {
-            return error.InvalidJsonFormat;
-        }
-        elements[i] = try deserializeFieldElement(item.string);
+        elements[i] = try parseFieldElementFromJsonValue(item);
     }
 
     return elements;
@@ -82,13 +132,31 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
 
     try result.appendSlice("{");
 
-    // Serialize path using controlled access
+    // Serialize path using controlled access as array of 8-element arrays
     const path = signature.getPath();
     try result.appendSlice("\"path\":{");
     try result.appendSlice("\"nodes\":");
-    const path_json = try serializeFieldElementArray(allocator, path.path);
-    defer allocator.free(path_json);
-    try result.appendSlice(path_json);
+    var nodes_str = std.ArrayList(u8).init(allocator);
+    defer nodes_str.deinit();
+    try nodes_str.append('[');
+    const nodes = path.getNodes();
+    for (nodes, 0..) |node, i| {
+        if (i > 0) try nodes_str.append(',');
+        try nodes_str.append('[');
+        for (node, 0..) |fe, j| {
+            if (j > 0) try nodes_str.append(',');
+            const hex_str = try serializeFieldElement(allocator, fe);
+            defer allocator.free(hex_str);
+            try nodes_str.append('"');
+            try nodes_str.appendSlice(hex_str);
+            try nodes_str.append('"');
+        }
+        try nodes_str.append(']');
+    }
+    try nodes_str.append(']');
+    const nodes_slice = try nodes_str.toOwnedSlice();
+    defer allocator.free(nodes_slice);
+    try result.appendSlice(nodes_slice);
     try result.appendSlice("}");
 
     // Serialize rho using controlled access
@@ -98,12 +166,29 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
     defer allocator.free(rho_json);
     try result.appendSlice(rho_json);
 
-    // Serialize hashes using controlled access
+    // Serialize hashes as array of 8-element arrays (domains)
     try result.appendSlice(",\"hashes\":");
     const hashes = signature.getHashes();
-    const hashes_json = try serializeFieldElementArray(allocator, hashes);
-    defer allocator.free(hashes_json);
-    try result.appendSlice(hashes_json);
+    var hashes_str = std.ArrayList(u8).init(allocator);
+    defer hashes_str.deinit();
+    try hashes_str.append('[');
+    for (hashes, 0..) |domain, i| {
+        if (i > 0) try hashes_str.append(',');
+        try hashes_str.append('[');
+        for (domain, 0..) |fe, j| {
+            if (j > 0) try hashes_str.append(',');
+            const hex_str = try serializeFieldElement(allocator, fe);
+            defer allocator.free(hex_str);
+            try hashes_str.append('"');
+            try hashes_str.appendSlice(hex_str);
+            try hashes_str.append('"');
+        }
+        try hashes_str.append(']');
+    }
+    try hashes_str.append(']');
+    const hashes_slice = try hashes_str.toOwnedSlice();
+    defer allocator.free(hashes_slice);
+    try result.appendSlice(hashes_slice);
 
     try result.appendSlice("}");
 
@@ -124,20 +209,35 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
 
     const obj = parsed.value.object;
 
-    // Parse path
+    // Parse path (accept multiple Rust/JSON shapes)
     const path_obj = obj.get("path") orelse return error.MissingPathField;
     if (path_obj != .object) return error.InvalidJsonFormat;
 
-    const nodes_array = path_obj.object.get("nodes") orelse return error.MissingNodesField;
+    var maybe_nodes: ?std.json.Value = null;
+    if (path_obj.object.get("nodes")) |n| {
+        maybe_nodes = n;
+    } else {
+        var it = path_obj.object.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == .array) {
+                maybe_nodes = entry.value_ptr.*;
+                break;
+            }
+        }
+    }
+    const nodes_array = maybe_nodes orelse return error.MissingNodesField;
     if (nodes_array != .array) return error.InvalidJsonFormat;
 
-    const path_elements = try allocator.alloc(FieldElement, nodes_array.array.items.len);
-    for (nodes_array.array.items, 0..) |item, i| {
-        if (item != .string) return error.InvalidJsonFormat;
-        path_elements[i] = try deserializeFieldElement(item.string);
+    // Expect array of arrays where each inner array has 8 elements
+    const path_nodes = try allocator.alloc([8]FieldElement, nodes_array.array.items.len);
+    for (nodes_array.array.items, 0..) |node_val, i| {
+        if (node_val != .array or node_val.array.items.len != 8) return error.InvalidJsonFormat;
+        for (node_val.array.items, 0..) |fe_val, j| {
+            path_nodes[i][j] = try parseFieldElementFromJsonValue(fe_val);
+        }
     }
 
-    const path = try HashTreeOpening.init(allocator, path_elements);
+    const path = try HashTreeOpening.init(allocator, path_nodes);
 
     // Parse rho
     const rho_array = obj.get("rho") orelse return error.MissingRhoField;
@@ -145,21 +245,22 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
 
     var rho: [7]FieldElement = undefined;
     for (rho_array.array.items, 0..) |item, i| {
-        if (item != .string) return error.InvalidJsonFormat;
-        rho[i] = try deserializeFieldElement(item.string);
+        rho[i] = try parseFieldElementFromJsonValue(item);
     }
 
-    // Parse hashes
+    // Parse hashes as array of arrays-of-8
     const hashes_array = obj.get("hashes") orelse return error.MissingHashesField;
     if (hashes_array != .array) return error.InvalidJsonFormat;
 
-    const hash_elements = try allocator.alloc(FieldElement, hashes_array.array.items.len);
-    for (hashes_array.array.items, 0..) |item, i| {
-        if (item != .string) return error.InvalidJsonFormat;
-        hash_elements[i] = try deserializeFieldElement(item.string);
+    const hashes_domains = try allocator.alloc([8]FieldElement, hashes_array.array.items.len);
+    for (hashes_array.array.items, 0..) |domain_val, i| {
+        if (domain_val != .array or domain_val.array.items.len != 8) return error.InvalidJsonFormat;
+        for (domain_val.array.items, 0..) |fe_val, j| {
+            hashes_domains[i][j] = try parseFieldElementFromJsonValue(fe_val);
+        }
     }
 
-    return try GeneralizedXMSSSignature.init(allocator, path, rho, hash_elements);
+    return try GeneralizedXMSSSignature.init(allocator, path, rho, hashes_domains);
 }
 
 /// Serialize a GeneralizedXMSSPublicKey to JSON
@@ -208,8 +309,7 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
 
     var root: [8]FieldElement = undefined;
     for (root_array.array.items, 0..) |item, i| {
-        if (item != .string) return error.InvalidJsonFormat;
-        root[i] = try deserializeFieldElement(item.string);
+        root[i] = try parseFieldElementFromJsonValue(item);
     }
 
     // Parse parameter
@@ -218,8 +318,7 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
 
     var parameter: [5]FieldElement = undefined;
     for (param_array.array.items, 0..) |item, i| {
-        if (item != .string) return error.InvalidJsonFormat;
-        parameter[i] = try deserializeFieldElement(item.string);
+        parameter[i] = try parseFieldElementFromJsonValue(item);
     }
 
     return GeneralizedXMSSPublicKey.init(root, parameter);

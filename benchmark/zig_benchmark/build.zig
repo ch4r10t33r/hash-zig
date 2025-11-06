@@ -387,4 +387,14 @@ pub fn build(b: *std.Build) void {
     });
     debug_poseidon2_verification_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(debug_poseidon2_verification_exe);
+
+    // Add debug_leaf_domain_fixed binary
+    const debug_leaf_domain_fixed_exe = b.addExecutable(.{
+        .name = "debug_leaf_domain_fixed",
+        .root_source_file = b.path("src/debug_leaf_domain_fixed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    debug_leaf_domain_fixed_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(debug_leaf_domain_fixed_exe);
 }

@@ -1,6 +1,7 @@
 use std::env;
 use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
 use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
+use serde_json::{self, Value};
 
 fn main() {
     let public_key_data = env::var("PUBLIC_KEY").unwrap_or_default();
@@ -15,63 +16,93 @@ fn main() {
         std::process::exit(1);
     }
     
-    // Generate a new keypair since we don't have key serialization
-    let mut rng = rand::rng();
-    let (pk, mut sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
-    
     // Convert message to bytes (truncate/pad to 32 bytes)
     let mut message_bytes = [0u8; 32];
     let message_bytes_slice = message.as_bytes();
     let copy_len = std::cmp::min(message_bytes_slice.len(), 32);
     message_bytes[..copy_len].copy_from_slice(&message_bytes_slice[..copy_len]);
-    
-    // Parse the signature data
-    if signature_data.starts_with("SIGNATURE:") {
-        let json_data = &signature_data[10..]; // Skip "SIGNATURE:" prefix
-        
-        // CRITICAL FIX: We need to use the same keypair that was used for signing
-        // Since we can't easily deserialize the signature, we'll create a signature
-        // with the same keypair and message, but we need to ensure we're using
-        // the CORRECT keypair (the one that was used for signing)
-        
-        // The issue is that we're generating a NEW keypair here instead of using
-        // the keypair that was used for signing. For true cross-compatibility,
-        // we would need to deserialize both the public key and signature.
-        
-        // For now, let's implement a simple test: if the signature data contains
-        // "placeholder", it means it came from Rust (which uses placeholder data)
-        // Otherwise, it came from Zig (which uses real signature data)
-        
-        let is_rust_signature = json_data.contains("placeholder");
-        
-        if is_rust_signature {
-            // This is a Rust signature - create a signature with the same keypair
-            // Prepare the secret key for the epoch
-            while !sk.get_prepared_interval().contains(&(epoch as u64)) {
-                sk.advance_preparation();
-            }
-            
-            // Create a signature with the same keypair and message
-            let signature_result = SIGTopLevelTargetSumLifetime8Dim64Base8::sign(&sk, epoch, &message_bytes);
-            
-            let signature = match signature_result {
-                Ok(sig) => sig,
-                Err(e) => {
-                    eprintln!("Signing failed: {:?}", e);
-                    std::process::exit(1);
-                }
-            };
-            
-            // Verify the signature
-            let is_valid = SIGTopLevelTargetSumLifetime8Dim64Base8::verify(&pk, epoch, &message_bytes, &signature);
-            
+
+    // Parse the signature and public key data (Rust-native serde JSON)
+    let sig_json = if signature_data.starts_with("SIGNATURE:") { &signature_data[10..] } else { &signature_data };
+    let pk_json  = if public_key_data.starts_with("PUBLIC_KEY:") { &public_key_data[11..] } else { &public_key_data };
+
+    // Try to deserialize using serde (Rust-native shape)
+    let pk: Result<
+        <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::PublicKey,
+        _
+    > = serde_json::from_str(pk_json);
+    let signature: Result<
+        <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::Signature,
+        _
+    > = serde_json::from_str(sig_json);
+
+    match (pk, signature) {
+        (Ok(pk_val), Ok(sig_val)) => {
+            let is_valid = SIGTopLevelTargetSumLifetime8Dim64Base8::verify(&pk_val, epoch, &message_bytes, &sig_val);
             println!("VERIFY_RESULT:{}", is_valid);
-        } else {
-            // This is a Zig signature - we cannot verify it because we don't have
-            // the corresponding secret key. This will fail as expected.
-            println!("VERIFY_RESULT:false");
         }
-    } else {
-        println!("VERIFY_RESULT:false");
+        _ => {
+            // Try Zig-shaped JSON: pk { root:[hex], parameter:[hex] }, sig { path:{nodes:[[hex,..],..]}, rho:[hex], hashes:[[hex,..],..] }
+            let mut pk_val: Value = match serde_json::from_str(pk_json) { Ok(v) => v, Err(_) => { println!("VERIFY_RESULT:false"); return; } };
+            let mut sig_val: Value = match serde_json::from_str(sig_json) { Ok(v) => v, Err(_) => { println!("VERIFY_RESULT:false"); return; } };
+
+            // Helper to convert hex strings ("0x........") to u32 numbers recursively in arrays
+            fn hex_array_to_numbers(arr: &mut Vec<Value>) {
+                for v in arr.iter_mut() {
+                    match v {
+                        Value::String(s) => {
+                            let ss = s.trim();
+                            let clean = ss.strip_prefix("0x").or(ss.strip_prefix("0X")).unwrap_or(ss);
+                            if let Ok(u) = u32::from_str_radix(clean, 16) { *v = Value::Number(serde_json::Number::from(u)); }
+                        }
+                        Value::Array(inner) => hex_array_to_numbers(inner),
+                        _ => {}
+                    }
+                }
+            }
+
+            // Transform pk.root and pk.parameter
+            if let Some(root) = pk_val.get_mut("root").and_then(|v| v.as_array_mut()) { hex_array_to_numbers(root); }
+            if let Some(param) = pk_val.get_mut("parameter").and_then(|v| v.as_array_mut()) { hex_array_to_numbers(param); }
+
+            // Transform sig.path.nodes, sig.rho, sig.hashes
+            if let Some(nodes) = sig_val.get_mut("path").and_then(|p| p.get_mut("nodes")).and_then(|v| v.as_array_mut()) { hex_array_to_numbers(nodes); }
+            if let Some(rho) = sig_val.get_mut("rho").and_then(|v| v.as_array_mut()) { hex_array_to_numbers(rho); }
+            if let Some(hashes) = sig_val.get_mut("hashes").and_then(|v| v.as_array_mut()) { hex_array_to_numbers(hashes); }
+
+            // Remap path.nodes -> path.co_path to match Rust struct field name
+            if let Some(path_obj) = sig_val.get_mut("path").and_then(|p| p.as_object_mut()) {
+                if let Some(nodes_val) = path_obj.remove("nodes") { path_obj.insert("co_path".to_string(), nodes_val); }
+            }
+
+            // Now try deserializing into native types
+            type PK = <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::PublicKey;
+            type SIG = <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::Signature;
+
+            let pk_built: PK = match serde_json::from_value(pk_val) { 
+                Ok(v) => v, 
+                Err(e) => { 
+                    eprintln!("RUST_VERIFY_DEBUG: Failed to deserialize PK: {}", e);
+                    println!("VERIFY_RESULT:false"); 
+                    return; 
+                } 
+            };
+            let sig_built: SIG = match serde_json::from_value(sig_val) { 
+                Ok(v) => v, 
+                Err(e) => { 
+                    eprintln!("RUST_VERIFY_DEBUG: Failed to deserialize SIG: {}", e);
+                    println!("VERIFY_RESULT:false"); 
+                    return; 
+                } 
+            };
+
+            eprintln!("RUST_VERIFY_DEBUG: PK and SIG deserialized successfully");
+            eprintln!("RUST_VERIFY_DEBUG: PK root len={}, parameter len={}", pk_built.get_root().len(), pk_built.get_parameter().len());
+            eprintln!("RUST_VERIFY_DEBUG: SIG path nodes len={}, rho len={}, hashes len={}", sig_built.get_path().co_path().len(), sig_built.get_rho().len(), sig_built.get_hashes().len());
+            eprintln!("RUST_VERIFY_DEBUG: Calling verify with epoch={}, message_len={}", epoch, message_bytes.len());
+            let is_valid = SIGTopLevelTargetSumLifetime8Dim64Base8::verify(&pk_built, epoch, &message_bytes, &sig_built);
+            eprintln!("RUST_VERIFY_DEBUG: Verification result: {}", is_valid);
+            println!("VERIFY_RESULT:{}", is_valid);
+        }
     }
 }

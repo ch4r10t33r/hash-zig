@@ -70,32 +70,45 @@ pub const Poseidon2RustCompat = struct {
     }
 
     /// Apply Poseidon2-16 (for chain compression)
-    fn applyPoseidon2_16(self: *Poseidon2RustCompat, allocator: Allocator, input: []const FieldElement) ![]FieldElement {
-        // Convert input to u32 array for Poseidon2-16
-        var input_u32: [WIDTH_16]u32 = undefined;
+    /// Matches Rust's poseidon_compress: permute then add input back (feed-forward)
+    fn applyPoseidon2_16(_: *Poseidon2RustCompat, allocator: Allocator, input: []const FieldElement) ![]FieldElement {
+        // Pad input to WIDTH_16 (matching Rust's poseidon_compress padding)
+        var padded_input: [WIDTH_16]FieldElement = [_]FieldElement{FieldElement{ .value = 0 }} ** WIDTH_16;
         for (0..@min(input.len, WIDTH_16)) |i| {
-            input_u32[i] = input[i].value;
+            padded_input[i] = input[i];
         }
 
-        // Pad with zeros if input is shorter than WIDTH_16
-        for (input.len..WIDTH_16) |i| {
-            input_u32[i] = 0;
-        }
-
-        // Apply Poseidon2-16 permutation
-        const output_u32 = self.permute16(input_u32);
-
-        // Convert back to FieldElement array
-        const output = try allocator.alloc(FieldElement, WIDTH_16);
+        // Convert to u32 array for compress
+        // Input FieldElement.value is Montgomery (from chain walking with canonical->Montgomery conversion)
+        // compress expects canonical (uses F.fromU32 which treats input as canonical)
+        // So we need to convert Montgomery u32 to canonical u32
+        const F = Poseidon2KoalaBear16.Field;
+        var input_u32: [WIDTH_16]u32 = undefined;
         for (0..WIDTH_16) |i| {
+            // Create F from Montgomery u32 directly (by setting .value field)
+            // Then convert to canonical using toU32()
+            const monty_f = F{ .value = padded_input[i].value };
+            input_u32[i] = monty_f.toU32(); // Convert Montgomery to canonical
+        }
+
+        // Use Poseidon2KoalaBear16.compress which handles permute + feed-forward
+        // This returns [8]u32 (HASH_LEN), matching Rust's poseidon_compress output
+        const output_u32 = Poseidon2KoalaBear16.compress(8, &input_u32);
+        
+        // Convert back to FieldElement array (return all 16 for compatibility, but only first 8 are used)
+        const output = try allocator.alloc(FieldElement, WIDTH_16);
+        for (0..8) |i| {
             output[i] = FieldElement{ .value = output_u32[i] };
         }
-
+        // Pad remaining with zeros
+        for (8..WIDTH_16) |i| {
+            output[i] = FieldElement{ .value = 0 };
+        }
         return output;
     }
 
     /// Apply Poseidon2-24 permutation
-    fn permute24(self: *Poseidon2RustCompat, input: [WIDTH_24]u32) [WIDTH_24]u32 {
+    pub fn permute24(self: *Poseidon2RustCompat, input: [WIDTH_24]u32) [WIDTH_24]u32 {
         _ = self;
 
         const F = Poseidon2KoalaBear24.Field;
@@ -170,13 +183,13 @@ pub const Poseidon2RustCompat = struct {
             input_u32[i] = input[i].value;
         }
 
-        // Apply Poseidon2-24 compress
-        const output_u32 = Poseidon2KoalaBear24.compress(output_len, &input_u32);
+        // Apply Poseidon2-24 compress (returns full 24 elements, we slice to output_len)
+        const output_u32_full = Poseidon2KoalaBear24.compress(output_len, &input_u32);
 
-        // Convert back to FieldElement array
+        // Convert back to FieldElement array (slice to output_len)
         var output: [output_len]FieldElement = undefined;
         for (0..output_len) |i| {
-            output[i] = FieldElement{ .value = output_u32[i] };
+            output[i] = FieldElement{ .value = output_u32_full[i] };
         }
 
         return output;

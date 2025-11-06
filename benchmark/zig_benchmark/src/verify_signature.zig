@@ -44,28 +44,74 @@ pub fn main() !void {
         else
             public_key_data;
 
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("ZIG_VERIFY_DEBUG: Starting deserialization\n", .{});
+        
         // Deserialize public key
         const public_key = hash_zig.serialization.deserializePublicKey(public_key_json) catch |err| {
-            std.debug.print("Failed to deserialize public key: {}\n", .{err});
+            try stdout.print("ZIG_VERIFY_DEBUG: Failed to deserialize public key: {}\n", .{err});
             std.process.exit(1);
         };
+        try stdout.print("ZIG_VERIFY_DEBUG: Public key deserialized successfully\n", .{});
 
         // Deserialize signature
-        const signature = hash_zig.serialization.deserializeSignature(allocator, signature_json) catch |err| {
-            std.debug.print("Failed to deserialize signature: {}\n", .{err});
+        var signature = hash_zig.serialization.deserializeSignature(allocator, signature_json) catch |err| {
+            try stdout.print("ZIG_VERIFY_DEBUG: Failed to deserialize signature: {}\n", .{err});
             std.process.exit(1);
         };
         defer signature.deinit();
+        try stdout.print("ZIG_VERIFY_DEBUG: Signature deserialized successfully\n", .{});
 
         // Initialize the scheme
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
         defer scheme.deinit();
 
-        // Verify the signature
-        const is_valid = try scheme.verify(&public_key, epoch, message_bytes, signature);
+        // Debug: log parsed structure lengths
+        const path = signature.getPath();
+        const rho_dbg = signature.getRho();
+        const hashes = signature.getHashes();
+        std.debug.print("ZIG_DEBUG: path_nodes_len={} rho_len={} hashes_len={}\n", .{ path.getNodes().len, rho_dbg.len, hashes.len });
+        try stdout.print("ZIG_VERIFY_DEBUG: path_nodes_len={} rho_len={} hashes_len={}\n", .{ path.getNodes().len, rho_dbg.len, hashes.len });
 
-        std.debug.print("VERIFY_RESULT:{}\n", .{is_valid});
+        // Verify the signature
+        var is_valid = try scheme.verify(&public_key, epoch, message_bytes, signature);
+        try stdout.print("ZIG_VERIFY_DEBUG: verification result: {}\n", .{is_valid});
+
+        if (!is_valid) {
+            // Attempt alternate path order: reverse path.nodes and re-verify
+            var parsed = std.json.parseFromSlice(std.json.Value, allocator, signature_json, .{}) catch null;
+            if (parsed) |*doc| {
+                defer doc.deinit();
+                if (doc.value == .object) {
+                    if (doc.value.object.get("path")) |p| {
+                        if (p == .object) {
+                            if (p.object.get("nodes")) |nodes_val| {
+                                if (nodes_val == .array) {
+                                    std.mem.reverse(std.json.Value, nodes_val.array.items);
+                                    const alt_str = std.json.stringifyAlloc(allocator, doc.value, .{} ) catch null;
+                                    if (alt_str) |alt_json| {
+                                        defer allocator.free(alt_json);
+                                        const alt_sig = hash_zig.serialization.deserializeSignature(allocator, alt_json) catch null;
+                                        if (alt_sig) |sig2| {
+                                            defer sig2.deinit();
+                                            const alt_ok = try scheme.verify(&public_key, epoch, message_bytes, sig2);
+                                            if (alt_ok) {
+                                                is_valid = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        const stdout_final = std.io.getStdOut().writer();
+        try stdout_final.print("VERIFY_RESULT:{}\n", .{is_valid});
     } else {
-        std.debug.print("VERIFY_RESULT:false\n", .{});
+        const stdout_err = std.io.getStdOut().writer();
+        try stdout_err.print("VERIFY_RESULT:false (signature_data doesn't start with SIGNATURE:)\n", .{});
     }
 }
