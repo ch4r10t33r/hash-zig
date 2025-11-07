@@ -45,3 +45,7 @@ path = "src/verify_signature_debug.rs"
 name = "verify_signature_debug_18"
 path = "src/bin/verify_signature_debug_18.rs"
 
+[[bin]]
+name = "sign_message_32"
+path = "src/bin/sign_message_32.rs"
+

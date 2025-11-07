@@ -74,25 +74,59 @@ pub const LIFETIME_2_32_HASHING_PARAMS = LifetimeParams{
 };
 
 // Hash SubTree structure (simplified for now)
+pub const PaddedLayer = struct {
+    nodes: [][8]FieldElement,
+    start_index: usize,
+};
+
 pub const HashSubTree = struct {
     root_value: [8]FieldElement,
+    layers: ?[]PaddedLayer,
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, root_value: [8]FieldElement) !*HashSubTree {
         const self = try allocator.create(HashSubTree);
         self.* = HashSubTree{
             .root_value = root_value,
+            .layers = null,
+            .allocator = allocator,
+        };
+        return self;
+    }
+
+    pub fn initWithLayers(
+        allocator: Allocator,
+        root_value: [8]FieldElement,
+        layers: []PaddedLayer,
+    ) !*HashSubTree {
+        const self = try allocator.create(HashSubTree);
+        self.* = HashSubTree{
+            .root_value = root_value,
+            .layers = layers,
             .allocator = allocator,
         };
         return self;
     }
 
     pub fn deinit(self: *HashSubTree) void {
+        if (self.layers) |layers| {
+            for (layers) |layer| {
+                self.allocator.free(layer.nodes);
+            }
+            self.allocator.free(layers);
+        }
         self.allocator.destroy(self);
     }
 
     pub fn root(self: *const HashSubTree) [8]FieldElement {
         return self.root_value;
+    }
+
+    pub fn getLayers(self: *const HashSubTree) ?[]const PaddedLayer {
+        if (self.layers) |layers| {
+            return layers;
+        }
+        return null;
     }
 };
 
@@ -129,6 +163,7 @@ pub const GeneralizedXMSSSignature = struct {
     rho: [7]FieldElement, // IE::Randomness for ShakePRFtoF_8_7
     hashes: [][8]FieldElement, // Vec<TH::Domain>
     allocator: Allocator,
+    is_deserialized: bool, // Track if signature was deserialized from JSON (Rust→Zig)
 
     pub fn init(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
         const self = try allocator.create(GeneralizedXMSSSignature);
@@ -139,6 +174,21 @@ pub const GeneralizedXMSSSignature = struct {
             .rho = rho,
             .hashes = hashes_copy,
             .allocator = allocator,
+            .is_deserialized = false, // Created directly, not deserialized
+        };
+        return self;
+    }
+
+    pub fn initDeserialized(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
+        const self = try allocator.create(GeneralizedXMSSSignature);
+        const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
+        @memcpy(hashes_copy, hashes);
+        self.* = GeneralizedXMSSSignature{
+            .path = path,
+            .rho = rho,
+            .hashes = hashes_copy,
+            .allocator = allocator,
+            .is_deserialized = true, // Deserialized from JSON (Rust→Zig)
         };
         return self;
     }
@@ -508,9 +558,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
         }
 
-        // Build bottom tree from leaf domains
-        const bottom_tree_root = try self.buildBottomTreeFromLeafDomains(leaf_domains, parameter, bottom_tree_index);
-        return try HashSubTree.init(self.allocator, bottom_tree_root);
+        // Build bottom tree layers from leaf domains (shared with signing path)
+        const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains, parameter, bottom_tree_index);
+        defer {
+            for (bottom_layers) |layer| self.allocator.free(layer.nodes);
+            self.allocator.free(bottom_layers);
+        }
+
+        if (bottom_layers.len == 0 or bottom_layers[bottom_layers.len - 1].nodes.len == 0) {
+            return error.InvalidBottomTree;
+        }
+
+        var bottom_root: [8]FieldElement = undefined;
+        @memcpy(&bottom_root, &bottom_layers[bottom_layers.len - 1].nodes[0]);
+        return try HashSubTree.init(self.allocator, bottom_root);
     }
 
     /// Compute hash chain (matching Rust chain function)
@@ -557,6 +618,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Compute hash chain and return the full 8-wide domain state after BASE-1 steps
+    /// domain_elements are in Montgomery form (from ShakePRFtoF)
     pub fn computeHashChainDomain(
         self: *GeneralizedXMSSSignatureScheme,
         domain_elements: [8]u32,
@@ -564,12 +626,27 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         chain_index: u8,
         parameter: [5]FieldElement,
     ) ![8]FieldElement {
+        // domain_elements are in Montgomery form (from ShakePRFtoF_8_7.getDomainElement)
+        // applyPoseidonChainTweakHash expects input in Montgomery form
+        // So we can use domain_elements directly as Montgomery values
         var current: [8]FieldElement = undefined;
-        for (0..8) |i| current[i] = FieldElement{ .value = domain_elements[i] };
+        for (0..8) |i| current[i] = FieldElement{ .value = domain_elements[i] }; // Already Montgomery
         for (0..self.lifetime_params.base - 1) |j| {
             const pos_in_chain = @as(u8, @intCast(j + 1));
             const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
-            for (0..8) |k| current[k] = next[k];
+            // next is canonical (from compress), but we need to convert back to Montgomery
+            // to maintain consistency throughout chain walking
+            const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+            const F = plonky3_field.KoalaBearField;
+            const hash_len = self.lifetime_params.hash_len_fe;
+            for (0..hash_len) |k| {
+                const monty = F.fromU32(next[k].value); // Convert canonical to Montgomery
+                current[k] = FieldElement{ .value = monty.value }; // Store Montgomery value
+            }
+            // Pad remaining elements with zeros
+            for (hash_len..8) |k| {
+                current[k] = FieldElement{ .value = 0 };
+            }
         }
         return current;
     }
@@ -1340,9 +1417,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Track all layers for proper truncation
         var layers = std.ArrayList(PaddedLayer).init(self.allocator);
         defer {
-            for (layers.items) |layer| {
-                self.allocator.free(layer.nodes);
-            }
+            for (layers.items) |layer| self.allocator.free(layer.nodes);
             layers.deinit();
         }
 
@@ -1429,68 +1504,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return truncated_root;
     }
 
-    /// Build bottom tree from 8-wide leaf domains and return root as [8]FieldElement
-    pub fn buildBottomTreeFromLeafDomains(self: *GeneralizedXMSSSignatureScheme, leaf_nodes_in: [][8]FieldElement, parameter: [5]FieldElement, bottom_tree_index: usize) ![8]FieldElement {
-        const full_depth = 8;
-        const lowest_layer = 0;
-        const start_index = bottom_tree_index * 16;
-
-        std.debug.print("DEBUG: Building bottom tree from layer {} to layer {}\n", .{ lowest_layer, full_depth });
-        std.debug.print("DEBUG: Starting with {} leaf domains\n", .{leaf_nodes_in.len});
-
-        // Make a working copy of leaf nodes
-        const leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_nodes_in.len);
-        defer self.allocator.free(leaf_nodes);
-        @memcpy(leaf_nodes, leaf_nodes_in);
-
-        // Pad initial layer and build upwards
-        const initial_padded = try self.padLayer(leaf_nodes, start_index);
-
-        std.debug.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
-
-        var layers = std.ArrayList(PaddedLayer).init(self.allocator);
-        defer {
-            for (layers.items) |layer| self.allocator.free(layer.nodes);
-            layers.deinit();
-        }
-
-        var current_layer = initial_padded;
-        var current_level: usize = lowest_layer;
-
-        while (current_level < full_depth) : (current_level += 1) {
-            const parent_start = current_layer.start_index >> 1;
-            const parents_len = current_layer.nodes.len / 2;
-            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
-            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
-            self.allocator.free(current_layer.nodes);
-            const new_layer = try self.padLayer(parents, parent_start);
-            self.allocator.free(parents);
-            current_layer = new_layer;
-            try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
-            @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
-        }
-
-        // Truncate to layer 4 for bottom tree root (index 3 in stored layers)
-        const target_layer_index = (full_depth / 2) - 1;
-        const target_layer = layers.items[target_layer_index];
-        const root_index = bottom_tree_index % 2;
-        const truncated_root = target_layer.nodes[root_index];
-        self.allocator.free(current_layer.nodes);
-        return truncated_root;
-    }
-
     /// Build top tree from bottom tree roots
-    fn buildTopTree(self: *GeneralizedXMSSSignatureScheme, bottom_tree_roots: [][8]FieldElement, parameter: [5]FieldElement) !*HashSubTree {
-        const root_array = try self.buildTopTreeAsArray(bottom_tree_roots, parameter);
+    fn buildTopTree(
+        self: *GeneralizedXMSSSignatureScheme,
+        bottom_tree_roots: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        start_bottom_tree_index: usize,
+    ) !*HashSubTree {
+        const root_array = try self.buildTopTreeAsArray(bottom_tree_roots, parameter, start_bottom_tree_index);
         // Use the entire array as the root for the HashSubTree
         return try HashSubTree.init(self.allocator, root_array);
     }
-
-    /// Return type for padded layer
-    const PaddedLayer = struct {
-        nodes: [][8]FieldElement,
-        start_index: usize,
-    };
 
     fn computePathFromLayers(
         self: *GeneralizedXMSSSignatureScheme,
@@ -1616,10 +1640,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         self: *GeneralizedXMSSSignatureScheme,
         roots_of_bottom_trees: [][8]FieldElement,
         parameter: [5]FieldElement,
+        start_bottom_tree_index: usize,
     ) ![]PaddedLayer {
-        const depth = 8;
-        const lowest_layer = 4;
-        const start_index = 0;
+        const log_lifetime = self.lifetime_params.log_lifetime;
+        const lowest_layer = log_lifetime / 2;
+        const depth = log_lifetime;
+        const start_index = start_bottom_tree_index;
 
         var layers = std.ArrayList(PaddedLayer).init(self.allocator);
         errdefer {
@@ -2364,70 +2390,30 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Build top tree from bottom tree roots and return root as array of 8 field elements
     /// This matches the Rust HashSubTree::new_top_tree algorithm exactly
-    pub fn buildTopTreeAsArray(self: *GeneralizedXMSSSignatureScheme, roots_of_bottom_trees: [][8]FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
-        // For lifetime 2^8: depth = 8, lowest_layer = 4, start_index = 0
-        const depth = 8;
-        const lowest_layer = 4;
-        const start_index = 0;
+    pub fn buildTopTreeAsArray(
+        self: *GeneralizedXMSSSignatureScheme,
+        roots_of_bottom_trees: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        start_bottom_tree_index: usize,
+    ) ![8]FieldElement {
+        std.debug.print("DEBUG: Building tree from lowest layer {} up to depth {}\n", .{
+            self.lifetime_params.log_lifetime / 2,
+            self.lifetime_params.log_lifetime,
+        });
+        std.debug.print("DEBUG: Starting with {} bottom tree roots (start index: {})\n", .{ roots_of_bottom_trees.len, start_bottom_tree_index });
 
-        std.debug.print("DEBUG: Building tree from layer {} to layer {}\n", .{ lowest_layer, depth });
-        std.debug.print("DEBUG: Starting with {} bottom tree roots\n", .{roots_of_bottom_trees.len});
-
-        // Convert bottom tree roots to the format expected by the tree building algorithm
-        const lowest_layer_nodes = try self.allocator.alloc([8]FieldElement, roots_of_bottom_trees.len);
-        @memcpy(lowest_layer_nodes, roots_of_bottom_trees);
-
-        // Start with the lowest layer, padded accordingly (matching Rust HashTreeLayer::padded)
-        const initial_padded = try self.padLayer(lowest_layer_nodes, start_index);
-        self.allocator.free(lowest_layer_nodes);
-
-        std.debug.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
-
-        // Build tree layer by layer (matching Rust exactly)
-        var current_layer = initial_padded;
-        var current_level: usize = lowest_layer;
-
-        while (current_level < depth) {
-            const next_level = current_level + 1;
-
-            std.debug.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, next_level, current_layer.nodes.len, current_layer.start_index });
-
-            // Parent layer starts at half the previous start index (matching Rust)
-            const parent_start = current_layer.start_index >> 1;
-
-            // Compute all parents by pairing children two-by-two (matching Rust par_chunks_exact(2))
-            const parents_len = current_layer.nodes.len / 2; // This is guaranteed to be exact due to padding
-            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
-
-            std.debug.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
-
-            // Process all pairs in parallel (matching Rust par_chunks_exact(2))
-            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
-
-            std.debug.print("DEBUG: Completed processing {} parents\n", .{parents_len});
-
-            // Free the current layer before creating the new one
-            self.allocator.free(current_layer.nodes);
-
-            // Add the new layer with padding so next iteration also has even start and length (matching Rust)
-            // Use real RNG for top tree (matching Rust implementation)
-            const new_layer = try self.padLayerWithRng(parents, parent_start, &self.rng.random());
-            self.allocator.free(parents);
-
-            current_layer = new_layer;
-
-            std.debug.print("DEBUG: After padding: {} nodes (start_index: {})\n", .{ current_layer.nodes.len, current_layer.start_index });
-
-            current_level = next_level;
+        const layers = try self.buildTopTreeLayers(roots_of_bottom_trees, parameter, start_bottom_tree_index);
+        defer {
+            for (layers) |pl| self.allocator.free(pl.nodes);
+            self.allocator.free(layers);
         }
 
-        // The root is the first node of the top layer, which is an array of 8 field elements
-        const root_array = current_layer.nodes[0];
-        std.debug.print("DEBUG: Final root array: {any}\n", .{root_array});
+        if (layers.len == 0 or layers[layers.len - 1].nodes.len == 0) {
+            return error.InvalidTopTree;
+        }
 
-        // Free the final layer
-        self.allocator.free(current_layer.nodes);
-
+        const root_array = layers[layers.len - 1].nodes[0];
+        std.debug.print("DEBUG: Final top tree root array: {any}\n", .{root_array});
         return root_array;
     }
 
@@ -2675,23 +2661,60 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             bottom_tree.deinit(); // Clean up individual trees
         }
 
+        // Debug: log all roots before building top tree
+        std.debug.print("ZIG_KEYGEN_DEBUG: All {} roots before building top tree:\n", .{roots_of_bottom_trees.len});
+        for (roots_of_bottom_trees, 0..) |root, i| {
+            std.debug.print("ZIG_KEYGEN_DEBUG:   Root {}: ", .{i});
+            for (root) |fe| {
+                std.debug.print("0x{x:0>8} ", .{fe.value});
+            }
+            std.debug.print("\n", .{});
+        }
+
         // Build top tree from bottom tree roots and get root as array
         // This matches Rust's HashSubTree::new_top_tree call which happens after parameter generation
+        // Use buildTopTreeLayers to ensure consistency with signing/verification
         std.debug.print("DEBUG: Building top tree from {} bottom tree roots\n", .{roots_of_bottom_trees.len});
-        const root_array = try self.buildTopTreeAsArray(roots_of_bottom_trees, parameter);
+        var top_layers = try self.buildTopTreeLayers(roots_of_bottom_trees, parameter, expansion_result.start);
 
-        // Debug: log the computed root
-        std.debug.print("ZIG_KEYGEN_DEBUG: Computed root during keygen: ", .{});
+        // Extract root from the final layer (should have exactly 1 node)
+        if (top_layers.len == 0 or top_layers[top_layers.len - 1].nodes.len == 0) {
+            for (top_layers) |pl| self.allocator.free(pl.nodes);
+            self.allocator.free(top_layers);
+            return error.InvalidTopTree;
+        }
+        const root_array = top_layers[top_layers.len - 1].nodes[0];
+
+        // Debug: log the computed root (canonical)
+        std.debug.print("ZIG_KEYGEN_DEBUG: Computed root during keygen (canonical): ", .{});
         for (root_array) |fe| {
             std.debug.print("0x{x:0>8} ", .{fe.value});
         }
         std.debug.print("\n", .{});
 
-        // Create a simple top tree for the secret key (using the entire root array)
-        const top_tree = try HashSubTree.init(self.allocator, root_array);
+        // Convert root to Montgomery form before storing (matching Rust's internal representation)
+        // Rust stores roots internally in Montgomery form (KoalaBear uses Montgomery)
+        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+        const F = plonky3_field.KoalaBearField;
+        var root_monty: [8]FieldElement = undefined;
+        for (root_array, 0..) |fe, i| {
+            const monty = F.fromU32(fe.value); // Convert canonical to Montgomery
+            root_monty[i] = FieldElement{ .value = monty.value }; // Store Montgomery value
+        }
 
-        // Create public and secret keys
-        const public_key = GeneralizedXMSSPublicKey.init(root_array, parameter);
+        // Debug: log the root in Montgomery form
+        std.debug.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
+        for (root_monty) |fe| {
+            std.debug.print("0x{x:0>8} ", .{fe.value});
+        }
+        std.debug.print("\n", .{});
+
+        // Create a top tree for the secret key, preserving the layered structure for future path computation
+        const top_tree = try HashSubTree.initWithLayers(self.allocator, root_array, top_layers);
+        top_layers = top_layers[0..0];
+
+        // Create public and secret keys (store root in Montgomery form to match Rust)
+        const public_key = GeneralizedXMSSPublicKey.init(root_monty, parameter);
 
         // Debug: log the public key root
         std.debug.print("ZIG_KEYGEN_DEBUG: Public key root: ", .{});
@@ -2754,6 +2777,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(e)), @as(u8, @intCast(chain_index)), secret_key.parameter);
                 chain_domains[chain_index] = chain_end_domain;
             }
+            // Debug: log chain ends before reduction for the signing epoch
+            if (e == epoch) {
+                std.debug.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
+                for (0..@min(3, chain_domains.len)) |ci| {
+                    std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
+                }
+                std.debug.print("\n", .{});
+            }
             const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
             defer self.allocator.free(leaf_domain_slice);
             // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
@@ -2788,29 +2819,39 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             std.debug.print("ZIG_SIGN_DEBUG:   Bottom layer {}: {} nodes, start_index={}\n", .{ i, layer.nodes.len, layer.start_index });
         }
 
-        // Build top tree layers using bottom tree roots
-        const expansion = expandActivationTime(self.lifetime_params.log_lifetime, secret_key.activation_epoch, secret_key.num_active_epochs);
-        var roots = try self.allocator.alloc([8]FieldElement, expansion.end - expansion.start);
-        defer self.allocator.free(roots);
-        // Left and right bottom trees are already in secret key
-        roots[0] = secret_key.left_bottom_tree.root();
-        roots[1] = secret_key.right_bottom_tree.root();
-        var i_root: usize = 2;
-        while (i_root < roots.len) : (i_root += 1) {
-            const bt = try self.bottomTreeFromPrfKey(secret_key.prf_key, expansion.start + i_root, secret_key.parameter);
-            roots[i_root] = bt.root();
-            bt.deinit();
+        // Debug: compare computed bottom tree root with stored left bottom tree root (canonical values)
+        if (bottom_layers.len > 0) {
+            const bottom_root_layer = bottom_layers[bottom_layers.len - 1];
+            if (bottom_root_layer.nodes.len > 0) {
+                const computed_bottom_root = bottom_root_layer.nodes[0];
+                const stored_bottom_root = secret_key.left_bottom_tree.root();
+                std.debug.print("ZIG_SIGN_DEBUG: Computed bottom root (canonical): ", .{});
+                for (computed_bottom_root) |fe| {
+                    std.debug.print("0x{x:0>8} ", .{fe.value});
+                }
+                std.debug.print("\n", .{});
+                std.debug.print("ZIG_SIGN_DEBUG: Stored left bottom root (canonical): ", .{});
+                for (stored_bottom_root) |fe| {
+                    std.debug.print("0x{x:0>8} ", .{fe.value});
+                }
+                std.debug.print("\n", .{});
+            }
         }
-        const top_layers = try self.buildTopTreeLayers(roots, secret_key.parameter);
-        defer {
-            for (top_layers) |pl| self.allocator.free(pl.nodes);
-            self.allocator.free(top_layers);
-        }
+
+        // Use the stored top tree layers from the secret key (generated during keyGen)
+        const top_layers = secret_key.top_tree.getLayers() orelse return error.MissingTopTreeLayers;
+        std.debug.print("ZIG_SIGN_DEBUG: top_layers.len={} (log_lifetime={} lowest_layer={})\n", .{
+            top_layers.len,
+            self.lifetime_params.log_lifetime,
+            self.lifetime_params.log_lifetime / 2,
+        });
 
         // Bottom path at absolute epoch, top path at index within top segment
         const bottom_copath = try self.computePathFromLayers(bottom_layers, epoch);
         defer self.allocator.free(bottom_copath);
-        const top_pos = @as(u32, @intCast(bottom_tree_index - expansion.start));
+        // For top tree, use bottom_tree_index directly (matching Rust's combined_path and verification)
+        // This matches verification which uses bottom_tree_index directly, not bottom_tree_index - expansion.start
+        const top_pos = @as(u32, @intCast(bottom_tree_index));
         const top_copath = try self.computePathFromLayers(top_layers, top_pos);
         defer self.allocator.free(top_copath);
 
@@ -2836,7 +2877,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var attempts: u64 = 0;
         var rho_slice: []FieldElement = undefined;
         defer if (attempts > 0) self.allocator.free(rho_slice);
-        var rho_fixed: [7]FieldElement = undefined; // TODO: Support variable-length rho
+        var rho_fixed: [7]FieldElement = undefined; // Signature struct uses fixed [7]FieldElement, pad if needed
         var x: []u8 = undefined;
         var encoding_succeeded = false;
 
@@ -2845,12 +2886,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (attempts > 0) self.allocator.free(rho_slice);
             rho_slice = try self.generateRandomness(secret_key.prf_key, epoch, message, attempts);
 
-            // Convert to fixed array for signature structure (TODO: support variable length)
-            if (rho_slice.len != 7) {
-                return error.InvalidRhoLength; // For now, only support length 7
-            }
-            for (0..7) |i| {
+            // Convert to fixed array for signature structure (pad to 7 elements if needed)
+            // For lifetime 2^18, rand_len_fe is 6, but signature struct uses [7]FieldElement
+            const rand_len = self.lifetime_params.rand_len_fe;
+            for (0..rand_len) |i| {
                 rho_fixed[i] = rho_slice[i];
+            }
+            // Pad remaining elements with zeros (for lifetime 2^18, rand_len_fe=6, so pad 1 element)
+            for (rand_len..7) |i| {
+                rho_fixed[i] = FieldElement{ .value = 0 };
             }
 
             // Try to encode with this randomness
@@ -2883,24 +2927,52 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(x);
 
         // Generate hashes for chains using PRF-derived starts and message-derived steps x
+        // Match Rust: Rust stores hashes internally in Montgomery form (TH::Domain = [KoalaBear; HASH_LEN])
+        // KoalaBear uses Montgomery internally, so Rust's chain() returns Montgomery values
+        // We need to store hashes in Montgomery form to match Rust's internal representation
+        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+        const F = plonky3_field.KoalaBearField; // Montgomery form implementation
         const hashes = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
         for (0..self.lifetime_params.dimension) |chain_index| {
-            // PRF start state
+            // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
             const domain_elements = ShakePRFtoF_8_7.getDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
             var current: [8]FieldElement = undefined;
+            // domain_elements are already in Montgomery form, store directly
             for (0..8) |j| current[j] = FieldElement{ .value = domain_elements[j] };
 
             // Walk chain for x[chain_index] steps
             const steps: u8 = x[chain_index];
+            if (chain_index == 0) {
+                std.debug.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
+            }
             if (steps > 0) {
                 var s: u8 = 1;
                 while (s <= steps) : (s += 1) {
                     const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
-                    // copy next back into current
-                    for (0..8) |j| current[j] = next[j];
+                    // next is canonical (from compress), but we need to store in Montgomery form
+                    // Convert next back to Montgomery to match Rust's internal representation
+                    const hash_len = self.lifetime_params.hash_len_fe;
+                    for (0..hash_len) |j| {
+                        const monty = F.fromU32(next[j].value); // Convert canonical to Montgomery
+                        current[j] = FieldElement{ .value = monty.value }; // Store Montgomery value
+                    }
+                    // Pad remaining elements with zeros
+                    for (hash_len..8) |j| {
+                        current[j] = FieldElement{ .value = 0 };
+                    }
+                    if (chain_index == 0) {
+                        std.debug.print("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ chain_index, s - 1, s, current[0].value });
+                    }
                 }
             }
+            // Store hashes in Montgomery form (matching Rust's internal representation)
             hashes[chain_index] = current;
+            if (chain_index == 0) {
+                // Convert Montgomery to canonical for comparison
+                const monty_f = F{ .value = current[0].value };
+                const canonical = monty_f.toU32();
+                std.debug.print("ZIG_SIGN_DEBUG: Chain {} final stored[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ chain_index, current[0].value, canonical });
+            }
         }
 
         // Create signature with proper error handling
@@ -2989,10 +3061,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         const hashes = signature.getHashes();
 
-        // JSON now has canonical values (Rust signer uses as_canonical_u32())
-        // Rust verifier will parse canonical and construct using KoalaBear::from_u32
-        // Zig needs to convert canonical to Montgomery form for chain walking
-        // (Poseidon operations work with Montgomery internally)
+        // Handle hashes for both cross-implementation (Rust→Zig) and same-implementation (Zig→Zig):
+        // - Rust→Zig: hashes come from JSON as canonical values (Rust signer uses as_canonical_u32())
+        //   But Rust stores hashes internally in Montgomery form, so we need to treat JSON values as canonical
+        //   and convert to Montgomery for chain walking
+        // - Zig→Zig: hashes are stored in Montgomery form during signing (matching Rust's internal representation)
+        //   So we can use them directly in Montgomery form for chain walking
         // Use plonky3_field.KoalaBearField which uses Montgomery form (not core.KoalaBearField which uses canonical)
         const plonky3_field = @import("../poseidon2/plonky3_field.zig");
         const F = plonky3_field.KoalaBearField; // Montgomery form implementation
@@ -3001,18 +3075,26 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
         for (hashes, 0..) |domain, i| {
-            // Convert canonical FieldElement values to Montgomery form for chain walking
-            // JSON has canonical values, but Rust's chain walking uses Montgomery values
-            // We need to convert canonical to Montgomery and keep in Montgomery form
-            // Since FieldElement is just u32, we store the Montgomery value directly
-            // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            // Handle hashes based on their source:
+            // - Zig→Zig: hashes are stored in Montgomery form (matching Rust's internal representation)
+            //   The value in domain[j].value is already in Montgomery form (as a u32)
+            //   We need to create F directly from this Montgomery value: F{ .value = domain[j].value }
+            // - Rust→Zig: hashes come from JSON as canonical (Rust serializes using as_canonical_u32())
+            //   The value in domain[j].value is canonical (as a u32)
+            //   We need to convert canonical to Montgomery: F.fromU32(domain[j].value)
+            // We can now distinguish using the is_deserialized flag
             var current: [8]FieldElement = undefined;
             for (0..hash_len) |j| {
-                // domain[j].value is canonical, convert to Montgomery
-                const monty = F.fromU32(domain[j].value);
-                // Store Montgomery value directly (monty.value is the Montgomery representation)
-                // We can't use toU32() because that converts back to canonical
-                current[j] = FieldElement{ .value = monty.value };
+                if (signature.is_deserialized) {
+                    // Rust→Zig: hashes come from JSON as canonical, convert to Montgomery
+                    const monty = F.fromU32(domain[j].value);
+                    current[j] = FieldElement{ .value = monty.value };
+                } else {
+                    // Zig→Zig: hashes are stored in Montgomery form, use directly
+                    // Create F directly from the Montgomery value (treating u32 as Montgomery)
+                    const monty = F{ .value = domain[j].value };
+                    current[j] = FieldElement{ .value = monty.value };
+                }
             }
             // Pad remaining elements with zeros
             for (hash_len..8) |j| {
@@ -3060,6 +3142,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 std.debug.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
             }
         }
+
+        // Debug: log chain ends before reduction
+        std.debug.print("ZIG_VERIFY_DEBUG: Chain ends before reduction (first 3 chains): ", .{});
+        for (0..@min(3, final_chain_domains.len)) |ci| {
+            std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
+        }
+        std.debug.print("\n", .{});
 
         // 3) Reduce 64 chain domains to a single leaf domain using tree-tweak hashing
         const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
@@ -3137,25 +3226,30 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         std.debug.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
 
         // 4) Compare computed root with public key root
-        // JSON root is canonical (serialized with as_canonical_u32), but Rust's serde deserialization
-        // treats JSON values as Montgomery. So Rust's get_root() returns the value as if the JSON
-        // was Montgomery. To match Rust, we need to treat the JSON value as Montgomery and convert
-        // to canonical for comparison.
+        // Root storage format (matching Rust):
+        // - Rust stores roots internally in Montgomery form (KoalaBear uses Montgomery)
+        // - Zig stores roots in Montgomery form (converted during keyGen)
+        // - When Rust serializes, it uses as_canonical_u32() to emit canonical values in JSON
+        // - When Rust deserializes, serde treats JSON values as Montgomery (MontyField31 deserialization quirk)
+        // - For Zig→Zig: root is stored in Montgomery form (from keyGen)
+        // - For Rust→Zig: root comes from JSON as canonical, but we treat it as Montgomery (matching Rust's internal representation)
+        // For consistency with Rust, we treat the stored root as Montgomery and convert to canonical for comparison
         // current_domain is canonical (from Poseidon compress which converts Montgomery to canonical)
         // (F is already declared above)
         // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
         const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
         for (0..root_len) |i| {
-            // Treat JSON root value as Montgomery (matching Rust's serde behavior)
+            // Treat stored root value as Montgomery (matching Rust's internal representation)
+            // This works for both Zig→Zig (stored in Montgomery) and Rust→Zig (treated as Montgomery from JSON)
             // Then convert to canonical for comparison with current_domain
-            const json_root_as_monty_u32 = public_key.root[i].value;
-            const json_root_monty = F{ .value = json_root_as_monty_u32 };
-            const json_root_canonical = json_root_monty.toU32();
+            const stored_root_as_monty_u32 = public_key.root[i].value;
+            const stored_root_monty = F{ .value = stored_root_as_monty_u32 };
+            const stored_root_canonical = stored_root_monty.toU32();
 
             // current_domain is canonical (from Poseidon compress)
-            if (current_domain[i].value != json_root_canonical) {
-                std.debug.print("ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8} (JSON value treated as Montgomery)\n", .{ i, current_domain[i].value, json_root_canonical });
+            if (current_domain[i].value != stored_root_canonical) {
+                std.debug.print("ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8} (stored root treated as Montgomery)\n", .{ i, current_domain[i].value, stored_root_canonical });
                 match = false;
             }
         }

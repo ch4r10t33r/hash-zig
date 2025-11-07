@@ -283,7 +283,7 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         }
     }
 
-    return try GeneralizedXMSSSignature.init(allocator, path, rho, hashes_domains);
+    return try GeneralizedXMSSSignature.initDeserialized(allocator, path, rho, hashes_domains);
 }
 
 /// Serialize a GeneralizedXMSSPublicKey to JSON

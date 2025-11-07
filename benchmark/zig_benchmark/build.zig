@@ -67,6 +67,39 @@ pub fn build(b: *std.Build) void {
     verify_18_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(verify_18_exe);
 
+    // Add verification binary for lifetime 2^32
+    const verify_32_exe = b.addExecutable(.{
+        .name = "verify_signature_32",
+        .root_source_file = b.path("src/verify_signature_32.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    verify_32_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(verify_32_exe);
+
+    // Add test binary for Zig sign/verify
+    const test_zig_sign_verify_exe = b.addExecutable(.{
+        .name = "test_zig_sign_verify",
+        .root_source_file = b.path("src/test_zig_sign_verify.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    test_zig_sign_verify_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(test_zig_sign_verify_exe);
+
+    // Add test binary for Zig sign/verify (lifetime 2^18)
+    const test_zig_sign_verify_18_exe = b.addExecutable(.{
+        .name = "test_zig_sign_verify_18",
+        .root_source_file = b.path("src/test_zig_sign_verify_18.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    test_zig_sign_verify_18_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(test_zig_sign_verify_18_exe);
+
     // Add internal test binary
     const test_internal_exe = b.addExecutable(.{
         .name = "test_internal",

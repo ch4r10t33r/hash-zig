@@ -2,12 +2,6 @@
     .name = .zig_benchmark,
     .version = "0.1.0",
     .fingerprint = 0x5ad108973e6f57b9,
-    .dependencies = .{
-        .zig_poseidon = .{
-            .url = "https://github.com/blockblaz/zig-poseidon/archive/refs/heads/main.tar.gz",
-            .hash = "zig_poseidon-0.2.0-CHeW2IA_AQCpTqQYrzpREdQX-Yvu4UkX7RuxmMml3Auf",
-        },
-    },
     .paths = .{
         "",
     },
