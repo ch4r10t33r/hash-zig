@@ -2,6 +2,10 @@
 zig-cache/
 zig-out/
 .zig-cache/
+.cargo/
+.rustup
+.zig-global-cache/
+
 
 # Build outputs
 *.o

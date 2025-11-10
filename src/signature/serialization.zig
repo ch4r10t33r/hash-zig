@@ -245,7 +245,9 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         }
     }
 
+    errdefer allocator.free(path_nodes);
     const path = try HashTreeOpening.init(allocator, path_nodes);
+    allocator.free(path_nodes);
 
     // Parse rho (6 for lifetime 2^18, 7 for lifetime 2^8)
     const rho_array = obj.get("rho") orelse return error.MissingRhoField;
@@ -283,7 +285,10 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         }
     }
 
-    return try GeneralizedXMSSSignature.initDeserialized(allocator, path, rho, hashes_domains);
+    errdefer allocator.free(hashes_domains);
+    const signature = try GeneralizedXMSSSignature.initDeserialized(allocator, path, rho, hashes_domains);
+    allocator.free(hashes_domains);
+    return signature;
 }
 
 /// Serialize a GeneralizedXMSSPublicKey to JSON

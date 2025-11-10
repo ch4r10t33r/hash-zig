@@ -2,9 +2,9 @@ use hashsig::signature::{
     generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8,
     SignatureScheme,
 };
-use std::env;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 use serde_json;
+use std::env;
 
 // Program: Generate two keypairs for lifetime 2^8 using the same seed and compare public keys
 // Usage: set SEED_HEX (64 hex chars). Defaults to 0x42 repeated.
@@ -14,10 +14,14 @@ fn main() {
     // Seed handling (32-byte hex)
     let seed_hex = env::var("SEED_HEX").unwrap_or_else(|_| "42".repeat(64));
     let mut seed = [0u8; 32];
-    let used_seed_hex = if seed_hex.len() >= 64 { &seed_hex[..64] } else { &seed_hex };
+    let used_seed_hex = if seed_hex.len() >= 64 {
+        &seed_hex[..64]
+    } else {
+        &seed_hex
+    };
     for i in 0..32 {
-        let hi = u8::from_str_radix(&used_seed_hex[i*2..i*2+1], 16).unwrap_or(0);
-        let lo = u8::from_str_radix(&used_seed_hex[i*2+1..i*2+2], 16).unwrap_or(0);
+        let hi = u8::from_str_radix(&used_seed_hex[i * 2..i * 2 + 1], 16).unwrap_or(0);
+        let lo = u8::from_str_radix(&used_seed_hex[i * 2 + 1..i * 2 + 2], 16).unwrap_or(0);
         seed[i] = (hi << 4) | lo;
     }
     println!("SEED: {}", used_seed_hex);
@@ -60,7 +64,7 @@ fn main() {
         println!("❌ Non-deterministic with current path (2^8)");
         println!("Hint: ensure RNG is the only randomness source in keygen");
     }
-    
+
     // Print the public key for inspection
     println!("\nPublic Key (JSON):");
     println!("{}", pk1_json);

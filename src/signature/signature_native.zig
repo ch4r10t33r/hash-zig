@@ -11,6 +11,7 @@ const serialization = @import("serialization.zig");
 const KOALABEAR_PRIME = @import("../core/field.zig").KOALABEAR_PRIME;
 const ChaCha12Rng = @import("../prf/chacha12_rng.zig").ChaCha12Rng;
 const KoalaBearField = @import("../poseidon2/plonky3_field.zig").KoalaBearField;
+const BigInt = std.math.big.int.Managed;
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;
@@ -1816,93 +1817,23 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Compute hypercube part size: total size of layers 0 to d (inclusive) in hypercube [0, BASE-1]^DIMENSION
     /// Layer d contains all vertices (x_1, ..., x_DIMENSION) where sum_i x_i = (BASE-1)*DIMENSION - d
-    fn hypercubePartSize(comptime BASE: usize, comptime DIMENSION: usize, d: usize) u128 {
-        // For BASE=8, DIMENSION=64, we need to compute sum of layer sizes
-        // Layer sizes follow a pattern based on multinomial coefficients
-        // This is a simplified implementation - for production, should use precomputed table like Rust
-        // For now, compute on-the-fly using dynamic programming
-
-        // Layer 0: only vertex (BASE-1, ..., BASE-1) - size 1
-        // Layer k: vertices with sum = (BASE-1)*DIMENSION - k
-        // We need sum of sizes for layers 0..d
-
-        // For small values, we can compute directly
-        // For large values, we approximate or use a table
-        // Since this is complex, let's use a simpler approach: compute the big integer value
-        // and take modulo directly without precomputing the exact part size
-
-        // For now, return a large enough value to ensure modulo works
-        // The actual part size is less than BASE^DIMENSION
-        // But we'll compute it properly in the full implementation
-        _ = BASE;
-        _ = DIMENSION;
-        _ = d;
-
-        // Simplified: return a value that's large enough
-        // In practice, we'd compute: sum of multinomial coefficients
-        // For BASE=8, DIMENSION=64, FINAL_LAYER=77, this is complex
-
-        // For now, use a workaround: compute the big integer and take modulo a large number
-        // then find the layer by iterating
-        return 0; // Will be computed in mapIntoHypercubePart
-    }
-
-    /// Find which layer x belongs to in hypercube [0, BASE-1]^DIMENSION
-    /// Returns (layer, offset) where offset is the position within that layer
-    /// Uses precomputed prefix sums for efficiency (matching Rust's hypercube_find_layer)
-    fn hypercubeFindLayer(self: *GeneralizedXMSSSignatureScheme, BASE: usize, DIMENSION: usize, x: u256) !struct { layer: usize, offset: u256 } {
-        const layer_data = try self.getLayerData(BASE);
-        const info = layer_data.get(DIMENSION);
-
-        // Use binary search on prefix_sums to find the layer
-        // Find the smallest d such that prefix_sums[d] > x
-        // This is equivalent to Rust's partition_point
-
-        const last_prefix = info.prefix_sums[info.prefix_sums.len - 1];
-        if (x >= last_prefix) {
-            return error.InvalidHypercubeIndex;
-        }
-
-        // Binary search for the layer
-        var left: usize = 0;
-        var right: usize = info.prefix_sums.len;
-
-        while (left < right) {
-            const mid = left + (right - left) / 2;
-            if (info.prefix_sums[mid] <= x) {
-                left = mid + 1;
-            } else {
-                right = mid;
-            }
-        }
-
-        const d = left;
-
-        // Compute offset within the layer
-        const offset = if (d > 0) x -% info.prefix_sums[d - 1] else x;
-
-        return .{ .layer = d, .offset = offset };
-    }
-
     /// Precomputed layer data for a given base (matching Rust's AllLayerData)
     /// Caches layer sizes and prefix sums for all dimensions up to MAX_DIMENSION
     const LayerInfo = struct {
-        sizes: []u256, // Layer sizes for each layer d
-        prefix_sums: []u256, // Prefix sums (cumulative sizes)
+        sizes: []BigInt, // Layer sizes for each layer d
+        prefix_sums: []BigInt, // Prefix sums (cumulative sizes)
         allocator: Allocator,
 
         pub fn deinit(self: *LayerInfo) void {
-            self.allocator.free(self.sizes);
-            self.allocator.free(self.prefix_sums);
-        }
-
-        /// Sum of sizes in inclusive range [start, end]
-        pub fn sizesSumInRange(self: *const LayerInfo, start: usize, end: usize) u256 {
-            if (start == 0) {
-                return self.prefix_sums[end];
-            } else {
-                return self.prefix_sums[end] -% self.prefix_sums[start - 1];
+            for (self.sizes) |*value| {
+                value.deinit();
             }
+            if (self.sizes.len > 0) self.allocator.free(self.sizes);
+
+            for (self.prefix_sums) |*value| {
+                value.deinit();
+            }
+            if (self.prefix_sums.len > 0) self.allocator.free(self.prefix_sums);
         }
     };
 
@@ -1924,15 +1855,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Prepare layer info for a given base w (matching Rust's prepare_layer_info)
     /// Uses inductive approach: compute dimension v from dimension v-1
+    fn initBigIntSlice(allocator: Allocator, len: usize) ![]BigInt {
+        const slice = try allocator.alloc(BigInt, len);
+        errdefer allocator.free(slice);
+        for (slice) |*item| {
+            item.* = try BigInt.init(allocator);
+        }
+        return slice;
+    }
+
     fn prepareLayerInfo(allocator: Allocator, w: usize) !AllLayerInfoForBase {
         const MAX_DIMENSION: usize = 100; // Match Rust's MAX_DIMENSION
 
         var all_info = try allocator.alloc(LayerInfo, MAX_DIMENSION + 1);
         errdefer {
             for (all_info) |*info| {
-                if (info.sizes.len > 0) {
-                    info.deinit();
-                }
+                info.deinit();
             }
             allocator.free(all_info);
         }
@@ -1940,23 +1878,32 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Initialize all to empty (index 0 unused)
         for (all_info) |*info| {
             info.* = LayerInfo{
-                .sizes = &[_]u256{},
-                .prefix_sums = &[_]u256{},
+                .sizes = &[_]BigInt{},
+                .prefix_sums = &[_]BigInt{},
                 .allocator = allocator,
             };
         }
 
         // Base case: dimension v = 1
-        // Layer sizes are all 1 (each value 0..w-1 is in its own layer)
-        const dim1_sizes = try allocator.alloc(u256, w);
-        for (dim1_sizes) |*val| val.* = 1;
+        const dim1_sizes = try initBigIntSlice(allocator, w);
+        errdefer {
+            for (dim1_sizes) |*value| value.deinit();
+            allocator.free(dim1_sizes);
+        }
+        const dim1_prefix_sums = try initBigIntSlice(allocator, w);
+        errdefer {
+            for (dim1_prefix_sums) |*value| value.deinit();
+            allocator.free(dim1_prefix_sums);
+        }
 
-        // Prefix sums for v=1: [1, 2, 3, ..., w]
-        const dim1_prefix_sums = try allocator.alloc(u256, w);
-        var sum: u256 = 0;
+        for (dim1_sizes) |*val| {
+            try val.set(1);
+        }
+        var cumulative = try BigInt.initSet(allocator, 0);
+        defer cumulative.deinit();
         for (dim1_prefix_sums) |*prefix| {
-            sum +%= 1;
-            prefix.* = sum;
+            try BigInt.addScalar(&cumulative, &cumulative, 1);
+            try BigInt.addScalar(prefix, &cumulative, 0);
         }
 
         all_info[1] = LayerInfo{
@@ -1968,39 +1915,33 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Inductive step: compute for dimensions v = 2 to MAX_DIMENSION
         for (2..MAX_DIMENSION + 1) |v| {
             const max_d = (w - 1) * v;
-
-            // Compute sizes for current dimension v using standard DP:
-            // sizes_v[d] = sum_{t=0..min(d, w-1)} sizes_{v-1}[d - t]
-            var current_sizes = try allocator.alloc(u256, max_d + 1);
-            errdefer allocator.free(current_sizes);
-
-            const prev_info = all_info[v - 1];
-
-            // Running windowed sum over prev_info.sizes with window size w
-            var running_sum: u256 = 0;
-            for (0..max_d + 1) |d| {
-                // add prev_sizes[d] if within bounds
-                if (d < prev_info.sizes.len) {
-                    running_sum +%= prev_info.sizes[d];
-                }
-                // subtract prev_sizes[d - w] when window exceeds size w
-                if (d >= w) {
-                    const idx = d - w;
-                    if (idx < prev_info.sizes.len) {
-                        running_sum -%= prev_info.sizes[idx];
-                    }
-                }
-                current_sizes[d] = running_sum;
+            var current_sizes = try initBigIntSlice(allocator, max_d + 1);
+            errdefer {
+                for (current_sizes) |*value| value.deinit();
+                allocator.free(current_sizes);
             }
 
-            // Compute prefix sums from sizes
-            const current_prefix_sums = try allocator.alloc(u256, max_d + 1);
-            errdefer allocator.free(current_prefix_sums);
+            const prev_info = all_info[v - 1];
+            for (0..max_d + 1) |d| {
+                const max_t = @min(d, w - 1);
+                for (0..max_t + 1) |t| {
+                    const idx = d - t;
+                    if (idx < prev_info.sizes.len) {
+                        try BigInt.add(&current_sizes[d], &current_sizes[d], &prev_info.sizes[idx]);
+                    }
+                }
+            }
 
-            sum = 0;
-            for (current_sizes, current_prefix_sums) |size, *prefix| {
-                sum +%= size;
-                prefix.* = sum;
+            var current_prefix_sums = try initBigIntSlice(allocator, max_d + 1);
+            errdefer {
+                for (current_prefix_sums) |*value| value.deinit();
+                allocator.free(current_prefix_sums);
+            }
+
+            try cumulative.set(0);
+            for (0..max_d + 1) |d| {
+                try BigInt.add(&cumulative, &cumulative, &current_sizes[d]);
+                try BigInt.addScalar(&current_prefix_sums[d], &cumulative, 0);
             }
 
             all_info[v] = LayerInfo{
@@ -2029,88 +1970,102 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
     }
 
-    /// Compute size of a single layer using precomputed data (matching Rust's approach)
-    fn hypercubeLayerSize(self: *GeneralizedXMSSSignatureScheme, BASE: usize, DIMENSION: usize, d: usize) !u256 {
-        const layer_data = try self.getLayerData(BASE);
-        const info = layer_data.get(DIMENSION);
-
-        if (d < info.sizes.len) {
-            return info.sizes[d];
-        } else {
-            return 0;
-        }
-    }
-
     /// Map (layer, offset) to a vertex in hypercube [0, BASE-1]^DIMENSION
     /// Returns array of DIMENSION chunks, each in [0, BASE-1]
     /// Uses precomputed layer data for efficiency (matching Rust's map_to_vertex)
-    fn mapToVertex(self: *GeneralizedXMSSSignatureScheme, BASE: usize, DIMENSION: usize, layer: usize, offset: u256) ![]u8 {
-        // This implements the inverse of map_to_integer
-        // Algorithm from Rust's map_to_vertex
-
+    fn hypercubeFindLayerBig(
+        self: *GeneralizedXMSSSignatureScheme,
+        BASE: usize,
+        DIMENSION: usize,
+        final_layer: usize,
+        value: *const BigInt,
+        offset_out: *BigInt,
+    ) !usize {
         const layer_data = try self.getLayerData(BASE);
-
-        var result = try self.allocator.alloc(u8, DIMENSION);
-        var x_curr: u256 = offset;
-        var d_curr: usize = layer;
-
-        // Verify x_curr < layer size
         const info = layer_data.get(DIMENSION);
-        if (d_curr >= info.sizes.len or x_curr >= info.sizes[d_curr]) {
-            self.allocator.free(result);
-            return error.InvalidHypercubeMapping;
+
+        if (info.prefix_sums.len == 0) return error.InvalidHypercubeIndex;
+        const last_prefix = &info.prefix_sums[info.prefix_sums.len - 1];
+        if (value.*.order(last_prefix.*) != .lt) return error.InvalidHypercubeIndex;
+
+        var left: usize = 0;
+        var right: usize = info.prefix_sums.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const cmp = info.prefix_sums[mid].order(value.*);
+            if (cmp == .lt or cmp == .eq) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
         }
 
-        // For each position except the last
+        const layer = left;
+        if (layer > final_layer) return error.InvalidHypercubeIndex;
+
+        try BigInt.addScalar(offset_out, value, 0);
+        if (layer > 0) {
+            try BigInt.sub(offset_out, offset_out, &info.prefix_sums[layer - 1]);
+        }
+
+        return layer;
+    }
+
+    fn mapToVertexBig(
+        self: *GeneralizedXMSSSignatureScheme,
+        BASE: usize,
+        DIMENSION: usize,
+        layer: usize,
+        offset: *const BigInt,
+    ) ![]u8 {
+        const layer_data = try self.getLayerData(BASE);
+        const info = layer_data.get(DIMENSION);
+
+        if (layer >= info.sizes.len) return error.InvalidHypercubeMapping;
+        if (offset.*.order(info.sizes[layer]) != .lt) return error.InvalidHypercubeMapping;
+
+        var result = try self.allocator.alloc(u8, DIMENSION);
+        errdefer self.allocator.free(result);
+
+        var x_curr = try offset.*.toConst().toManaged(self.allocator);
+        defer x_curr.deinit();
+        var d_curr = layer;
+
         for (1..DIMENSION) |i| {
-            var ji: usize = BASE; // Invalid value
+            var ji: usize = BASE;
             const sub_dim = DIMENSION - i;
             const range_start = if (d_curr > (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
-
-            // Get layer info for sub-dimension
             const sub_info = layer_data.get(sub_dim);
 
-            // Find j in [range_start, min(BASE-1, d_curr)]
             var j: usize = range_start;
-            while (j <= @min(BASE - 1, d_curr)) : (j += 1) {
+            const limit = @min(BASE - 1, d_curr);
+            while (j <= limit) : (j += 1) {
                 const sub_layer = d_curr - j;
-                if (sub_layer < sub_info.sizes.len) {
-                    const count = sub_info.sizes[sub_layer];
-                    if (x_curr >= count) {
-                        x_curr -%= count;
-                    } else {
-                        ji = j;
-                        break;
-                    }
+                if (sub_layer >= sub_info.sizes.len) continue;
+                const count = &sub_info.sizes[sub_layer];
+                const cmp = x_curr.order(count.*);
+                if (cmp == .gt or cmp == .eq) {
+                    try BigInt.sub(&x_curr, &x_curr, count);
                 } else {
-                    // Layer size is 0 for invalid layers
-                    continue;
+                    ji = j;
+                    break;
                 }
             }
 
-            if (ji >= BASE) {
-                self.allocator.free(result);
-                return error.InvalidHypercubeMapping;
-            }
+            if (ji >= BASE) return error.InvalidHypercubeMapping;
 
             const ai = BASE - 1 - ji;
             result[i - 1] = @as(u8, @intCast(ai));
             d_curr -= (BASE - 1) - ai;
         }
 
-        // Last position - convert x_curr to u64 for the final check
-        const x_curr_u64 = @as(u64, @truncate(x_curr));
-        if (x_curr_u64 + d_curr >= BASE) {
-            self.allocator.free(result);
-            return error.InvalidHypercubeMapping;
-        }
+        const x_curr_u64 = x_curr.toInt(u64) catch return error.InvalidHypercubeMapping;
+        if (x_curr_u64 + d_curr >= BASE) return error.InvalidHypercubeMapping;
         result[DIMENSION - 1] = @as(u8, @intCast(BASE - 1 - x_curr_u64 - d_curr));
 
         return result;
     }
 
-    /// Map into hypercube part (matching Rust map_into_hypercube_part)
-    /// Combines field elements into big integer, takes modulo part size, finds layer, maps to vertex
     fn mapIntoHypercubePart(
         self: *GeneralizedXMSSSignatureScheme,
         DIMENSION: usize,
@@ -2118,51 +2073,49 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         final_layer: usize,
         field_elements: []const FieldElement,
     ) ![]u8 {
-        // Combine field elements into value modulo part_size directly (base-p Horner)
-        const p_u256: u256 = 2130706433;
-
-        // Compute hypercube part size (sum of layer sizes 0..final_layer)
-        // Use precomputed prefix sums for efficiency
         const layer_data = try self.getLayerData(BASE);
         const info = layer_data.get(DIMENSION);
+        if (final_layer >= info.prefix_sums.len) return error.InvalidHypercubeIndex;
 
-        if (final_layer >= info.prefix_sums.len) {
-            std.debug.print("ZIG_HYPERCUBE_DEBUG: final_layer={} >= prefix_sums.len={}\n", .{ final_layer, info.prefix_sums.len });
-            return error.InvalidHypercubeIndex;
-        }
+        var modulus = try BigInt.init(self.allocator);
+        defer modulus.deinit();
+        try BigInt.addScalar(&modulus, &info.prefix_sums[final_layer], 0);
 
-        const part_size = info.prefix_sums[final_layer];
+        var value = try BigInt.initSet(self.allocator, 0);
+        defer value.deinit();
 
-        // Compute acc mod part_size using base-p Horner (matching Rust exactly)
-        // Rust: acc = &acc * F::ORDER_U64 + fe.as_canonical_biguint(); then acc %= dom_size
-        // We do modulo during combination for efficiency, which is mathematically equivalent
-        var value: u256 = 0;
+        var multiplier = try BigInt.initSet(self.allocator, KOALABEAR_PRIME);
+        defer multiplier.deinit();
+
+        var tmp = try BigInt.init(self.allocator);
+        defer tmp.deinit();
+
+        var quotient = try BigInt.init(self.allocator);
+        defer quotient.deinit();
+
+        var remainder = try BigInt.init(self.allocator);
+        defer remainder.deinit();
+
         std.debug.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
         for (field_elements, 0..) |fe, i| {
             if (i < 5) {
                 std.debug.print("fe[{}]=0x{x:0>8} ", .{ i, fe.value });
             }
-            value = (value *% p_u256) % part_size;
-            value = (value +% @as(u256, fe.value)) % part_size;
+            try BigInt.mul(&tmp, &value, &multiplier);
+            try BigInt.addScalar(&tmp, &tmp, fe.value);
+            try BigInt.divFloor(&quotient, &remainder, &tmp, &modulus);
+            try BigInt.addScalar(&value, &remainder, 0);
         }
-        std.debug.print("\nZIG_HYPERCUBE_DEBUG: Combined value mod part_size: {}\n", .{value});
+        std.debug.print("\n", .{});
 
-        // Find the actual layer that value maps to (matching Rust hypercube_find_layer)
-        const layer_result = try self.hypercubeFindLayer(BASE, DIMENSION, value);
-        const layer = layer_result.layer;
-        const offset = layer_result.offset;
+        var offset = try BigInt.init(self.allocator);
+        defer offset.deinit();
+        const layer = try self.hypercubeFindLayerBig(BASE, DIMENSION, final_layer, &value, &offset);
 
-        // Ensure layer is within valid range [0, final_layer]
-        if (layer > final_layer) {
-            return error.InvalidHypercubeIndex;
-        }
+        std.debug.print("ZIG_HYPERCUBE_DEBUG: layer={} offset_bitlen={}\n", .{ layer, offset.toConst().bitCountAbs() });
 
-        std.debug.print("ZIG_HYPERCUBE_DEBUG: layer={} offset={}\n", .{ layer, offset });
+        const chunks = try self.mapToVertexBig(BASE, DIMENSION, layer, &offset);
 
-        // Map to vertex using precomputed data at the actual layer (matching Rust map_to_vertex)
-        const chunks = try self.mapToVertex(BASE, DIMENSION, layer, offset);
-
-        // Debug: print first few chunks and sum
         var chunk_sum: usize = 0;
         for (chunks) |chunk| chunk_sum += chunk;
         std.debug.print("ZIG_HYPERCUBE_DEBUG: chunks[0..5]: ", .{});
@@ -3044,6 +2997,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Allocate and copy chunks (take first dimension elements)
         const x = try self.allocator.alloc(u8, self.lifetime_params.dimension);
+        defer self.allocator.free(x);
         @memcpy(x, chunks[0..self.lifetime_params.dimension]);
 
         // Debug: log encoding sum and first few chunks
@@ -3225,31 +3179,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
         std.debug.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
 
-        // 4) Compare computed root with public key root
-        // Root storage format (matching Rust):
-        // - Rust stores roots internally in Montgomery form (KoalaBear uses Montgomery)
-        // - Zig stores roots in Montgomery form (converted during keyGen)
-        // - When Rust serializes, it uses as_canonical_u32() to emit canonical values in JSON
-        // - When Rust deserializes, serde treats JSON values as Montgomery (MontyField31 deserialization quirk)
-        // - For Zig→Zig: root is stored in Montgomery form (from keyGen)
-        // - For Rust→Zig: root comes from JSON as canonical, but we treat it as Montgomery (matching Rust's internal representation)
-        // For consistency with Rust, we treat the stored root as Montgomery and convert to canonical for comparison
-        // current_domain is canonical (from Poseidon compress which converts Montgomery to canonical)
-        // (F is already declared above)
+        // 4) Compare computed root with public key root (both stored as canonical field elements)
         // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
         const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
         for (0..root_len) |i| {
-            // Treat stored root value as Montgomery (matching Rust's internal representation)
-            // This works for both Zig→Zig (stored in Montgomery) and Rust→Zig (treated as Montgomery from JSON)
-            // Then convert to canonical for comparison with current_domain
-            const stored_root_as_monty_u32 = public_key.root[i].value;
-            const stored_root_monty = F{ .value = stored_root_as_monty_u32 };
-            const stored_root_canonical = stored_root_monty.toU32();
-
-            // current_domain is canonical (from Poseidon compress)
-            if (current_domain[i].value != stored_root_canonical) {
-                std.debug.print("ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8} (stored root treated as Montgomery)\n", .{ i, current_domain[i].value, stored_root_canonical });
+            if (current_domain[i].value != public_key.root[i].value) {
+                std.debug.print("ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ i, current_domain[i].value, public_key.root[i].value });
                 match = false;
             }
         }

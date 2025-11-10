@@ -105,6 +105,78 @@ pub fn build(b: *std.Build) void {
     const basic_example_exe_step = b.step("example", "Run basic usage example");
     basic_example_exe_step.dependOn(&run_basic_example_exe.step);
 
+    // Lifetime 2^18 sign/verify investigation
+    const lifetime_2_18_module = b.createModule(.{
+        .root_source_file = b.path("investigations/test_lifetime_2_18.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lifetime_2_18_module.addImport("hash-zig", hash_zig_module);
+
+    const lifetime_2_18_exe = b.addExecutable(.{
+        .name = "lifetime-2-18-test",
+        .root_module = lifetime_2_18_module,
+    });
+    b.installArtifact(lifetime_2_18_exe);
+
+    const run_lifetime_2_18_exe = b.addRunArtifact(lifetime_2_18_exe);
+    const lifetime_2_18_step = b.step("test-lifetime-2-18", "Run lifetime 2^18 Zig sign/verify test");
+    lifetime_2_18_step.dependOn(&run_lifetime_2_18_exe.step);
+
+    // Lifetime 2^18 signing and verification tools
+    const sign_lifetime_2_18_module = b.createModule(.{
+        .root_source_file = b.path("investigations/sign_lifetime_2_18.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sign_lifetime_2_18_module.addImport("root.zig", hash_zig_module);
+
+    const sign_lifetime_2_18_exe = b.addExecutable(.{
+        .name = "sign-lifetime-2-18",
+        .root_module = sign_lifetime_2_18_module,
+    });
+    b.installArtifact(sign_lifetime_2_18_exe);
+
+    const verify_lifetime_2_18_module = b.createModule(.{
+        .root_source_file = b.path("investigations/verify_lifetime_2_18.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    verify_lifetime_2_18_module.addImport("root.zig", hash_zig_module);
+
+    const verify_lifetime_2_18_exe = b.addExecutable(.{
+        .name = "verify-lifetime-2-18",
+        .root_module = verify_lifetime_2_18_module,
+    });
+    b.installArtifact(verify_lifetime_2_18_exe);
+
+    // Zig benchmark utilities (lifetime 2^8)
+    const zig_sign_2_8_module = b.createModule(.{
+        .root_source_file = b.path("benchmark/zig_benchmark/src/sign_message.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_sign_2_8_module.addImport("hash-zig", hash_zig_module);
+
+    const zig_sign_2_8_exe = b.addExecutable(.{
+        .name = "zig-sign-message",
+        .root_module = zig_sign_2_8_module,
+    });
+    b.installArtifact(zig_sign_2_8_exe);
+
+    const zig_verify_2_8_module = b.createModule(.{
+        .root_source_file = b.path("benchmark/zig_benchmark/src/verify_signature.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_verify_2_8_module.addImport("hash-zig", hash_zig_module);
+
+    const zig_verify_2_8_exe = b.addExecutable(.{
+        .name = "zig-verify-signature",
+        .root_module = zig_verify_2_8_module,
+    });
+    b.installArtifact(zig_verify_2_8_exe);
+
     // Rust compatibility test step (for CI)
     const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests");
     rust_test_step.dependOn(&run_rust_compat_tests.step);
