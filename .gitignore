@@ -23,12 +23,6 @@ zig-out/
 # Test artifacts
 test_*
 *.test
-
-# Exceptions for compatibility test files
-!examples/test_shake_prf_compatibility.zig
-!examples/test_poseidon2_compatibility.zig
-!examples/test_generalized_xmss_compat.zig
-
 # Temporary files
 tmp/
 temp/
@@ -41,9 +35,6 @@ temp/
 docs/
 site/
 
-# Investigation and analysis documents
-investigations/
-analysis/
 
 # OS-specific files
 Thumbs.db

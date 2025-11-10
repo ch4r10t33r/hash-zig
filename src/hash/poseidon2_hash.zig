@@ -94,7 +94,7 @@ pub const Poseidon2RustCompat = struct {
         // Use Poseidon2KoalaBear16.compress which handles permute + feed-forward
         // This returns [8]u32 (HASH_LEN), matching Rust's poseidon_compress output
         const output_u32 = Poseidon2KoalaBear16.compress(8, &input_u32);
-        
+
         // Convert back to FieldElement array (return all 16 for compatibility, but only first 8 are used)
         const output = try allocator.alloc(FieldElement, WIDTH_16);
         for (0..8) |i| {

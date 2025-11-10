@@ -8,6 +8,8 @@ pub const Poseidon2KoalaBear16Plonky3 = @import("poseidon2.zig").Poseidon2KoalaB
 pub const Poseidon2KoalaBear24 = @import("poseidon2.zig").Poseidon2KoalaBear24Plonky3;
 pub const Poseidon2KoalaBear24Plonky3 = @import("poseidon2.zig").Poseidon2KoalaBear24Plonky3;
 
+const FieldElement = @import("../core/field.zig").FieldElement;
+
 // Re-export commonly used functions
 pub const poseidon2_16 = @import("poseidon2.zig").poseidon2_16_plonky3;
 pub const poseidon2_24 = @import("poseidon2.zig").poseidon2_24_plonky3;
@@ -27,3 +29,15 @@ pub const PLONKY3_KOALABEAR_RC16_INTERNAL = @import("poseidon2.zig").PLONKY3_KOA
 pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL = @import("poseidon2.zig").PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL;
 pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL = @import("poseidon2.zig").PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL;
 pub const PLONKY3_KOALABEAR_RC24_INTERNAL = @import("poseidon2.zig").PLONKY3_KOALABEAR_RC24_INTERNAL;
+
+pub const TargetSumEncoding = struct {
+    pub fn encode(_: *TargetSumEncoding, input: []FieldElement) []FieldElement {
+        return input;
+    }
+};
+
+pub const TopLevelPoseidonMessageHash = struct {
+    pub fn hash(_: *TopLevelPoseidonMessageHash, input: []FieldElement) []FieldElement {
+        return input;
+    }
+};

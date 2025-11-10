@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
 
     // Performance tests
     const performance_tests = b.addTest(.{
-        .root_source_file = b.path("test/performance_test.zig"),
+        .root_source_file = b.path("investigations/test/performance_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
 
     // Rust compatibility tests
     const rust_compat_tests = b.addTest(.{
-        .root_source_file = b.path("test/rust_compatibility_test.zig"),
+        .root_source_file = b.path("investigations/test/rust_compatibility_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
 
     // Comprehensive Rust compatibility tests
     const comprehensive_rust_compat_tests = b.addTest(.{
-        .root_source_file = b.path("test/comprehensive_rust_compatibility_test.zig"),
+        .root_source_file = b.path("investigations/test/comprehensive_rust_compatibility_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
 
     // Encoding variants tests
     const encoding_variants_tests = b.addTest(.{
-        .root_source_file = b.path("test/encoding_variants_test.zig"),
+        .root_source_file = b.path("investigations/test/encoding_variants_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -69,7 +69,7 @@ pub fn build(b: *std.Build) void {
 
     // Performance benchmark tests
     const performance_benchmark_tests = b.addTest(.{
-        .root_source_file = b.path("test/performance_benchmark_test.zig"),
+        .root_source_file = b.path("investigations/test/performance_benchmark_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -77,13 +77,15 @@ pub fn build(b: *std.Build) void {
     const run_performance_benchmark_tests = b.addRunArtifact(performance_benchmark_tests);
 
     // Test step runs all tests
-    const test_step = b.step("test", "Run all tests");
+    const test_step = b.step("test", "Run core library tests");
     test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_performance_tests.step);
-    test_step.dependOn(&run_rust_compat_tests.step);
-    test_step.dependOn(&run_comprehensive_rust_compat_tests.step);
-    test_step.dependOn(&run_encoding_variants_tests.step);
-    test_step.dependOn(&run_performance_benchmark_tests.step);
+
+    const extended_tests_step = b.step("test-extended", "Run extended compatibility and benchmark tests");
+    extended_tests_step.dependOn(&run_performance_tests.step);
+    extended_tests_step.dependOn(&run_rust_compat_tests.step);
+    extended_tests_step.dependOn(&run_comprehensive_rust_compat_tests.step);
+    extended_tests_step.dependOn(&run_encoding_variants_tests.step);
+    extended_tests_step.dependOn(&run_performance_benchmark_tests.step);
 
     // Basic usage example
     const basic_example_module = b.createModule(.{

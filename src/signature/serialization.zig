@@ -234,7 +234,7 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         if (node_val != .array) return error.InvalidJsonFormat;
         const node_len = node_val.array.items.len;
         if (node_len < 7 or node_len > 8) return error.InvalidJsonFormat;
-        
+
         // Copy node elements (7 or 8)
         for (0..node_len) |j| {
             path_nodes[i][j] = try parseFieldElementFromJsonValue(node_val.array.items[j]);
@@ -272,7 +272,7 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         if (domain_val != .array) return error.InvalidJsonFormat;
         const domain_len = domain_val.array.items.len;
         if (domain_len < 7 or domain_len > 8) return error.InvalidJsonFormat;
-        
+
         // Copy domain elements (7 or 8)
         for (0..domain_len) |j| {
             hashes_domains[i][j] = try parseFieldElementFromJsonValue(domain_val.array.items[j]);
