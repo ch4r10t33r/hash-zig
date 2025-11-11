@@ -85,23 +85,19 @@ jobs:
           fi
       
       - name: Setup Zig
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.1
       
       - name: Verify Zig installation
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         run: zig version
 
       - name: Install Rust toolchain
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.87.0
       
       - name: Clear Zig cache and fetch dependencies
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         shell: bash
         run: |
           echo "Clearing Zig cache and fetching dependencies..."
@@ -126,7 +122,6 @@ jobs:
         run: zig build
 
       - name: Deterministic key generation benchmark (2^8)
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -134,6 +129,9 @@ jobs:
           out_dir="tmp/deterministic_keygen"
           mkdir -p "${out_dir}"
           echo "Deterministic seed: ${seed}"
+
+          echo "Building required Zig artifacts..."
+          zig build
 
           zig_start=$(date +%s%N)
           ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache" \
