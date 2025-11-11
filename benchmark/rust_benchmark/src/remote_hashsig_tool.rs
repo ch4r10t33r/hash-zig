@@ -1,3 +1,5 @@
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{self, Value};
 use std::convert::TryFrom;
