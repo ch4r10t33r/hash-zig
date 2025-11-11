@@ -1,6 +1,6 @@
 const std = @import("std");
 const hash_zig = @import("hash-zig");
-const GeneralizedXMSSSignatureScheme = hash_zig.HashSignatureNative;
+const GeneralizedXMSSSignatureScheme = hash_zig.GeneralizedXMSSSignatureScheme;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

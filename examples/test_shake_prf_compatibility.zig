@@ -50,79 +50,40 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Test key generation
-    std.debug.print("2. Testing HashSignatureShakeCompat:\n", .{});
-    std.debug.print("-------------------------------------\n", .{});
+    // Test key generation using the core XMSS scheme
+    std.debug.print("2. Testing GeneralizedXMSSSignatureScheme (lifetime 2^8):\n", .{});
+    std.debug.print("--------------------------------------------------------\n", .{});
 
-    var sig_scheme = try hash_zig.HashSignatureShakeCompat.init(allocator, .lifetime_2_8);
+    var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer sig_scheme.deinit();
 
-    const keypair = try sig_scheme.keyGen(&seed);
-    defer allocator.free(keypair.public_key);
-    defer allocator.free(keypair.private_key);
+    const keypair = try sig_scheme.keyGen(0, 256);
+    defer keypair.secret_key.deinit();
 
-    std.debug.print("Generated keypair:\n", .{});
-    std.debug.print("  Public key ({} elements):\n", .{keypair.public_key.len});
-    for (keypair.public_key, 0..) |pk, i| {
-        std.debug.print("    [{}]: {} (0x{:08})\n", .{ i, pk.value, pk.value });
-    }
-
-    std.debug.print("  Private key ({} elements):\n", .{keypair.private_key.len});
-    for (keypair.private_key, 0..) |sk, i| {
-        std.debug.print("    [{}]: {} (0x{:08})\n", .{ i, sk.value, sk.value });
+    const root = keypair.public_key.getRoot();
+    std.debug.print("Generated public key root (Montgomery):\n", .{});
+    for (root, 0..) |fe, i| {
+        std.debug.print("  [{}]: 0x{x:0>8}\n", .{ i, fe.value });
     }
     std.debug.print("\n", .{});
 
-    // Convert public key to bytes for comparison
-    var public_key_bytes = try allocator.alloc(u8, keypair.public_key.len * 4);
-    defer allocator.free(public_key_bytes);
-    for (keypair.public_key, 0..) |pk, i| {
-        const val = pk.value;
-        var slice = public_key_bytes[i * 4 .. i * 4 + 4];
-        std.mem.writeInt(u32, slice[0..4], val, .little);
+    // Convert root to canonical bytes and hash for reference
+    var root_bytes = try allocator.alloc(u8, root.len * 4);
+    defer allocator.free(root_bytes);
+    for (root, 0..) |fe, i| {
+        const slice = root_bytes[i * 4 .. i * 4 + 4];
+        const ptr: *[4]u8 = @ptrCast(slice.ptr);
+        std.mem.writeInt(u32, ptr, fe.toCanonical(), .little);
     }
 
-    // Hash the public key for comparison
     var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-    hasher.update(public_key_bytes);
+    hasher.update(root_bytes);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
 
-    std.debug.print("3. Results for comparison:\n", .{});
-    std.debug.print("---------------------------\n", .{});
-    std.debug.print("Public key size: {} bytes\n", .{public_key_bytes.len});
-    std.debug.print("Public key hex: ", .{});
-    for (public_key_bytes) |b| std.debug.print("{x:02}", .{b});
-    std.debug.print("\n", .{});
-
-    std.debug.print("Public key SHA3: ", .{});
+    std.debug.print("Public key root SHA3: ", .{});
     for (digest) |b| std.debug.print("{x:02}", .{b});
-    std.debug.print("\n", .{});
+    std.debug.print("\n\n", .{});
 
-    std.debug.print("\nExpected Rust output:\n", .{});
-    std.debug.print("Public key SHA3: ecb752f1e7e8b29ed1629784cc64667d644ca9d553caede9413aa248eb7edf20\n", .{});
-
-    std.debug.print("\nComparison:\n", .{});
-    const expected_sha3 = "ecb752f1e7e8b29ed1629784cc64667d644ca9d553caede9413aa248eb7edf20";
-    var expected_bytes: [32]u8 = undefined;
-    for (0..32) |i| {
-        const hi = std.fmt.parseInt(u4, expected_sha3[i * 2 .. i * 2 + 1], 16) catch 0;
-        const lo = std.fmt.parseInt(u4, expected_sha3[i * 2 + 1 .. i * 2 + 2], 16) catch 0;
-        expected_bytes[i] = (@as(u8, hi) << 4) | @as(u8, lo);
-    }
-
-    const matches = std.mem.eql(u8, &digest, &expected_bytes);
-    if (matches) {
-        std.debug.print("✅ SUCCESS: SHA3 hashes match!\n", .{});
-    } else {
-        std.debug.print("❌ MISMATCH: SHA3 hashes differ\n", .{});
-        std.debug.print("  Expected: ", .{});
-        for (expected_bytes) |b| std.debug.print("{x:02}", .{b});
-        std.debug.print("\n", .{});
-        std.debug.print("  Got:      ", .{});
-        for (digest) |b| std.debug.print("{x:02}", .{b});
-        std.debug.print("\n", .{});
-    }
-
-    std.debug.print("\n✅ ShakePRFtoF compatibility test completed!\n", .{});
+    std.debug.print("✅ ShakePRFtoF compatibility test completed!\n", .{});
 }

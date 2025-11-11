@@ -49,7 +49,7 @@ pub fn main() !void {
     std.debug.print("\nGenerating keypair (Rust-compatible implementation)...\n", .{});
 
     // Initialize signature scheme
-    var sig_scheme = try hash_zig.HashSignatureNative.init(allocator, params);
+    var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, params);
     defer sig_scheme.deinit();
 
     // Key generation benchmark
@@ -226,6 +226,6 @@ pub fn main() !void {
     std.debug.print("BENCHMARK_RESULT: {d:.6}\n", .{keygen_time});
 
     std.debug.print("\n✅ Benchmark completed successfully!\n", .{});
-    std.debug.print("Implementation: Standard Rust-compatible (HashSignature)\n", .{});
+    std.debug.print("Implementation: Standard Rust-compatible (GeneralizedXMSSSignatureScheme)\n", .{});
     std.debug.print("Parameters: Winternitz (22 chains × 256 length, w=8)\n", .{});
 }
