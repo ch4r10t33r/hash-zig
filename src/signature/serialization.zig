@@ -127,9 +127,31 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
 
     try result.appendSlice("{");
 
+    // Serialize hashes as array of 8-element arrays (domains) first to match Rust ordering
+    try result.appendSlice("\"hashes\":");
+    const hashes = signature.getHashes();
+    var hashes_str = std.ArrayList(u8).init(allocator);
+    defer hashes_str.deinit();
+    try hashes_str.append('[');
+    for (hashes, 0..) |domain, i| {
+        if (i > 0) try hashes_str.append(',');
+        try hashes_str.append('[');
+        for (domain, 0..) |fe, j| {
+            if (j > 0) try hashes_str.append(',');
+            const value_str = try serializeFieldElement(allocator, fe);
+            defer allocator.free(value_str);
+            try hashes_str.appendSlice(value_str);
+        }
+        try hashes_str.append(']');
+    }
+    try hashes_str.append(']');
+    const hashes_slice = try hashes_str.toOwnedSlice();
+    defer allocator.free(hashes_slice);
+    try result.appendSlice(hashes_slice);
+
     // Serialize path using controlled access as array of 8-element arrays
     const path = signature.getPath();
-    try result.appendSlice("\"path\":{");
+    try result.appendSlice(",\"path\":{");
     try result.appendSlice("\"nodes\":");
     var nodes_str = std.ArrayList(u8).init(allocator);
     defer nodes_str.deinit();
@@ -168,28 +190,6 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
     const rho_json = try rho_json_builder.toOwnedSlice();
     defer allocator.free(rho_json);
     try result.appendSlice(rho_json);
-
-    // Serialize hashes as array of 8-element arrays (domains)
-    try result.appendSlice(",\"hashes\":");
-    const hashes = signature.getHashes();
-    var hashes_str = std.ArrayList(u8).init(allocator);
-    defer hashes_str.deinit();
-    try hashes_str.append('[');
-    for (hashes, 0..) |domain, i| {
-        if (i > 0) try hashes_str.append(',');
-        try hashes_str.append('[');
-        for (domain, 0..) |fe, j| {
-            if (j > 0) try hashes_str.append(',');
-            const value_str = try serializeFieldElement(allocator, fe);
-            defer allocator.free(value_str);
-            try hashes_str.appendSlice(value_str);
-        }
-        try hashes_str.append(']');
-    }
-    try hashes_str.append(']');
-    const hashes_slice = try hashes_str.toOwnedSlice();
-    defer allocator.free(hashes_slice);
-    try result.appendSlice(hashes_slice);
 
     try result.appendSlice("}");
 
@@ -299,19 +299,19 @@ pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXM
 
     try result.appendSlice("{");
 
-    // Serialize root using controlled access (as array to match Rust)
-    const root = public_key.getRoot();
-    const root_json = try serializeFieldElementArray(allocator, &root);
-    defer allocator.free(root_json);
-    try result.appendSlice("\"root\":");
-    try result.appendSlice(root_json);
-
     // Serialize parameter using controlled access
-    try result.appendSlice(",\"parameter\":");
+    try result.appendSlice("\"parameter\":");
     const parameter = public_key.getParameter();
     const param_json = try serializeFieldElementArray(allocator, &parameter);
     defer allocator.free(param_json);
     try result.appendSlice(param_json);
+
+    // Serialize root using controlled access (as array to match Rust)
+    const root = public_key.getRoot();
+    const root_json = try serializeFieldElementArray(allocator, &root);
+    defer allocator.free(root_json);
+    try result.appendSlice(",\"root\":");
+    try result.appendSlice(root_json);
 
     try result.appendSlice("}");
 
