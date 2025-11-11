@@ -4,7 +4,7 @@
 const std = @import("std");
 const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
-const ShakePRFtoF_8_7 = @import("../src/prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
+const ShakePRFtoF_8_7 = hash_zig.ShakePRFtoF_8_7;
 
 pub fn main() !void {
     var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
