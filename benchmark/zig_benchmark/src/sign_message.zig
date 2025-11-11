@@ -113,7 +113,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const message = std.process.getEnvVarOwned(allocator, "MESSAGE") catch {
-        log.print("Missing MESSAGE environment variable\n", .{});
+        log.emit("Missing MESSAGE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(message);
@@ -208,7 +208,7 @@ pub fn main() !void {
     defer allocator.free(secret_key_json);
 
     // Output the serialized data
-    log.print("SIGNATURE:{s}\n", .{trimmed_signature});
-    log.print("PUBLIC_KEY:{s}\n", .{trimmed_public_key});
-    log.print("SECRET_KEY:{s}\n", .{secret_key_json});
+    log.emit("SIGNATURE:{s}\n", .{trimmed_signature});
+    log.emit("PUBLIC_KEY:{s}\n", .{trimmed_public_key});
+    log.emit("SECRET_KEY:{s}\n", .{secret_key_json});
 }

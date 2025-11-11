@@ -29,19 +29,19 @@ pub fn main() !void {
 
     // Get environment variables
     const public_key_data = std.process.getEnvVarOwned(allocator, "PUBLIC_KEY") catch {
-        log.print("Missing PUBLIC_KEY environment variable\n", .{});
+        log.emit("Missing PUBLIC_KEY environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(public_key_data);
 
     const signature_data = std.process.getEnvVarOwned(allocator, "SIGNATURE") catch {
-        log.print("Missing SIGNATURE environment variable\n", .{});
+        log.emit("Missing SIGNATURE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(signature_data);
 
     const message = std.process.getEnvVarOwned(allocator, "MESSAGE") catch {
-        log.print("Missing MESSAGE environment variable\n", .{});
+        log.emit("Missing MESSAGE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(message);
