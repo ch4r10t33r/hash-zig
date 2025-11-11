@@ -6,7 +6,7 @@
 
 Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible behavior against the Rust reference implementation ([hash-sig](https://github.com/b-wagn/hash-sig)). Keys, signatures, and Merkle paths interchange freely between the two ecosystems for lifetimes `2^8`, `2^18`, and (experimental) `2^32`.
 
-## Highlights
+**⚠️ Prototype Status**: This is a prototype implementation for research and development purposes. Use at your own risk.
 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
