@@ -215,7 +215,7 @@ fn new_bottom_tree(
     // Add root layer
     var root_nodes = try std.heap.page_allocator.alloc([8]FieldElement, 1);
     for (0..8) |i| {
-        root_nodes[0][i] = FieldElement{ .value = @as(u32, @intCast(bottom_tree_index * 8 + i + 2000)) };
+        root_nodes[0][i] = FieldElement.fromCanonical(@intCast(bottom_tree_index * 8 + i + 2000));
     }
     const root_layer = HashTreeLayer{ .start_index = 0, .nodes = root_nodes };
     try layers.append(root_layer);

@@ -1,8 +1,9 @@
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
 use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json;
 use std::env;
+
 fn main() {
     let message = env::var("MESSAGE").unwrap_or_default();
     let epoch: u32 = env::var("EPOCH")
@@ -28,7 +29,7 @@ fn main() {
     }
 
     let mut rng = StdRng::from_seed(seed);
-    let (pk, mut sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
+    let (pk, mut sk) = SIGTopLevelTargetSumLifetime18Dim64Base8::key_gen(&mut rng, 0, 256);
 
     let mut message_bytes = [0u8; 32];
     let bytes = message.as_bytes();
@@ -38,7 +39,7 @@ fn main() {
         sk.advance_preparation();
     }
 
-    let signature = SIGTopLevelTargetSumLifetime8Dim64Base8::sign(&sk, epoch, &message_bytes)
+    let signature = SIGTopLevelTargetSumLifetime18Dim64Base8::sign(&sk, epoch, &message_bytes)
         .expect("signing failed");
 
     let mut pk_value = serde_json::to_value(&pk).expect("serialize pk");

@@ -496,8 +496,8 @@ fn tweakToFieldElements(tweak: u128) [2]FieldElement {
     const high = @as(u64, @intCast((tweak >> 64) & 0xFFFFFFFFFFFFFFFF));
 
     return .{
-        FieldElement{ .value = @as(u32, @intCast(low % p)) },
-        FieldElement{ .value = @as(u32, @intCast(high % p)) },
+        FieldElement.fromCanonical(@intCast(low % p)),
+        FieldElement.fromCanonical(@intCast(high % p)),
     };
 }
 

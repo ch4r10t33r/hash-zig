@@ -89,7 +89,7 @@ pub fn main() !void {
         for (0..parents_len) |i| {
             // Simplified parent creation for analysis
             for (0..8) |j| {
-                next_layer[i][j] = FieldElement{ .value = @as(u32, @intCast(current_level * 1000 + i * 8 + j)) };
+                next_layer[i][j] = FieldElement.fromCanonical(@intCast(current_level * 1000 + i * 8 + j));
             }
         }
 

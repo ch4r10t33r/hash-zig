@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const FieldElement = @import("../core/field.zig").FieldElement;
 const ParametersRustCompat = @import("../core/params_rust_compat.zig").ParametersRustCompat;
 const ShakePRFtoF_8_7 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
+const ShakePRFtoF_7_6 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_7_6;
 const Poseidon2RustCompat = @import("../hash/poseidon2_hash.zig").Poseidon2RustCompat;
 const serialization = @import("serialization.zig");
 const KOALABEAR_PRIME = @import("../core/field.zig").KOALABEAR_PRIME;
@@ -161,7 +162,7 @@ pub const HashTreeOpening = struct {
 pub const GeneralizedXMSSSignature = struct {
     // Private fields - not directly accessible from outside
     path: *HashTreeOpening,
-    rho: [7]FieldElement, // IE::Randomness for ShakePRFtoF_8_7
+    rho: [7]FieldElement, // IE::Randomness (max length; actual rand_len_fe may be smaller)
     hashes: [][8]FieldElement, // Vec<TH::Domain>
     allocator: Allocator,
     is_deserialized: bool, // Track if signature was deserialized from JSON (Rust→Zig)
@@ -446,6 +447,31 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         self.allocator.destroy(self);
     }
 
+    fn prfDomainElement(
+        self: *const GeneralizedXMSSSignatureScheme,
+        prf_key: [32]u8,
+        epoch: u32,
+        index: u64,
+    ) [8]u32 {
+        const hash_len = self.lifetime_params.hash_len_fe;
+        var padded: [8]u32 = undefined;
+        if (self.lifetime_params.rand_len_fe == 6 and hash_len == 7) {
+            const raw = ShakePRFtoF_7_6.getDomainElement(prf_key, epoch, index);
+            for (0..hash_len) |i| {
+                padded[i] = raw[i];
+            }
+        } else {
+            const raw = ShakePRFtoF_8_7.getDomainElement(prf_key, epoch, index);
+            for (0..hash_len) |i| {
+                padded[i] = raw[i];
+            }
+        }
+        for (hash_len..8) |i| {
+            padded[i] = 0;
+        }
+        return padded;
+    }
+
     /// Expand activation time (matching Rust expand_activation_time exactly)
     fn expandActivationTime(log_lifetime: usize, desired_activation_epoch: usize, desired_num_active_epochs: usize) struct { start: usize, end: usize } {
         const lifetime = @as(usize, 1) << @intCast(log_lifetime);
@@ -513,7 +539,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             for (0..num_chains) |chain_index| {
                 // Get chain start using ShakePRFtoF
-                const domain_elements = ShakePRFtoF_8_7.getDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                const domain_elements = self.prfDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
 
                 // Debug: Print domain elements for all epochs and chains in first bottom tree
                 if (bottom_tree_index == 0) {
@@ -627,7 +653,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         chain_index: u8,
         parameter: [5]FieldElement,
     ) ![8]FieldElement {
-        // domain_elements are in Montgomery form (from ShakePRFtoF_8_7.getDomainElement)
+        // domain_elements are in Montgomery form (from ShakePRFtoF)
         // applyPoseidonChainTweakHash expects input in Montgomery form
         // So we can use domain_elements directly as Montgomery values
         var current: [8]FieldElement = undefined;
@@ -635,14 +661,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         for (0..self.lifetime_params.base - 1) |j| {
             const pos_in_chain = @as(u8, @intCast(j + 1));
             const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
-            // next is canonical (from compress), but we need to convert back to Montgomery
-            // to maintain consistency throughout chain walking
-            const plonky3_field = @import("../poseidon2/plonky3_field.zig");
-            const F = plonky3_field.KoalaBearField;
             const hash_len = self.lifetime_params.hash_len_fe;
             for (0..hash_len) |k| {
-                const monty = F.fromU32(next[k].value); // Convert canonical to Montgomery
-                current[k] = FieldElement{ .value = monty.value }; // Store Montgomery value
+                current[k] = next[k];
             }
             // Pad remaining elements with zeros
             for (hash_len..8) |k| {
@@ -722,33 +743,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Convert to field elements using base-p representation (canonical form)
         const tweak = tweakToFieldElements(tweak_encoding);
 
-        // CRITICAL: input is in Montgomery form (from chain walking)
-        // parameter and tweak are in canonical form
-        // applyPoseidon2_16 expects ALL inputs in Montgomery form
-        // So we need to convert parameter and tweak to Montgomery before combining
-
-        // Use the Montgomery form field implementation
-        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
-        const F = plonky3_field.KoalaBearField;
-
         // Only use hash_len_fe elements from input (7 for lifetime 2^18, 8 for lifetime 2^8)
         const hash_len = self.lifetime_params.hash_len_fe;
 
-        // Prepare combined input: parameter (convert to Montgomery) + tweak (convert to Montgomery) + input (already Montgomery)
+        // Prepare combined input: parameter + tweak + input (all already in Montgomery form)
         const total_input_len = 5 + 2 + hash_len;
         var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
         defer self.allocator.free(combined_input);
 
-        // Convert parameter from canonical to Montgomery
+        // Parameter and tweak are already stored in Montgomery form.
         for (0..5) |i| {
-            const monty = F.fromU32(parameter[i].value);
-            combined_input[i] = FieldElement{ .value = monty.value }; // Store Montgomery value
+            combined_input[i] = parameter[i];
         }
-
-        // Convert tweak from canonical to Montgomery
         for (0..2) |i| {
-            const monty = F.fromU32(tweak[i].value);
-            combined_input[5 + i] = FieldElement{ .value = monty.value }; // Store Montgomery value
+            combined_input[5 + i] = tweak[i];
         }
 
         // Copy input (already in Montgomery form) - only hash_len_fe elements
@@ -881,8 +889,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Convert to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
         const tweak = [_]FieldElement{
-            FieldElement{ .value = @as(u32, @intCast(tweak_bigint % p)) },
-            FieldElement{ .value = @as(u32, @intCast((tweak_bigint / p) % p)) },
+            FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
+            FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
         };
 
         // Debug: print tweak field elements
@@ -966,8 +974,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Convert to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
         const tweak = [_]FieldElement{
-            FieldElement{ .value = @as(u32, @intCast(tweak_bigint % p)) },
-            FieldElement{ .value = @as(u32, @intCast((tweak_bigint / p) % p)) },
+            FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
+            FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
         };
 
         // Prepare combined input: parameter + tweak + message
@@ -1150,8 +1158,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Convert tweak to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
         const tweak = [_]FieldElement{
-            FieldElement{ .value = @as(u32, @intCast(tweak_bigint % p)) },
-            FieldElement{ .value = @as(u32, @intCast((tweak_bigint / p) % p)) },
+            FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
+            FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
         };
 
         // Create domain separator from lengths (matching Rust's poseidon_safe_domain_separator)
@@ -1215,14 +1223,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(combined_input_monty);
 
         var input_idx: usize = 0;
-        // Add parameter (convert canonical to Montgomery)
+        // Add parameter (values already stored in Montgomery form)
         for (parameter) |fe| {
-            combined_input_monty[input_idx] = F.fromU32(fe.value);
+            combined_input_monty[input_idx] = F{ .value = fe.value };
             input_idx += 1;
         }
-        // Add tweak (convert canonical to Montgomery)
+        // Add tweak (already in Montgomery form)
         for (tweak) |fe| {
-            combined_input_monty[input_idx] = F.fromU32(fe.value);
+            combined_input_monty[input_idx] = F{ .value = fe.value };
             input_idx += 1;
         }
         // Add flattened input (chain ends - already in Montgomery form from chain walking)
@@ -1368,7 +1376,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Take first OUTPUT_LEN elements (matching Rust's &out[0..OUT_LEN])
         var result = try self.allocator.alloc(FieldElement, OUTPUT_LEN);
         for (0..OUTPUT_LEN) |i| {
-            result[i] = FieldElement{ .value = out.items[i].toU32() }; // Convert Montgomery to canonical
+            result[i] = FieldElement.fromMontgomery(out.items[i].value);
         }
 
         std.debug.print("DEBUG: Sponge leaf domain ({} elements): ", .{OUTPUT_LEN});
@@ -1591,6 +1599,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
         }
 
+        self.allocator.free(current_layer.nodes);
+
         return layers.toOwnedSlice();
     }
 
@@ -1604,7 +1614,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Rust builds full_depth = 8 but truncates to depth/2 = 4
         // We should only build 4 layers to match the actual bottom tree structure
         const full_depth = self.lifetime_params.log_lifetime / 2; // 4 for lifetime 2^8
-        const start_index = bottom_tree_index * 16;
+        const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
+        const start_index = bottom_tree_index * leafs_per_bottom_tree;
 
         var layers = std.ArrayList(PaddedLayer).init(self.allocator);
         errdefer {
@@ -1634,6 +1645,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
         }
 
+        self.allocator.free(current_layer.nodes);
+
         return layers.toOwnedSlice();
     }
 
@@ -1655,6 +1668,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         const lowest_layer_nodes = try self.allocator.alloc([8]FieldElement, roots_of_bottom_trees.len);
+        defer self.allocator.free(lowest_layer_nodes);
         @memcpy(lowest_layer_nodes, roots_of_bottom_trees);
 
         var current_layer = try self.padLayer(lowest_layer_nodes, start_index);
@@ -1674,6 +1688,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
             @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
         }
+
+        self.allocator.free(current_layer.nodes);
 
         return layers.toOwnedSlice();
     }
@@ -1696,7 +1712,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var i: usize = 0;
         while (i < MSG_LEN_FE) : (i += 1) {
             const digit: u256 = acc % p;
-            result[i] = FieldElement{ .value = @as(u32, @intCast(digit)) };
+            result[i] = FieldElement.fromCanonical(@intCast(digit));
             acc = acc / p;
         }
 
@@ -1715,10 +1731,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Two-step base-p decomposition (optimization for 40-bit value)
         if (TWEAK_LEN_FE > 0) {
-            result[0] = FieldElement{ .value = @as(u32, @intCast(acc % p)) };
+            result[0] = FieldElement.fromCanonical(@intCast(acc % p));
         }
         if (TWEAK_LEN_FE > 1) {
-            result[1] = FieldElement{ .value = @as(u32, @intCast(acc / p)) };
+            result[1] = FieldElement.fromCanonical(@intCast(acc / p));
         }
         // Any remaining elements remain zero
         for (2..TWEAK_LEN_FE) |i| {
@@ -2080,6 +2096,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var modulus = try BigInt.init(self.allocator);
         defer modulus.deinit();
         try BigInt.addScalar(&modulus, &info.prefix_sums[final_layer], 0);
+        const mod_str = try std.fmt.allocPrint(self.allocator, "{}", .{modulus.toConst()});
+        defer self.allocator.free(mod_str);
+        std.debug.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
 
         var value = try BigInt.initSet(self.allocator, 0);
         defer value.deinit();
@@ -2099,10 +2118,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         std.debug.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
         for (field_elements, 0..) |fe, i| {
             if (i < 5) {
-                std.debug.print("fe[{}]=0x{x:0>8} ", .{ i, fe.value });
+                std.debug.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
             }
             try BigInt.mul(&tmp, &value, &multiplier);
-            try BigInt.addScalar(&tmp, &tmp, fe.value);
+            try BigInt.addScalar(&tmp, &tmp, fe.toCanonical());
             try BigInt.divFloor(&quotient, &remainder, &tmp, &modulus);
             try BigInt.addScalar(&value, &remainder, 0);
         }
@@ -2159,7 +2178,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         for (0..POS_INVOCATIONS) |i| {
             // Iteration domain separator
-            const iteration_index = [_]FieldElement{FieldElement{ .value = @as(u32, @intCast(i)) }};
+            const iteration_index = [_]FieldElement{FieldElement.fromCanonical(@intCast(i))};
 
             // Assemble input: randomness + parameter + epoch + message + iteration_index
             const ITER_INPUT_LEN = RAND_LEN + PARAMETER_LEN + TWEAK_LEN_FE + MSG_LEN_FE + 1;
@@ -2228,6 +2247,24 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 std.debug.print("0x{x:0>8} ", .{iteration_pos_output[j].value});
             }
             std.debug.print("\n", .{});
+
+            std.debug.print("ZIG_POS_CONTEXT rand:", .{});
+            for (randomness[0..RAND_LEN]) |r| {
+                std.debug.print(" 0x{x:0>8}", .{r.toCanonical()});
+            }
+            std.debug.print(" param:", .{});
+            for (parameter) |p| {
+                std.debug.print(" 0x{x:0>8}", .{p.toCanonical()});
+            }
+            std.debug.print(" epoch:", .{});
+            for (epoch_fe) |e| {
+                std.debug.print(" 0x{x:0>8}", .{e.toCanonical()});
+            }
+            std.debug.print(" msg:", .{});
+            for (message_fe) |m| {
+                std.debug.print(" 0x{x:0>8}", .{m.toCanonical()});
+            }
+            std.debug.print("\n", .{});
         }
 
         // Map into hypercube part: combine field elements, take modulo, find layer, map to vertex
@@ -2250,6 +2287,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Apply TopLevelPoseidonMessageHash to get chunks
         const chunks = try self.applyTopLevelPoseidonMessageHash(parameter, epoch, randomness, message);
+        defer self.allocator.free(chunks);
 
         // Check if sum matches TARGET_SUM
         var sum: usize = 0;
@@ -2258,8 +2296,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         if (sum != expected_sum) {
+            std.debug.print("ZIG_ENCODING_CHUNKS_FAIL:", .{});
+            for (chunks) |chunk| {
+                std.debug.print(" {d}", .{chunk});
+            }
+            std.debug.print(" sum={} expected={}\n", .{ sum, expected_sum });
             return error.EncodingSumMismatch; // Signal to retry with new randomness
         }
+
+        std.debug.print("ZIG_ENCODING_CHUNKS_FINAL:", .{});
+        for (chunks) |chunk| {
+            std.debug.print(" {d}", .{chunk});
+        }
+        std.debug.print("\n", .{});
 
         // Allocate and copy chunks
         const x = try self.allocator.alloc(u8, dimension);
@@ -2293,6 +2342,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         if (needs_front) total_capacity += 1;
         if (needs_back) total_capacity += 1;
         var padded_nodes = try self.allocator.alloc([8]FieldElement, total_capacity);
+        errdefer self.allocator.free(padded_nodes);
 
         var output_index: usize = 0;
 
@@ -2463,8 +2513,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const random_value = std.mem.readInt(u32, random_bytes[i * 4 ..][0..4], .little);
             // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
             // This ensures the value is less than the KoalaBear modulus (2^31 - 2^24 + 1)
-            const field_value = random_value >> 1;
-            parameter[i] = FieldElement{ .value = field_value };
+            const canonical = random_value >> 1;
+            parameter[i] = FieldElement.fromCanonical(canonical);
         }
 
         return parameter;
@@ -2493,14 +2543,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Generate random domain elements for padding (matching Rust TH::rand_domain)
     pub fn generateRandomDomain(self: *GeneralizedXMSSSignatureScheme, count: usize) ![8]FieldElement {
         var result: [8]FieldElement = undefined;
-        for (0..count) |i| {
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const fill_count = @min(count, hash_len);
+        for (0..fill_count) |i| {
             const random_value = self.rng.random().int(u32);
             // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
-            result[i] = FieldElement{ .value = random_value >> 1 };
+            result[i] = FieldElement.fromCanonical(random_value >> 1);
         }
         // Fill remaining with zeros
-        for (count..8) |i| {
-            result[i] = FieldElement{ .value = 0 };
+        for (fill_count..8) |i| {
+            result[i] = FieldElement.zero();
         }
         return result;
     }
@@ -2512,17 +2564,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Generate a single random domain element using a specific RNG
-    fn generateRandomDomainSingleWithRng(_: *GeneralizedXMSSSignatureScheme, rng: *const std.Random) ![8]FieldElement {
+    fn generateRandomDomainSingleWithRng(self: *GeneralizedXMSSSignatureScheme, rng: *const std.Random) ![8]FieldElement {
         var result: [8]FieldElement = undefined;
-        // Generate all 8 field elements in a single RNG call (matching Rust's rng.random() for [F; 8])
-        // In Rust, rng.random() for [F; 8] generates all 8 elements in one call
-        // We need to simulate this by making a single call that generates all 8 values
+        const hash_len = self.lifetime_params.hash_len_fe;
         var random_bytes: [32]u8 = undefined; // 8 * 4 bytes = 32 bytes for 8 u32 values
         rng.bytes(&random_bytes);
-        for (0..8) |i| {
+        for (0..hash_len) |i| {
             const random_value = std.mem.readInt(u32, random_bytes[i * 4 ..][0..4], .little);
             // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
-            result[i] = FieldElement{ .value = random_value >> 1 };
+            result[i] = FieldElement.fromCanonical(random_value >> 1);
+        }
+        for (hash_len..8) |i| {
+            result[i] = FieldElement.zero();
         }
         return result;
     }
@@ -2645,15 +2698,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
         std.debug.print("\n", .{});
 
-        // Convert root to Montgomery form before storing (matching Rust's internal representation)
-        // Rust stores roots internally in Montgomery form (KoalaBear uses Montgomery)
-        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
-        const F = plonky3_field.KoalaBearField;
-        var root_monty: [8]FieldElement = undefined;
-        for (root_array, 0..) |fe, i| {
-            const monty = F.fromU32(fe.value); // Convert canonical to Montgomery
-            root_monty[i] = FieldElement{ .value = monty.value }; // Store Montgomery value
-        }
+        // Roots are already represented in Montgomery form in our FieldElement type.
+        const root_monty: [8]FieldElement = root_array;
 
         // Debug: log the root in Montgomery form
         std.debug.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
@@ -2726,7 +2772,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             var chain_domains = try self.allocator.alloc([8]FieldElement, num_chains);
             defer self.allocator.free(chain_domains);
             for (0..num_chains) |chain_index| {
-                const domain_elements = ShakePRFtoF_8_7.getDomainElement(secret_key.prf_key, @as(u32, @intCast(e)), @as(u64, @intCast(chain_index)));
+                const domain_elements = self.prfDomainElement(secret_key.prf_key, @as(u32, @intCast(e)), @as(u64, @intCast(chain_index)));
                 const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(e)), @as(u8, @intCast(chain_index)), secret_key.parameter);
                 chain_domains[chain_index] = chain_end_domain;
             }
@@ -2819,6 +2865,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
+        defer self.allocator.free(nodes_concat);
         @memcpy(nodes_concat[0..bottom_copath.len], bottom_copath);
         @memcpy(nodes_concat[bottom_copath.len..], top_copath);
 
@@ -2828,16 +2875,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Try encoding with different randomness attempts (matching Rust sign retry loop)
         const MAX_TRIES: usize = 100_000;
         var attempts: u64 = 0;
-        var rho_slice: []FieldElement = undefined;
-        defer if (attempts > 0) self.allocator.free(rho_slice);
+        var rho_slice_opt: ?[]FieldElement = null;
+        defer if (rho_slice_opt) |buf| self.allocator.free(buf);
         var rho_fixed: [7]FieldElement = undefined; // Signature struct uses fixed [7]FieldElement, pad if needed
         var x: []u8 = undefined;
         var encoding_succeeded = false;
 
         while (attempts < MAX_TRIES) : (attempts += 1) {
             // Generate randomness for this attempt
-            if (attempts > 0) self.allocator.free(rho_slice);
-            rho_slice = try self.generateRandomness(secret_key.prf_key, epoch, message, attempts);
+            if (rho_slice_opt) |buf| {
+                self.allocator.free(buf);
+                rho_slice_opt = null;
+            }
+            rho_slice_opt = try self.generateRandomness(secret_key.prf_key, epoch, message, attempts);
+            const rho_slice = rho_slice_opt.?;
 
             // Convert to fixed array for signature structure (pad to 7 elements if needed)
             // For lifetime 2^18, rand_len_fe is 6, but signature struct uses [7]FieldElement
@@ -2865,6 +2916,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Debug: log progress periodically
                 if (attempts < 3 or (attempts % 1000 == 0)) {
                     const chunks = try self.applyTopLevelPoseidonMessageHash(secret_key.parameter, epoch, rho_slice, message);
+                    defer self.allocator.free(chunks);
                     var sum: usize = 0;
                     for (chunks) |chunk| sum += chunk;
                     const expected_sum = self.lifetime_params.target_sum;
@@ -2886,12 +2938,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const plonky3_field = @import("../poseidon2/plonky3_field.zig");
         const F = plonky3_field.KoalaBearField; // Montgomery form implementation
         const hashes = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
+        const hash_len = self.lifetime_params.hash_len_fe;
         for (0..self.lifetime_params.dimension) |chain_index| {
             // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
-            const domain_elements = ShakePRFtoF_8_7.getDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
+            const domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
             var current: [8]FieldElement = undefined;
-            // domain_elements are already in Montgomery form, store directly
-            for (0..8) |j| current[j] = FieldElement{ .value = domain_elements[j] };
+            // domain_elements are already in Montgomery form, store directly for hash_len elements
+            for (0..hash_len) |j| {
+                current[j] = FieldElement{ .value = domain_elements[j] };
+            }
+            // Pad remaining entries with zeros
+            for (hash_len..8) |j| {
+                current[j] = FieldElement{ .value = 0 };
+            }
 
             // Walk chain for x[chain_index] steps
             const steps: u8 = x[chain_index];
@@ -2902,12 +2961,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 var s: u8 = 1;
                 while (s <= steps) : (s += 1) {
                     const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
-                    // next is canonical (from compress), but we need to store in Montgomery form
-                    // Convert next back to Montgomery to match Rust's internal representation
-                    const hash_len = self.lifetime_params.hash_len_fe;
+                    // next is produced in Montgomery form; store directly
                     for (0..hash_len) |j| {
-                        const monty = F.fromU32(next[j].value); // Convert canonical to Montgomery
-                        current[j] = FieldElement{ .value = monty.value }; // Store Montgomery value
+                        current[j] = next[j];
                     }
                     // Pad remaining elements with zeros
                     for (hash_len..8) |j| {
@@ -2951,14 +3007,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         counter: u64,
     ) ![]FieldElement {
         // Match Rust ShakePRFtoF::get_randomness
-        // Note: PRF length varies by lifetime (rand_len_fe)
-        // For now, using ShakePRFtoF_8_7 which generates 7 elements
-        // TODO: Support variable-length PRF based on lifetime_params.rand_len_fe
-        const rand_u32s = ShakePRFtoF_8_7.getRandomness(prf_key, epoch, &message, counter);
         const rand_len = self.lifetime_params.rand_len_fe;
         var rho = try self.allocator.alloc(FieldElement, rand_len);
-        for (0..rand_len) |i| {
-            rho[i] = FieldElement{ .value = rand_u32s[i] };
+        switch (rand_len) {
+            6 => {
+                const raw = ShakePRFtoF_7_6.getRandomness(prf_key, epoch, &message, counter);
+                for (raw, 0..) |val, i| {
+                    rho[i] = FieldElement.fromMontgomery(val);
+                }
+            },
+            else => {
+                const raw = ShakePRFtoF_8_7.getRandomness(prf_key, epoch, &message, counter);
+                for (raw, 0..) |val, i| {
+                    rho[i] = FieldElement.fromMontgomery(val);
+                }
+            },
         }
         return rho;
     }
@@ -3029,27 +3092,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
         for (hashes, 0..) |domain, i| {
-            // Handle hashes based on their source:
-            // - Zig→Zig: hashes are stored in Montgomery form (matching Rust's internal representation)
-            //   The value in domain[j].value is already in Montgomery form (as a u32)
-            //   We need to create F directly from this Montgomery value: F{ .value = domain[j].value }
-            // - Rust→Zig: hashes come from JSON as canonical (Rust serializes using as_canonical_u32())
-            //   The value in domain[j].value is canonical (as a u32)
-            //   We need to convert canonical to Montgomery: F.fromU32(domain[j].value)
-            // We can now distinguish using the is_deserialized flag
             var current: [8]FieldElement = undefined;
-            for (0..hash_len) |j| {
-                if (signature.is_deserialized) {
-                    // Rust→Zig: hashes come from JSON as canonical, convert to Montgomery
-                    const monty = F.fromU32(domain[j].value);
-                    current[j] = FieldElement{ .value = monty.value };
-                } else {
-                    // Zig→Zig: hashes are stored in Montgomery form, use directly
-                    // Create F directly from the Montgomery value (treating u32 as Montgomery)
-                    const monty = F{ .value = domain[j].value };
-                    current[j] = FieldElement{ .value = monty.value };
-                }
-            }
+            @memcpy(current[0..hash_len], domain[0..hash_len]);
             // Pad remaining elements with zeros
             for (hash_len..8) |j| {
                 current[j] = FieldElement{ .value = 0 };
@@ -3071,14 +3115,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     std.debug.print("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ i, j, pos_in_chain, current[0].value });
                 }
                 const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
-                // next is canonical (from compress), but current must remain in Montgomery form
-                // Convert next back to Montgomery to maintain consistency throughout chain walking
                 // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-                // (F is already declared above)
-                for (0..hash_len) |k| {
-                    const monty = F.fromU32(next[k].value); // Convert canonical to Montgomery
-                    current[k] = FieldElement{ .value = monty.value }; // Store Montgomery value directly
-                }
+                @memcpy(current[0..hash_len], next[0..hash_len]);
                 // Pad remaining elements with zeros
                 for (hash_len..8) |k| {
                     current[k] = FieldElement{ .value = 0 };
@@ -3184,8 +3222,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
         for (0..root_len) |i| {
-            if (current_domain[i].value != public_key.root[i].value) {
-                std.debug.print("ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ i, current_domain[i].value, public_key.root[i].value });
+            if (!current_domain[i].eql(public_key.root[i])) {
+                std.debug.print(
+                    "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
+                    .{ i, current_domain[i].value, public_key.root[i].value },
+                );
                 match = false;
             }
         }
@@ -3217,7 +3258,7 @@ fn tweakToFieldElements(tweak_encoding: u128) [2]FieldElement {
     for (0..2) |i| {
         const digit = @as(u64, @intCast(acc % KOALABEAR_ORDER_U64));
         acc /= KOALABEAR_ORDER_U64;
-        result[i] = FieldElement{ .value = @as(u32, @intCast(digit)) };
+        result[i] = FieldElement.fromCanonical(@intCast(digit));
     }
 
     return result;

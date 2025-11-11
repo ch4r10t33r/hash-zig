@@ -340,7 +340,7 @@ pub const HashSignatureShakeCompat = struct {
     /// This uses Poseidon2-16 with the correct CAPACITY and parameters
     fn applyPoseidonTweakHash(self: *HashSignatureShakeCompat, input: []const FieldElement, chain_index: usize, parameter: [5]FieldElement) ![]FieldElement {
         // Convert chain index to field element for tweak
-        const tweak = FieldElement{ .value = @as(u32, @intCast(chain_index)) };
+        const tweak = FieldElement.fromCanonical(@intCast(chain_index));
 
         // Prepare input with parameter, tweak, and message (matching Rust implementation)
         // Rust: parameter.iter().chain(tweak_fe.iter()).chain(single.iter())

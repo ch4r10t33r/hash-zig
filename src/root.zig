@@ -66,6 +66,7 @@ pub const TopLevelPoseidonMessageHash = poseidon2.TopLevelPoseidonMessageHash;
 // Export modules for testing
 pub const chacha12_rng = @import("prf/chacha12_rng.zig");
 pub const ShakePRFtoF_8_7 = @import("prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
+pub const ShakePRFtoF_7_6 = @import("prf/shake_prf_to_field.zig").ShakePRFtoF_7_6;
 
 test "hash-zig root loads" {
     // Smoke test to ensure the root module compiles.

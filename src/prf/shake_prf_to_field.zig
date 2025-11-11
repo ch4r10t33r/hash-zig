@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const crypto = std.crypto;
+const plonky3_field = @import("../poseidon2/plonky3_field.zig");
 
 // Constants matching Rust implementation
 const PRF_BYTES_PER_FE: usize = 8;
@@ -74,8 +75,10 @@ pub fn ShakePRFtoF(comptime DOMAIN_LENGTH_FE: usize, comptime RAND_LENGTH_FE: us
                 const bytes_array: [PRF_BYTES_PER_FE]u8 = prf_output[chunk_start..chunk_end][0..PRF_BYTES_PER_FE].*;
                 const integer_value = std.mem.readInt(u64, &bytes_array, .big);
 
-                // Reduce modulo KoalaBear field order
-                result[i] = @intCast(integer_value % KOALA_BEAR_MODULUS);
+                // Reduce modulo KoalaBear field order and map into Montgomery form
+                const reduced: u32 = @intCast(integer_value % KOALA_BEAR_MODULUS);
+                const mont = plonky3_field.KoalaBearField.fromU32(reduced);
+                result[i] = mont.value;
             }
 
             return result;
@@ -120,8 +123,10 @@ pub fn ShakePRFtoF(comptime DOMAIN_LENGTH_FE: usize, comptime RAND_LENGTH_FE: us
                 const bytes_array: [PRF_BYTES_PER_FE]u8 = prf_output[chunk_start..chunk_end][0..PRF_BYTES_PER_FE].*;
                 const integer_value = std.mem.readInt(u64, &bytes_array, .big);
 
-                // Reduce modulo KoalaBear field order
-                result[i] = @intCast(integer_value % KOALA_BEAR_MODULUS);
+                // Reduce modulo KoalaBear field order and map into Montgomery form
+                const reduced: u32 = @intCast(integer_value % KOALA_BEAR_MODULUS);
+                const mont = plonky3_field.KoalaBearField.fromU32(reduced);
+                result[i] = mont.value;
             }
 
             return result;
@@ -130,7 +135,8 @@ pub fn ShakePRFtoF(comptime DOMAIN_LENGTH_FE: usize, comptime RAND_LENGTH_FE: us
 }
 
 // Convenience type aliases matching Rust usage
-pub const ShakePRFtoF_8_7 = ShakePRFtoF(8, 7); // For SIGTopLevelTargetSumLifetime8Dim64Base8
+pub const ShakePRFtoF_8_7 = ShakePRFtoF(8, 7); // Lifetime 2^8 / 2^32 hashing-optimized
+pub const ShakePRFtoF_7_6 = ShakePRFtoF(7, 6); // Lifetime 2^18
 
 // Test to verify the implementation
 test "shake_prf_to_field basic functionality" {

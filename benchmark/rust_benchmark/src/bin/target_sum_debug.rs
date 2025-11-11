@@ -141,8 +141,14 @@ fn main() -> Result<(), String> {
 
     let sum: usize = chunks.iter().map(|&x| x as usize).sum();
     println!("CHUNKS_SUM:{}", sum);
-    println!("CHUNKS:{}", chunks.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","));
+    println!(
+        "CHUNKS:{}",
+        chunks
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
 
     Ok(())
 }
-

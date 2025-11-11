@@ -9,19 +9,24 @@ const GeneralizedXMSSPublicKey = @import("signature_native.zig").GeneralizedXMSS
 const GeneralizedXMSSSecretKey = @import("signature_native.zig").GeneralizedXMSSSecretKey;
 const HashTreeOpening = @import("signature_native.zig").HashTreeOpening;
 
+fn fromMontgomeryValue(value: u32) FieldElement {
+    return FieldElement.fromMontgomery(value);
+}
+
 /// Serialize a FieldElement to a hex string
 pub fn serializeFieldElement(allocator: Allocator, elem: FieldElement) ![]u8 {
-    const bytes = elem.toBytes();
-    return try std.fmt.allocPrint(allocator, "0x{x:0>8}", .{std.mem.readInt(u32, &bytes, .little)});
+    return try std.fmt.allocPrint(allocator, "0x{x:0>8}", .{elem.toMontgomery()});
 }
 
 /// Deserialize a FieldElement from a hex string
 pub fn deserializeFieldElement(hex_str: []const u8) !FieldElement {
-    // Remove 0x prefix if present
-    const clean_hex = if (std.mem.startsWith(u8, hex_str, "0x")) hex_str[2..] else hex_str;
+    const clean_hex = if (std.mem.startsWith(u8, hex_str, "0x") or std.mem.startsWith(u8, hex_str, "0X"))
+        hex_str[2..]
+    else
+        hex_str;
 
     const value = try std.fmt.parseInt(u32, clean_hex, 16);
-    return FieldElement.fromU32(value);
+    return FieldElement.fromMontgomery(value);
 }
 
 /// Flexibly parse a FieldElement from a generic JSON value.
@@ -36,23 +41,23 @@ fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
             if (std.mem.startsWith(u8, s, "0x") or std.mem.startsWith(u8, s, "0X")) {
                 return deserializeFieldElement(s);
             }
-            // try decimal first, then hex fallback
+            // Interpret decimal or plain-hex strings as Montgomery values
             if (std.fmt.parseInt(u32, s, 10)) |dec| {
-                return FieldElement.fromU32(dec);
+                return FieldElement.fromMontgomery(dec);
             } else |_| {}
             const value = try std.fmt.parseInt(u32, s, 16);
-            return FieldElement.fromU32(value);
+            return FieldElement.fromMontgomery(value);
         },
         .integer => |i| {
             if (i < 0) return error.InvalidJsonFormat;
             const as_u64: u64 = @intCast(i);
             const as_u32: u32 = @intCast(@min(as_u64, @as(u64, std.math.maxInt(u32))));
-            return FieldElement.fromU32(as_u32);
+            return FieldElement.fromMontgomery(as_u32);
         },
         .float => |f| {
             const clamped: f64 = if (f < 0) 0 else f;
             const as_u32: u32 = @intFromFloat(@min(clamped, @as(f64, @floatFromInt(std.math.maxInt(u32)))));
-            return FieldElement.fromU32(as_u32);
+            return FieldElement.fromMontgomery(as_u32);
         },
         .object => |o| {
             if (o.get("value")) |inner| {
@@ -162,7 +167,19 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
     // Serialize rho using controlled access
     try result.appendSlice(",\"rho\":");
     const rho = signature.getRho();
-    const rho_json = try serializeFieldElementArray(allocator, &rho);
+    var rho_json_builder = std.ArrayList(u8).init(allocator);
+    defer rho_json_builder.deinit();
+    try rho_json_builder.append('[');
+    for (&rho, 0..) |fe, i| {
+        if (i > 0) try rho_json_builder.append(',');
+        const hex_str = try serializeFieldElement(allocator, fe);
+        defer allocator.free(hex_str);
+        try rho_json_builder.append('"');
+        try rho_json_builder.appendSlice(hex_str);
+        try rho_json_builder.append('"');
+    }
+    try rho_json_builder.append(']');
+    const rho_json = try rho_json_builder.toOwnedSlice();
     defer allocator.free(rho_json);
     try result.appendSlice(rho_json);
 

@@ -1,5 +1,25 @@
 const std = @import("std");
 const hash_zig = @import("hash-zig");
+const ascii = std.ascii;
+
+fn parseLifetimeTag(raw: []const u8) hash_zig.KeyLifetimeRustCompat {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (ascii.eqlIgnoreCase(trimmed, "2^18") or
+        ascii.eqlIgnoreCase(trimmed, "2_18") or
+        ascii.eqlIgnoreCase(trimmed, "218") or
+        ascii.eqlIgnoreCase(trimmed, "lifetime_2_18"))
+    {
+        return .lifetime_2_18;
+    }
+    if (ascii.eqlIgnoreCase(trimmed, "2^32") or
+        ascii.eqlIgnoreCase(trimmed, "2_32") or
+        ascii.eqlIgnoreCase(trimmed, "232") or
+        ascii.eqlIgnoreCase(trimmed, "lifetime_2_32"))
+    {
+        return .lifetime_2_32;
+    }
+    return .lifetime_2_8;
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -25,6 +45,11 @@ pub fn main() !void {
     };
     defer allocator.free(message);
 
+    const lifetime_env = std.process.getEnvVarOwned(allocator, "LIFETIME") catch null;
+    const lifetime_tag = if (lifetime_env) |value| value else "2^8";
+    defer if (lifetime_env) |value| allocator.free(value);
+    const lifetime = parseLifetimeTag(lifetime_tag);
+
     const epoch_str = std.process.getEnvVarOwned(allocator, "EPOCH") catch "0";
     defer allocator.free(epoch_str);
     const epoch = std.fmt.parseInt(u32, epoch_str, 10) catch 0;
@@ -46,7 +71,7 @@ pub fn main() !void {
 
         const stdout = std.io.getStdOut().writer();
         try stdout.print("ZIG_VERIFY_DEBUG: Starting deserialization\n", .{});
-        
+
         // Deserialize public key
         const public_key = hash_zig.serialization.deserializePublicKey(public_key_json) catch |err| {
             try stdout.print("ZIG_VERIFY_DEBUG: Failed to deserialize public key: {}\n", .{err});
@@ -62,8 +87,16 @@ pub fn main() !void {
         defer signature.deinit();
         try stdout.print("ZIG_VERIFY_DEBUG: Signature deserialized successfully\n", .{});
 
+        try stdout.print("ZIG_VERIFY_DEBUG: Selected lifetime: {s}\n", .{
+            switch (lifetime) {
+                .lifetime_2_18 => "2^18",
+                .lifetime_2_32 => "2^32",
+                else => "2^8",
+            },
+        });
+
         // Initialize the scheme
-        var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
+        var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
         defer scheme.deinit();
 
         // Debug: log parsed structure lengths
@@ -88,7 +121,7 @@ pub fn main() !void {
                             if (p.object.get("nodes")) |nodes_val| {
                                 if (nodes_val == .array) {
                                     std.mem.reverse(std.json.Value, nodes_val.array.items);
-                                    const alt_str = std.json.stringifyAlloc(allocator, doc.value, .{} ) catch null;
+                                    const alt_str = std.json.stringifyAlloc(allocator, doc.value, .{}) catch null;
                                     if (alt_str) |alt_json| {
                                         defer allocator.free(alt_json);
                                         const alt_sig = hash_zig.serialization.deserializeSignature(allocator, alt_json) catch null;

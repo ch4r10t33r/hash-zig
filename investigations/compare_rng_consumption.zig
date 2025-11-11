@@ -48,7 +48,6 @@ pub fn main() !void {
         [_]FieldElement{ FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 } },
         [_]FieldElement{ FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 } },
         [_]FieldElement{ FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 } },
-        [_]FieldElement{ FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 } },
     };
 
     // Simulate the top tree building process step by step
@@ -109,7 +108,7 @@ pub fn main() !void {
         // Simulate parent creation (simplified)
         for (0..parents_len) |i| {
             for (0..8) |j| {
-                next_layer[i][j] = FieldElement{ .value = @as(u32, @intCast(current_level * 1000 + i * 8 + j)) };
+                next_layer[i][j] = FieldElement.fromCanonical(@intCast(current_level * 1000 + i * 8 + j));
             }
         }
 
