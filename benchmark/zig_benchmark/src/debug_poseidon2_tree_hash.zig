@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -9,8 +10,8 @@ pub fn main() !void {
     const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    std.debug.print("=== Zig Poseidon2 Tree Hash Analysis ===\n", .{});
-    std.debug.print("SEED: {s}\n", .{seed_hex});
+    log.print("=== Zig Poseidon2 Tree Hash Analysis ===\n", .{});
+    log.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -25,7 +26,7 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
-    std.debug.print("\n=== Test Poseidon2 Tree Hash Directly ===\n", .{});
+    log.print("\n=== Test Poseidon2 Tree Hash Directly ===\n", .{});
 
     // Test the exact tree hash function with known inputs
     const test_input = [_]hash_zig.FieldElement{
@@ -62,9 +63,9 @@ pub fn main() !void {
         test_parameter);
     defer allocator.free(hash_result);
 
-    std.debug.print("Tree hash result for level 5, pos 0:\n", .{});
+    log.print("Tree hash result for level 5, pos 0:\n", .{});
     for (hash_result, 0..) |val, i| {
-        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test with the exact inputs from the debug output
@@ -101,12 +102,12 @@ pub fn main() !void {
         test_parameter);
     defer allocator.free(hash_result2);
 
-    std.debug.print("\nTree hash result for concatenated children:\n", .{});
+    log.print("\nTree hash result for concatenated children:\n", .{});
     for (hash_result2, 0..) |val, i| {
-        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    std.debug.print("\nExpected result from debug output: 0x31461cb0\n", .{});
-    std.debug.print("Actual result: 0x{x}\n", .{hash_result2[0].value});
-    std.debug.print("Match: {}\n", .{hash_result2[0].value == 0x31461cb0});
+    log.print("\nExpected result from debug output: 0x31461cb0\n", .{});
+    log.print("Actual result: 0x{x}\n", .{hash_result2[0].value});
+    log.print("Match: {}\n", .{hash_result2[0].value == 0x31461cb0});
 }

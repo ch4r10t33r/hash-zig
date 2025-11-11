@@ -1,8 +1,9 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    std.debug.print("=== Processing Order Focused Analysis ===\n", .{});
+    log.print("=== Processing Order Focused Analysis ===\n", .{});
 
     // Initialize RNG with fixed seed
     var seed_bytes = [_]u8{0} ** 32;
@@ -22,18 +23,18 @@ pub fn main() !void {
     // Generate PRF key (matching Rust algorithm port)
     var prf_key_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &prf_key_bytes);
-    std.debug.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
+    log.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
 
-    std.debug.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
+    log.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
     var debug_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Analyze processing order for bottom trees
-    std.debug.print("\n=== Bottom Tree Processing Order Analysis ===\n", .{});
+    log.print("\n=== Bottom Tree Processing Order Analysis ===\n", .{});
 
     for (0..16) |bottom_tree_index| {
-        std.debug.print("\n--- Bottom Tree {} ---\n", .{bottom_tree_index});
+        log.print("\n--- Bottom Tree {} ---\n", .{bottom_tree_index});
 
         // Simulate the processing order for this bottom tree
         _ = @as(u32, @intCast(bottom_tree_index)); // Suppress unused variable warning
@@ -58,20 +59,20 @@ pub fn main() !void {
             }
             const parents_len = nodes_at_level / 2;
 
-            std.debug.print("Layer {} -> {}: {} nodes -> {} parents\n", .{ current_level, next_level, nodes_at_level, parents_len });
+            log.print("Layer {} -> {}: {} nodes -> {} parents\n", .{ current_level, next_level, nodes_at_level, parents_len });
 
             // Analyze the processing order for this layer
             for (0..parents_len) |i| {
                 const parent_pos = @as(u32, @intCast(i));
                 const tweak_level = @as(u8, @intCast(current_level)) + 1;
 
-                std.debug.print("  Parent {}: tweak_level={}, pos={}\n", .{ i, tweak_level, parent_pos });
+                log.print("  Parent {}: tweak_level={}, pos={}\n", .{ i, tweak_level, parent_pos });
             }
         }
     }
 
     // Analyze processing order for top tree
-    std.debug.print("\n=== Top Tree Processing Order Analysis ===\n", .{});
+    log.print("\n=== Top Tree Processing Order Analysis ===\n", .{});
 
     for (0..4) |layer| {
         const current_level = @as(u8, @intCast(layer + 4)); // Top tree starts at level 4
@@ -92,18 +93,18 @@ pub fn main() !void {
         }
         const parents_len = nodes_at_level / 2;
 
-        std.debug.print("Layer {} -> {}: {} nodes -> {} parents\n", .{ current_level, next_level, nodes_at_level, parents_len });
+        log.print("Layer {} -> {}: {} nodes -> {} parents\n", .{ current_level, next_level, nodes_at_level, parents_len });
 
         // Analyze the processing order for this layer
         for (0..parents_len) |i| {
             const parent_pos = @as(u32, @intCast(i));
             const tweak_level = @as(u8, @intCast(current_level)) + 1;
 
-            std.debug.print("  Parent {}: tweak_level={}, pos={}\n", .{ i, tweak_level, parent_pos });
+            log.print("  Parent {}: tweak_level={}, pos={}\n", .{ i, tweak_level, parent_pos });
         }
     }
 
-    std.debug.print("\n=== Analysis Complete ===\n", .{});
+    log.print("\n=== Analysis Complete ===\n", .{});
 }
 
 // Peek RNG bytes without consuming state (matching rust_algorithm_port.zig)

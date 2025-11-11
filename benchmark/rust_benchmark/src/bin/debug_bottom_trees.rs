@@ -3,6 +3,7 @@ use hashsig::signature::{
     SignatureScheme,
 };
 use rand::{rngs::StdRng, SeedableRng};
+use serde_json::Value;
 use std::env;
 
 fn main() {
@@ -27,13 +28,21 @@ fn main() {
     let mut rng = StdRng::from_seed(seed);
 
     // Generate keypair to access internal state
-    let (pk, sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
+    let (pk, _sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
 
-    // Use getter methods to access internal state
-    println!("Public key root: {:?}", pk.get_root());
-    println!("Public key parameter: {:?}", pk.get_parameter());
+    // Serialize public key for debugging since fields are private
+    let pk_json = serde_json::to_string_pretty(&pk).expect("serialize pk");
+    println!("Public key (JSON): {}", pk_json);
 
-    // Access secret key fields via getters if available
-    // Note: These fields may not have public getters, so we'll skip them for now
+    // Extract notable fields if present
+    if let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(&pk_json) {
+        if let Some(root) = obj.remove("root") {
+            println!("root: {}", root);
+        }
+        if let Some(parameter) = obj.remove("parameter") {
+            println!("parameter: {}", parameter);
+        }
+    }
+
     println!("Keypair generated successfully");
 }

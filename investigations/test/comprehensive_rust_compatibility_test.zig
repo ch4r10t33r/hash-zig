@@ -2,6 +2,7 @@
 //! Based on https://github.com/b-wagn/hash-sig test suite
 
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 // Test configuration
@@ -20,11 +21,11 @@ fn testSignatureSchemeCorrectness(
     activation_epoch: usize,
     num_active_epochs: usize,
 ) !void {
-    std.debug.print("Testing signature scheme correctness for lifetime {}, epoch {}\n", .{ lifetime, epoch });
+    log.print("Testing signature scheme correctness for lifetime {}, epoch {}\n", .{ lifetime, epoch });
 
     // Validate epoch is in activation interval
     if (epoch < @as(u32, @intCast(activation_epoch)) or epoch >= @as(u32, @intCast(activation_epoch + num_active_epochs))) {
-        std.debug.print("Skipping test: epoch {} outside activation interval [{}, {})\n", .{ epoch, activation_epoch, activation_epoch + num_active_epochs });
+        log.print("Skipping test: epoch {} outside activation interval [{}, {})\n", .{ epoch, activation_epoch, activation_epoch + num_active_epochs });
         return;
     }
 
@@ -64,12 +65,12 @@ fn testSignatureSchemeCorrectness(
     const is_valid = try scheme.verify(&keypair.public_key, epoch, message, signature);
     try std.testing.expect(is_valid);
 
-    std.debug.print("✅ Signature scheme correctness test passed for epoch {}\n", .{epoch});
+    log.print("✅ Signature scheme correctness test passed for epoch {}\n", .{epoch});
 }
 
 /// Test deterministic behavior (same epoch+message produces same randomness)
 fn testDeterministicBehavior(allocator: std.mem.Allocator) !void {
-    std.debug.print("Testing deterministic behavior...\n", .{});
+    log.print("Testing deterministic behavior...\n", .{});
 
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer scheme.deinit();
@@ -101,12 +102,12 @@ fn testDeterministicBehavior(allocator: std.mem.Allocator) !void {
     // Check that randomness (rho) is identical
     try std.testing.expectEqualSlices(hash_zig.FieldElement, &sig1.rho, &sig2.rho);
 
-    std.debug.print("✅ Deterministic behavior test passed\n", .{});
+    log.print("✅ Deterministic behavior test passed\n", .{});
 }
 
 /// Test internal consistency check
 fn testInternalConsistencyCheck(allocator: std.mem.Allocator) !void {
-    std.debug.print("Testing internal consistency check...\n", .{});
+    log.print("Testing internal consistency check...\n", .{});
 
     const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{.lifetime_2_8};
 
@@ -117,13 +118,13 @@ fn testInternalConsistencyCheck(allocator: std.mem.Allocator) !void {
         // Test that scheme initializes without errors
         // The scheme is used implicitly by the defer statement, so no need to explicitly use it
 
-        std.debug.print("✅ Internal consistency check passed for lifetime {}\n", .{lifetime});
+        log.print("✅ Internal consistency check passed for lifetime {}\n", .{lifetime});
     }
 }
 
 /// Test multiple lifetimes
 fn testMultipleLifetimes(allocator: std.mem.Allocator) !void {
-    std.debug.print("Testing multiple lifetimes...\n", .{});
+    log.print("Testing multiple lifetimes...\n", .{});
 
     const lifetime_configs = [_]struct {
         lifetime: hash_zig.KeyLifetimeRustCompat,
@@ -134,7 +135,7 @@ fn testMultipleLifetimes(allocator: std.mem.Allocator) !void {
     };
 
     for (lifetime_configs) |config| {
-        std.debug.print("Testing lifetime {} with {} epochs\n", .{ config.lifetime, config.epochs });
+        log.print("Testing lifetime {} with {} epochs\n", .{ config.lifetime, config.epochs });
 
         for (config.test_epochs) |epoch| {
             if (epoch < @as(u32, @intCast(config.epochs))) {
@@ -143,12 +144,12 @@ fn testMultipleLifetimes(allocator: std.mem.Allocator) !void {
         }
     }
 
-    std.debug.print("✅ Multiple lifetimes test passed\n", .{});
+    log.print("✅ Multiple lifetimes test passed\n", .{});
 }
 
 /// Test edge cases and error conditions
 fn testEdgeCases(allocator: std.mem.Allocator) !void {
-    std.debug.print("Testing edge cases...\n", .{});
+    log.print("Testing edge cases...\n", .{});
 
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer scheme.deinit();
@@ -173,12 +174,12 @@ fn testEdgeCases(allocator: std.mem.Allocator) !void {
     const invalid_result = scheme.verify(&keypair.public_key, invalid_epoch, message, valid_sig);
     try std.testing.expectError(error.EpochTooLarge, invalid_result);
 
-    std.debug.print("✅ Edge cases test passed\n", .{});
+    log.print("✅ Edge cases test passed\n", .{});
 }
 
 /// Test key preparation advancement
 fn testKeyPreparationAdvancement(allocator: std.mem.Allocator) !void {
-    std.debug.print("Testing key preparation advancement...\n", .{});
+    log.print("Testing key preparation advancement...\n", .{});
 
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer scheme.deinit();
@@ -188,27 +189,27 @@ fn testKeyPreparationAdvancement(allocator: std.mem.Allocator) !void {
 
     // Test initial prepared interval
     const initial_prepared = keypair.secret_key.getPreparedInterval(8);
-    std.debug.print("Initial prepared interval: {} to {}\n", .{ initial_prepared.start, initial_prepared.end });
+    log.print("Initial prepared interval: {} to {}\n", .{ initial_prepared.start, initial_prepared.end });
 
     // Advance preparation
     try keypair.secret_key.advancePreparation(8);
     const advanced_prepared = keypair.secret_key.getPreparedInterval(8);
-    std.debug.print("Advanced prepared interval: {} to {}\n", .{ advanced_prepared.start, advanced_prepared.end });
+    log.print("Advanced prepared interval: {} to {}\n", .{ advanced_prepared.start, advanced_prepared.end });
 
     // Verify interval moved forward
     try std.testing.expect(advanced_prepared.start > initial_prepared.start);
 
-    std.debug.print("✅ Key preparation advancement test passed\n", .{});
+    log.print("✅ Key preparation advancement test passed\n", .{});
 }
 
 // Main test suite
 test "comprehensive rust compatibility test suite" {
     const allocator = std.testing.allocator;
 
-    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-    std.debug.print("🧪 COMPREHENSIVE RUST COMPATIBILITY TEST SUITE\n", .{});
-    std.debug.print("Based on https://github.com/b-wagn/hash-sig test coverage\n", .{});
-    std.debug.print("=" ** 80 ++ "\n\n", .{});
+    log.print("\n" ++ "=" ** 80 ++ "\n", .{});
+    log.print("🧪 COMPREHENSIVE RUST COMPATIBILITY TEST SUITE\n", .{});
+    log.print("Based on https://github.com/b-wagn/hash-sig test coverage\n", .{});
+    log.print("=" ** 80 ++ "\n\n", .{});
 
     // Run all test categories
     try testInternalConsistencyCheck(allocator);
@@ -217,11 +218,11 @@ test "comprehensive rust compatibility test suite" {
     try testEdgeCases(allocator);
     try testKeyPreparationAdvancement(allocator);
 
-    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-    std.debug.print("🎉 ALL COMPREHENSIVE TESTS PASSED! 🎉\n", .{});
-    std.debug.print("✅ Complete test coverage matching Rust hash-sig repository\n", .{});
-    std.debug.print("✅ All signature scheme variants tested\n", .{});
-    std.debug.print("✅ Edge cases and error conditions validated\n", .{});
-    std.debug.print("✅ Ready for production use!\n", .{});
-    std.debug.print("=" ** 80 ++ "\n\n", .{});
+    log.print("\n" ++ "=" ** 80 ++ "\n", .{});
+    log.print("🎉 ALL COMPREHENSIVE TESTS PASSED! 🎉\n", .{});
+    log.print("✅ Complete test coverage matching Rust hash-sig repository\n", .{});
+    log.print("✅ All signature scheme variants tested\n", .{});
+    log.print("✅ Edge cases and error conditions validated\n", .{});
+    log.print("✅ Ready for production use!\n", .{});
+    log.print("=" ** 80 ++ "\n\n", .{});
 }

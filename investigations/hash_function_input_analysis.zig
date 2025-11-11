@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -6,7 +7,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     _ = gpa.allocator(); // Suppress unused variable warning
 
-    std.debug.print("=== Hash Function Input Structure Analysis ===\n", .{});
+    log.print("=== Hash Function Input Structure Analysis ===\n", .{});
 
     // Initialize RNG with fixed seed
     var seed_bytes = [_]u8{0} ** 32;
@@ -26,15 +27,15 @@ pub fn main() !void {
     // Generate PRF key (matching Rust algorithm port)
     var prf_key_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &prf_key_bytes);
-    std.debug.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
+    log.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
 
-    std.debug.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
+    log.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
     var debug_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Analyze hash function input structure for tree building
-    std.debug.print("\n=== Hash Function Input Structure Analysis ===\n", .{});
+    log.print("\n=== Hash Function Input Structure Analysis ===\n", .{});
 
     // Simulate a tree building operation to analyze input structure
     const left_child = [_]u32{ 123456789, 987654321, 456789123, 789123456, 321654987, 654987321, 147258369, 369258147 };
@@ -42,46 +43,46 @@ pub fn main() !void {
     const tweak_level: u8 = 5;
     const position: u32 = 0;
 
-    std.debug.print("Left Child: {any}\n", .{left_child});
-    std.debug.print("Right Child: {any}\n", .{right_child});
-    std.debug.print("Tweak Level: {}\n", .{tweak_level});
-    std.debug.print("Position: {}\n", .{position});
+    log.print("Left Child: {any}\n", .{left_child});
+    log.print("Right Child: {any}\n", .{right_child});
+    log.print("Tweak Level: {}\n", .{tweak_level});
+    log.print("Position: {}\n", .{position});
 
     // Analyze tweak encoding
     const tweak_encoding = (@as(u128, tweak_level) << 32) | @as(u128, position);
-    std.debug.print("Tweak Encoding: {}\n", .{tweak_encoding});
+    log.print("Tweak Encoding: {}\n", .{tweak_encoding});
 
     // Convert to field elements using base-p representation
     const tweak = tweakToFieldElements(tweak_encoding);
-    std.debug.print("Tweak Field Elements: {any}\n", .{tweak});
+    log.print("Tweak Field Elements: {any}\n", .{tweak});
 
     // Analyze hash function input structure
-    std.debug.print("\n=== Hash Function Input Structure ===\n", .{});
+    log.print("\n=== Hash Function Input Structure ===\n", .{});
 
     // Parameter (5 elements)
-    std.debug.print("Parameter (5 elements): {any}\n", .{parameter});
+    log.print("Parameter (5 elements): {any}\n", .{parameter});
 
     // Tweak (2 elements)
-    std.debug.print("Tweak (2 elements): {any}\n", .{tweak});
+    log.print("Tweak (2 elements): {any}\n", .{tweak});
 
     // Message (left + right child, 16 elements total)
-    std.debug.print("Message (16 elements): Left={any}, Right={any}\n", .{ left_child, right_child });
+    log.print("Message (16 elements): Left={any}, Right={any}\n", .{ left_child, right_child });
 
     // Total input length
     const total_input_len = 5 + 2 + 16; // parameter + tweak + message
-    std.debug.print("Total Input Length: {} elements\n", .{total_input_len});
+    log.print("Total Input Length: {} elements\n", .{total_input_len});
 
     // Analyze the specific input structure that would be passed to Poseidon2
-    std.debug.print("\n=== Poseidon2 Input Structure ===\n", .{});
-    std.debug.print("Input[0-4]: Parameter elements\n", .{});
-    std.debug.print("Input[5-6]: Tweak elements\n", .{});
-    std.debug.print("Input[7-14]: Left child elements\n", .{});
-    std.debug.print("Input[15-22]: Right child elements\n", .{});
+    log.print("\n=== Poseidon2 Input Structure ===\n", .{});
+    log.print("Input[0-4]: Parameter elements\n", .{});
+    log.print("Input[5-6]: Tweak elements\n", .{});
+    log.print("Input[7-14]: Left child elements\n", .{});
+    log.print("Input[15-22]: Right child elements\n", .{});
 
     // Analyze how Rust vs Zig might structure this differently
-    std.debug.print("\n=== Rust vs Zig Input Structure Comparison ===\n", .{});
-    std.debug.print("Rust: Processes left and right as separate iterators\n", .{});
-    std.debug.print("Zig: Concatenates left and right into single array\n", .{});
+    log.print("\n=== Rust vs Zig Input Structure Comparison ===\n", .{});
+    log.print("Rust: Processes left and right as separate iterators\n", .{});
+    log.print("Zig: Concatenates left and right into single array\n", .{});
 
     // Show the difference
     var combined_message: [16]u32 = undefined;
@@ -89,12 +90,12 @@ pub fn main() !void {
         combined_message[i] = left_child[i];
         combined_message[i + 8] = right_child[i];
     }
-    std.debug.print("Zig Combined Message: {any}\n", .{combined_message});
+    log.print("Zig Combined Message: {any}\n", .{combined_message});
 
-    std.debug.print("Rust Left Iterator: {any}\n", .{left_child});
-    std.debug.print("Rust Right Iterator: {any}\n", .{right_child});
+    log.print("Rust Left Iterator: {any}\n", .{left_child});
+    log.print("Rust Right Iterator: {any}\n", .{right_child});
 
-    std.debug.print("\n=== Analysis Complete ===\n", .{});
+    log.print("\n=== Analysis Complete ===\n", .{});
 }
 
 // Peek RNG bytes without consuming state (matching rust_algorithm_port.zig)

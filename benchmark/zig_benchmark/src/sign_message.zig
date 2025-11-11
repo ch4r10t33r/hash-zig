@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 const ascii = std.ascii;
 const json = std.json;
@@ -112,7 +113,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const message = std.process.getEnvVarOwned(allocator, "MESSAGE") catch {
-        std.debug.print("Missing MESSAGE environment variable\n", .{});
+        log.print("Missing MESSAGE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(message);
@@ -138,7 +139,7 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
     defer scheme.deinit();
 
-    std.debug.print("ZIG_SIGN_DEBUG: lifetime={s} num_active_epochs={d}\n", .{
+    log.print("ZIG_SIGN_DEBUG: lifetime={s} num_active_epochs={d}\n", .{
         switch (lifetime) {
             .lifetime_2_18 => "2^18",
             .lifetime_2_32 => "2^32",
@@ -161,7 +162,7 @@ pub fn main() !void {
     defer signature.deinit();
 
     const verify_ok = try scheme.verify(&keypair.public_key, epoch, message_bytes, signature);
-    std.debug.print("ZIG_SIGN_DEBUG: internal verify result: {}\n", .{verify_ok});
+    log.print("ZIG_SIGN_DEBUG: internal verify result: {}\n", .{verify_ok});
 
     // Serialize signature using proper serialization
     const signature_json = try hash_zig.serialization.serializeSignature(allocator, signature);
@@ -169,7 +170,7 @@ pub fn main() !void {
 
     if (std.process.getEnvVarOwned(allocator, "DEBUG_SAVE_RAW_SIGNATURE") catch null) |path| {
         defer allocator.free(path);
-        std.debug.print("ZIG_SIGN_DEBUG: writing raw signature to {s}\n", .{path});
+        log.print("ZIG_SIGN_DEBUG: writing raw signature to {s}\n", .{path});
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         try file.writeAll(signature_json);
@@ -181,7 +182,7 @@ pub fn main() !void {
 
     if (std.process.getEnvVarOwned(allocator, "DEBUG_SAVE_RAW_PUBLIC_KEY") catch null) |path| {
         defer allocator.free(path);
-        std.debug.print("ZIG_SIGN_DEBUG: writing raw public key to {s}\n", .{path});
+        log.print("ZIG_SIGN_DEBUG: writing raw public key to {s}\n", .{path});
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         try file.writeAll(public_key_json);
@@ -195,7 +196,7 @@ pub fn main() !void {
         .lifetime_2_18 => 7,
         else => 8,
     };
-    std.debug.print("ZIG_SIGN_DEBUG: hash_len_fe={d} rand_len_fe={d}\n", .{ hash_len_fe, rand_len_fe });
+    log.print("ZIG_SIGN_DEBUG: hash_len_fe={d} rand_len_fe={d}\n", .{ hash_len_fe, rand_len_fe });
 
     const trimmed_signature = try trimSignatureJson(allocator, signature_json, rand_len_fe, hash_len_fe);
     defer allocator.free(trimmed_signature);
@@ -207,7 +208,7 @@ pub fn main() !void {
     defer allocator.free(secret_key_json);
 
     // Output the serialized data
-    std.debug.print("SIGNATURE:{s}\n", .{trimmed_signature});
-    std.debug.print("PUBLIC_KEY:{s}\n", .{trimmed_public_key});
-    std.debug.print("SECRET_KEY:{s}\n", .{secret_key_json});
+    log.print("SIGNATURE:{s}\n", .{trimmed_signature});
+    log.print("PUBLIC_KEY:{s}\n", .{trimmed_public_key});
+    log.print("SECRET_KEY:{s}\n", .{secret_key_json});
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -6,8 +7,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("Zig hash-zig Determinism Check (lifetime 2^8)\n", .{});
-    std.debug.print("================================================\n", .{});
+    log.print("Zig hash-zig Determinism Check (lifetime 2^8)\n", .{});
+    log.print("================================================\n", .{});
 
     // Read seed from environment variable or use default
     var seed: [32]u8 = undefined;
@@ -25,8 +26,8 @@ pub fn main() !void {
         @memset(&seed, 0x42); // fallback to default
     }
 
-    std.debug.print("SEED: {s}\n", .{std.fmt.fmtSliceHexLower(&seed)});
-    std.debug.print("SEED (bytes): {any}\n", .{seed});
+    log.print("SEED: {s}\n", .{std.fmt.fmtSliceHexLower(&seed)});
+    log.print("SEED (bytes): {any}\n", .{seed});
 
     var scheme1 = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
     defer scheme1.deinit();
@@ -35,8 +36,8 @@ pub fn main() !void {
     defer scheme2.deinit();
 
     // Add debug output for RNG state
-    std.debug.print("Scheme1 RNG state after creation: {any}\n", .{scheme1.getRngState()});
-    std.debug.print("Scheme2 RNG state after creation: {any}\n", .{scheme2.getRngState()});
+    log.print("Scheme1 RNG state after creation: {any}\n", .{scheme1.getRngState()});
+    log.print("Scheme2 RNG state after creation: {any}\n", .{scheme2.getRngState()});
 
     const kp1 = try scheme1.keyGen(0, 256);
     defer kp1.secret_key.deinit();
@@ -66,25 +67,25 @@ pub fn main() !void {
     }
 
     const equal = roots_equal and params_equal;
-    std.debug.print("Public keys equal: {}\n", .{equal});
+    log.print("Public keys equal: {}\n", .{equal});
     if (equal) {
-        std.debug.print("✅ Deterministic: same seed -> identical public keys (2^8)\n", .{});
+        log.print("✅ Deterministic: same seed -> identical public keys (2^8)\n", .{});
     } else {
-        std.debug.print("❌ Different public keys (2^8).\n", .{});
+        log.print("❌ Different public keys (2^8).\n", .{});
     }
 
     // Print the public key for inspection (JSON format to match Rust)
     const pk1_json = try kp1.public_key.serialize(allocator);
     defer allocator.free(pk1_json);
 
-    std.debug.print("\nPublic Key (JSON):\n", .{});
-    std.debug.print("{s}\n", .{pk1_json});
+    log.print("\nPublic Key (JSON):\n", .{});
+    log.print("{s}\n", .{pk1_json});
 
-    std.debug.print("\nPublic Key (JSON bytes):\n", .{});
+    log.print("\nPublic Key (JSON bytes):\n", .{});
     const display_len = @min(32, pk1_json.len);
-    std.debug.print("{any}", .{pk1_json[0..display_len]});
+    log.print("{any}", .{pk1_json[0..display_len]});
     if (pk1_json.len > 32) {
-        std.debug.print("... (total {} bytes)", .{pk1_json.len});
+        log.print("... (total {} bytes)", .{pk1_json.len});
     }
-    std.debug.print("\n", .{});
+    log.print("\n", .{});
 }

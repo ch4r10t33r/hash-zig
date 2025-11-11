@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -9,8 +10,8 @@ pub fn main() !void {
     const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    std.debug.print("=== Zig Complete Public Key ===\n", .{});
-    std.debug.print("SEED: {s}\n", .{seed_hex});
+    log.print("=== Zig Complete Public Key ===\n", .{});
+    log.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -28,6 +29,6 @@ pub fn main() !void {
     const result = try scheme.keyGen(0, 256);
     defer result.secret_key.deinit();
 
-    std.debug.print("Public Key Root: {any}\n", .{result.public_key.root});
-    std.debug.print("Public Key Parameters: {any}\n", .{result.public_key.parameter});
+    log.print("Public Key Root: {any}\n", .{result.public_key.root});
+    log.print("Public Key Parameters: {any}\n", .{result.public_key.parameter});
 }

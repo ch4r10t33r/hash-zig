@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../utils/log.zig");
 
 // Plonky3-compatible KoalaBear field implementation
 // This implements the exact same field arithmetic as Plonky3's MontyField31
@@ -238,7 +239,7 @@ test "KoalaBear field arithmetic" {
     // Test inverse
     const inv = a.inverse();
     const should_be_one = a.mul(inv);
-    std.debug.print("a = {}, inv = {}, a * inv = {}\n", .{ a.toU32(), inv.toU32(), should_be_one.toU32() });
+    log.print("a = {}, inv = {}, a * inv = {}\n", .{ a.toU32(), inv.toU32(), should_be_one.toU32() });
     try std.testing.expect(should_be_one.isOne());
 }
 
@@ -248,14 +249,14 @@ test "Poseidon2 field values" {
     const input1 = KoalaBearField.fromU32(305419896);
     const input2 = KoalaBearField.fromU32(2596069104);
 
-    std.debug.print("Input1: {} -> Montgomery: {}\n", .{ 305419896, input1.value });
-    std.debug.print("Input2: {} -> Montgomery: {}\n", .{ 2596069104, input2.value });
+    log.print("Input1: {} -> Montgomery: {}\n", .{ 305419896, input1.value });
+    log.print("Input2: {} -> Montgomery: {}\n", .{ 2596069104, input2.value });
 
     // Test multiplication
     const prod = input1.mul(input2);
-    std.debug.print("Product: {} -> Normal: {}\n", .{ prod.value, prod.toU32() });
+    log.print("Product: {} -> Normal: {}\n", .{ prod.value, prod.toU32() });
 
     // Test addition
     const sum = input1.add(input2);
-    std.debug.print("Sum: {} -> Normal: {}\n", .{ sum.value, sum.toU32() });
+    log.print("Sum: {} -> Normal: {}\n", .{ sum.value, sum.toU32() });
 }

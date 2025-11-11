@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 const FieldElement = hash_zig.FieldElement;
@@ -10,51 +11,51 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("=== STEP-BY-STEP COMPARISON ===\n", .{});
-    std.debug.print("Comparing Rust and Zig implementations step-by-step\n", .{});
+    log.print("=== STEP-BY-STEP COMPARISON ===\n", .{});
+    log.print("Comparing Rust and Zig implementations step-by-step\n", .{});
 
     // Initialize with same seed
     const seed: [32]u8 = [_]u8{42} ** 32;
     var rng = ChaCha12Rng.init(seed);
 
-    std.debug.print("Initial seed: {x}\n", .{std.fmt.fmtSliceHexLower(&seed)});
+    log.print("Initial seed: {x}\n", .{std.fmt.fmtSliceHexLower(&seed)});
 
     // Step 1: Parameter generation
-    std.debug.print("\n=== STEP 1: PARAMETER GENERATION ===\n", .{});
+    log.print("\n=== STEP 1: PARAMETER GENERATION ===\n", .{});
 
     // Get RNG state before parameter generation
     var rng_state_before: [32]u8 = undefined;
     rng.fill(&rng_state_before);
-    std.debug.print("RNG state before parameters: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before)});
+    log.print("RNG state before parameters: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before)});
 
     // Generate parameters (should NOT consume RNG in Rust)
     const parameter = try generateParameters(&rng);
-    std.debug.print("Generated parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
+    log.print("Generated parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
 
     // Get RNG state after parameter generation
     var rng_state_after: [32]u8 = undefined;
     rng.fill(&rng_state_after);
-    std.debug.print("RNG state after parameters: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_after)});
+    log.print("RNG state after parameters: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_after)});
 
     // Step 2: PRF key generation
-    std.debug.print("\n=== STEP 2: PRF KEY GENERATION ===\n", .{});
+    log.print("\n=== STEP 2: PRF KEY GENERATION ===\n", .{});
 
     // Get RNG state before PRF key generation
     var rng_state_before_prf: [32]u8 = undefined;
     rng.fill(&rng_state_before_prf);
-    std.debug.print("RNG state before PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before_prf)});
+    log.print("RNG state before PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before_prf)});
 
     // Generate PRF key (should consume RNG in Rust)
     const prf_key = try generatePRFKey(&rng);
-    std.debug.print("Generated PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    log.print("Generated PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
 
     // Get RNG state after PRF key generation
     var rng_state_after_prf: [32]u8 = undefined;
     rng.fill(&rng_state_after_prf);
-    std.debug.print("RNG state after PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_after_prf)});
+    log.print("RNG state after PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_after_prf)});
 
     // Step 3: Bottom tree building
-    std.debug.print("\n=== STEP 3: BOTTOM TREE BUILDING ===\n", .{});
+    log.print("\n=== STEP 3: BOTTOM TREE BUILDING ===\n", .{});
 
     const num_bottom_trees = 16;
     var bottom_tree_roots = try allocator.alloc([8]FieldElement, num_bottom_trees);
@@ -62,12 +63,12 @@ pub fn main() !void {
 
     // Build first two bottom trees sequentially (matching Rust)
     for (0..2) |tree_index| {
-        std.debug.print("\n--- Building Bottom Tree {} ---\n", .{tree_index});
+        log.print("\n--- Building Bottom Tree {} ---\n", .{tree_index});
 
         // Get RNG state before this bottom tree
         var rng_state_before_tree: [32]u8 = undefined;
         rng.fill(&rng_state_before_tree);
-        std.debug.print("RNG state before bottom tree {}: {x}\n", .{ tree_index, std.fmt.fmtSliceHexLower(&rng_state_before_tree) });
+        log.print("RNG state before bottom tree {}: {x}\n", .{ tree_index, std.fmt.fmtSliceHexLower(&rng_state_before_tree) });
 
         // Generate leaves
         const tree_leafs = try generateLeavesFromPrfKey(prf_key, tree_index, parameter, allocator);
@@ -84,26 +85,26 @@ pub fn main() !void {
         }
 
         // Print first few leaves for comparison
-        std.debug.print("Bottom tree {} leaves (first 3):\n", .{tree_index});
+        log.print("Bottom tree {} leaves (first 3):\n", .{tree_index});
         for (0..@min(3, leafs_array.len)) |j| {
-            std.debug.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leafs_array[j][0].value, leafs_array[j][1].value, leafs_array[j][2].value, leafs_array[j][3].value, leafs_array[j][4].value, leafs_array[j][5].value, leafs_array[j][6].value, leafs_array[j][7].value });
+            log.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leafs_array[j][0].value, leafs_array[j][1].value, leafs_array[j][2].value, leafs_array[j][3].value, leafs_array[j][4].value, leafs_array[j][5].value, leafs_array[j][6].value, leafs_array[j][7].value });
         }
 
         // Build bottom tree
         const bottom_tree = try new_bottom_tree(8, tree_index, parameter, leafs_array, &rng);
         bottom_tree_roots[tree_index] = root(&bottom_tree);
 
-        std.debug.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
+        log.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
     }
 
     // Build remaining bottom trees (2-15)
     for (2..num_bottom_trees) |tree_index| {
-        std.debug.print("\n--- Building Bottom Tree {} ---\n", .{tree_index});
+        log.print("\n--- Building Bottom Tree {} ---\n", .{tree_index});
 
         // Get RNG state before this bottom tree
         var rng_state_before_tree: [32]u8 = undefined;
         rng.fill(&rng_state_before_tree);
-        std.debug.print("RNG state before bottom tree {}: {x}\n", .{ tree_index, std.fmt.fmtSliceHexLower(&rng_state_before_tree) });
+        log.print("RNG state before bottom tree {}: {x}\n", .{ tree_index, std.fmt.fmtSliceHexLower(&rng_state_before_tree) });
 
         // Generate leaves
         const tree_leafs = try generateLeavesFromPrfKey(prf_key, tree_index, parameter, allocator);
@@ -123,30 +124,30 @@ pub fn main() !void {
         const bottom_tree = try new_bottom_tree(8, tree_index, parameter, leafs_array, &rng);
         bottom_tree_roots[tree_index] = root(&bottom_tree);
 
-        std.debug.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
+        log.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
     }
 
     // Step 4: Top tree building
-    std.debug.print("\n=== STEP 4: TOP TREE BUILDING ===\n", .{});
+    log.print("\n=== STEP 4: TOP TREE BUILDING ===\n", .{});
 
     // Get RNG state before top tree
     var rng_state_before_top: [32]u8 = undefined;
     rng.fill(&rng_state_before_top);
-    std.debug.print("RNG state before top tree: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before_top)});
+    log.print("RNG state before top tree: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before_top)});
 
     // Print top tree input roots
-    std.debug.print("Top tree input roots (first 3):\n", .{});
+    log.print("Top tree input roots (first 3):\n", .{});
     for (0..@min(3, bottom_tree_roots.len)) |i| {
-        std.debug.print("  Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, bottom_tree_roots[i][0].value, bottom_tree_roots[i][1].value, bottom_tree_roots[i][2].value, bottom_tree_roots[i][3].value, bottom_tree_roots[i][4].value, bottom_tree_roots[i][5].value, bottom_tree_roots[i][6].value, bottom_tree_roots[i][7].value });
+        log.print("  Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, bottom_tree_roots[i][0].value, bottom_tree_roots[i][1].value, bottom_tree_roots[i][2].value, bottom_tree_roots[i][3].value, bottom_tree_roots[i][4].value, bottom_tree_roots[i][5].value, bottom_tree_roots[i][6].value, bottom_tree_roots[i][7].value });
     }
 
     // Build top tree
     const top_tree = try new_top_tree(&rng, 8, 0, parameter, bottom_tree_roots);
     const final_root = root(&top_tree);
 
-    std.debug.print("\n=== FINAL RESULT ===\n", .{});
-    std.debug.print("Zig final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ final_root[0].value, final_root[1].value, final_root[2].value, final_root[3].value, final_root[4].value, final_root[5].value, final_root[6].value, final_root[7].value });
-    std.debug.print("Expected Rust: [272571317, 816959513, 1641229267, 1432426756, 1894915310, 1536602969, 679245493, 946325787]\n", .{});
+    log.print("\n=== FINAL RESULT ===\n", .{});
+    log.print("Zig final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ final_root[0].value, final_root[1].value, final_root[2].value, final_root[3].value, final_root[4].value, final_root[5].value, final_root[6].value, final_root[7].value });
+    log.print("Expected Rust: [272571317, 816959513, 1641229267, 1432426756, 1894915310, 1536602969, 679245493, 946325787]\n", .{});
 }
 
 // Helper functions (simplified versions for testing)

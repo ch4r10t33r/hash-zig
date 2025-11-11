@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -9,8 +10,8 @@ pub fn main() !void {
     const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    std.debug.print("=== Zig Chain Computation Analysis ===\n", .{});
-    std.debug.print("SEED: {s}\n", .{seed_hex});
+    log.print("=== Zig Chain Computation Analysis ===\n", .{});
+    log.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed - use first 8 bytes as u64 seed for comparison
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -25,24 +26,24 @@ pub fn main() !void {
     // Use first 8 bytes as u64 seed for DefaultPrng comparison
     const seed_u64 = std.mem.readInt(u64, seed_array[0..8], .little);
 
-    std.debug.print("\n=== First 20 RNG values (DefaultPrng) ===\n", .{});
+    log.print("\n=== First 20 RNG values (DefaultPrng) ===\n", .{});
     var rng = std.Random.DefaultPrng.init(seed_u64);
     for (0..20) |i| {
         const val = rng.random().int(u32);
-        std.debug.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
+        log.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
     }
 
-    std.debug.print("\n=== Key generation ===\n", .{});
+    log.print("\n=== Key generation ===\n", .{});
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
     const result = try scheme.keyGen(0, 256);
     defer result.secret_key.deinit();
 
-    std.debug.print("Final root values: {any}\n", .{result.public_key.root});
+    log.print("Final root values: {any}\n", .{result.public_key.root});
 
-    std.debug.print("\n=== RNG state after key generation ===\n", .{});
+    log.print("\n=== RNG state after key generation ===\n", .{});
     var rng2 = std.Random.DefaultPrng.init(seed_u64);
     const next_val = rng2.random().int(u32);
-    std.debug.print("Next RNG value: {} (0x{x})\n", .{ next_val, next_val });
+    log.print("Next RNG value: {} (0x{x})\n", .{ next_val, next_val });
 }

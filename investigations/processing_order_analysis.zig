@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -6,7 +7,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("=== Processing Order and RNG Consumption Analysis ===\n\n", .{});
+    log.print("=== Processing Order and RNG Consumption Analysis ===\n\n", .{});
 
     // Initialize RNG with fixed seed
     var seed_bytes = [_]u8{0} ** 32;
@@ -28,18 +29,18 @@ pub fn main() !void {
     peekRngBytes(&rng, &prf_key_bytes);
     const prf_key = prf_key_bytes;
 
-    std.debug.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
+    log.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
     var rng_state_after_params: [32]u8 = undefined;
     peekRngBytes(&rng, &rng_state_after_params);
-    std.debug.print("RNG State: {any}\n", .{rng_state_after_params});
+    log.print("RNG State: {any}\n", .{rng_state_after_params});
 
     // Generate bottom tree roots
     var bottom_tree_roots = std.ArrayList([8]hash_zig.core.KoalaBearField).init(allocator);
     defer bottom_tree_roots.deinit();
 
-    std.debug.print("\n=== Bottom Tree Generation ===\n", .{});
+    log.print("\n=== Bottom Tree Generation ===\n", .{});
     for (0..16) |bottom_tree_index| {
-        std.debug.print("\n--- Bottom Tree {} ---\n", .{bottom_tree_index});
+        log.print("\n--- Bottom Tree {} ---\n", .{bottom_tree_index});
 
         // Generate leaves for this bottom tree
         const leaves = try generateLeavesFromPrfKey(prf_key, bottom_tree_index, allocator);
@@ -52,28 +53,28 @@ pub fn main() !void {
         const root = bottom_tree.root();
         try bottom_tree_roots.append(root);
 
-        std.debug.print("Bottom Tree {} Root: {any}\n", .{ bottom_tree_index, root });
+        log.print("Bottom Tree {} Root: {any}\n", .{ bottom_tree_index, root });
     }
 
-    std.debug.print("\n=== RNG State After Bottom Tree Generation ===\n", .{});
+    log.print("\n=== RNG State After Bottom Tree Generation ===\n", .{});
     var rng_state_after_bottom: [32]u8 = undefined;
     peekRngBytes(&rng, &rng_state_after_bottom);
-    std.debug.print("RNG State: {any}\n", .{rng_state_after_bottom});
+    log.print("RNG State: {any}\n", .{rng_state_after_bottom});
 
     // Build top tree
-    std.debug.print("\n=== Top Tree Building ===\n", .{});
+    log.print("\n=== Top Tree Building ===\n", .{});
     const top_tree = try newTopTree(bottom_tree_roots.items, parameter, &rng, allocator);
     defer top_tree.deinit();
 
     const final_root = top_tree.root();
-    std.debug.print("Final Root: {any}\n", .{final_root});
+    log.print("Final Root: {any}\n", .{final_root});
 
-    std.debug.print("\n=== RNG State After Top Tree Generation ===\n", .{});
+    log.print("\n=== RNG State After Top Tree Generation ===\n", .{});
     var rng_state_after_top: [32]u8 = undefined;
     peekRngBytes(&rng, &rng_state_after_top);
-    std.debug.print("RNG State: {any}\n", .{rng_state_after_top});
+    log.print("RNG State: {any}\n", .{rng_state_after_top});
 
-    std.debug.print("\n=== Analysis Complete ===\n", .{});
+    log.print("\n=== Analysis Complete ===\n", .{});
 }
 
 fn peekRngBytes(rng: *hash_zig.prf.ChaCha12Rng, buf: []u8) void {

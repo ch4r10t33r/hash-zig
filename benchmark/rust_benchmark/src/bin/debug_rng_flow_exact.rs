@@ -37,7 +37,7 @@ fn main() {
     // Step 3: Check RNG state after parameter + PRF key generation
     println!("\nStep 3: RNG state after parameter + PRF key generation");
     for i in 0..10 {
-        let val = rng.gen::<u32>();
+        let val = rng.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 
@@ -83,15 +83,15 @@ fn main() {
         // Consume RNG state for padding (8 elements for front + 8 elements for back)
         // This should match the Rust HashTreeLayer::padded consumption
         for _ in 0..8 {
-            _ = rng3.gen::<u32>();
+            _ = rng3.random::<u32>();
         }
         for _ in 0..8 {
-            _ = rng3.gen::<u32>();
+            _ = rng3.random::<u32>();
         }
 
         println!("RNG state after padding consumption:");
         for i in 0..5 {
-            let val = rng3.gen::<u32>();
+            let val = rng3.random::<u32>();
             println!("  [{}] = {} (0x{:x})", i, val, val);
         }
 
@@ -106,10 +106,10 @@ fn main() {
 
         // Consume RNG state for padding
         for _ in 0..8 {
-            _ = rng4.gen::<u32>();
+            _ = rng4.random::<u32>();
         }
         for _ in 0..8 {
-            _ = rng4.gen::<u32>();
+            _ = rng4.random::<u32>();
         }
 
         let param_after_padding = rng4.random::<[u32; 5]>();

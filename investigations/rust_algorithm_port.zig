@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const allocator = std.heap.page_allocator;
 const DefaultPrng = std.Random.DefaultPrng;
 
@@ -46,8 +47,8 @@ fn padded(
     // The effective start index after optional front padding (always even).
     const actual_start_index = start_index - @as(usize, @intFromBool(needs_front));
 
-    std.debug.print("DEBUG: Zig padLayer: start_index={}, nodes.len={}, end_index={}\n", .{ start_index, nodes.len, end_index });
-    std.debug.print("DEBUG: Zig padLayer: needs_front={}, needs_back={}, actual_start_index={}\n", .{ needs_front, needs_back, actual_start_index });
+    log.print("DEBUG: Zig padLayer: start_index={}, nodes.len={}, end_index={}\n", .{ start_index, nodes.len, end_index });
+    log.print("DEBUG: Zig padLayer: needs_front={}, needs_back={}, actual_start_index={}\n", .{ needs_front, needs_back, actual_start_index });
 
     // Reserve exactly the space we may need: original nodes plus up to two pads.
     const total_capacity = nodes.len + @as(usize, @intFromBool(needs_front)) + @as(usize, @intFromBool(needs_back));
@@ -56,7 +57,7 @@ fn padded(
 
     // Optional front padding to align to an even start index.
     if (needs_front) {
-        std.debug.print("DEBUG: Zig padLayer: Generating front padding node (1 RNG call)\n", .{});
+        log.print("DEBUG: Zig padLayer: Generating front padding node (1 RNG call)\n", .{});
         // Generate random domain element (8 field elements)
         var front_padding: [8]FieldElement = undefined;
         for (0..8) |i| {
@@ -74,7 +75,7 @@ fn padded(
 
     // Optional back padding to ensure we end on an odd index.
     if (needs_back) {
-        std.debug.print("DEBUG: Zig padLayer: Generating back padding node (1 RNG call)\n", .{});
+        log.print("DEBUG: Zig padLayer: Generating back padding node (1 RNG call)\n", .{});
         // Generate random domain element (8 field elements)
         var back_padding: [8]FieldElement = undefined;
         for (0..8) |i| {
@@ -115,7 +116,7 @@ fn new_subtree(
 
     // start with the lowest layer, padded accordingly
     const padded_lowest = try padded(rng, lowest_layer_nodes, start_index);
-    std.debug.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ lowest_layer, lowest_layer + 1, padded_lowest.nodes.len, padded_lowest.start_index });
+    log.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ lowest_layer, lowest_layer + 1, padded_lowest.nodes.len, padded_lowest.start_index });
     try layers.append(padded_lowest);
 
     // now, build the tree layer by layer
@@ -138,7 +139,7 @@ fn new_subtree(
         for (0..parents_len) |i| {
             const parent_pos = @as(u32, @intCast(parent_start + i));
             const tweak_level = @as(u8, @intCast(current_level)) + 1;
-            std.debug.print("DEBUG: Zig tweak level={} pos={} (level={})\n", .{ tweak_level, parent_pos, current_level });
+            log.print("DEBUG: Zig tweak level={} pos={} (level={})\n", .{ tweak_level, parent_pos, current_level });
 
             const left_child = prev_layer.nodes[i * 2];
             const right_child = prev_layer.nodes[i * 2 + 1];
@@ -153,18 +154,18 @@ fn new_subtree(
             defer allocator.free(hash_result);
 
             @memcpy(parents[i][0..], hash_result[0..8]);
-            std.debug.print("DEBUG: Zig Hash [{}] processing children to parent\n", .{i});
+            log.print("DEBUG: Zig Hash [{}] processing children to parent\n", .{i});
         }
 
         // Add the new layer with padding so next iteration also has even start and length
         const padded_parents = try padded(rng, parents, parent_start);
-        std.debug.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, current_level + 1, padded_parents.nodes.len, padded_parents.start_index });
+        log.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, current_level + 1, padded_parents.nodes.len, padded_parents.start_index });
 
         // Debug: Print intermediate tree nodes for first few layers
         if (current_level < 3) {
-            std.debug.print("DEBUG: Layer {} nodes: {} nodes\n", .{ current_level + 1, padded_parents.nodes.len });
+            log.print("DEBUG: Layer {} nodes: {} nodes\n", .{ current_level + 1, padded_parents.nodes.len });
             for (0..@min(3, padded_parents.nodes.len)) |i| {
-                std.debug.print("  Node {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, padded_parents.nodes[i][0].value, padded_parents.nodes[i][1].value, padded_parents.nodes[i][2].value, padded_parents.nodes[i][3].value, padded_parents.nodes[i][4].value, padded_parents.nodes[i][5].value, padded_parents.nodes[i][6].value, padded_parents.nodes[i][7].value });
+                log.print("  Node {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, padded_parents.nodes[i][0].value, padded_parents.nodes[i][1].value, padded_parents.nodes[i][2].value, padded_parents.nodes[i][3].value, padded_parents.nodes[i][4].value, padded_parents.nodes[i][5].value, padded_parents.nodes[i][6].value, padded_parents.nodes[i][7].value });
             }
         }
 
@@ -341,7 +342,7 @@ fn generateLeavesFromPrfKey(
 
             // Debug: Print domain elements for first few chains
             if (bottom_tree_index == 0 and epoch < 2 and chain_index < 2) {
-                std.debug.print("    Chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
+                log.print("    Chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
             }
 
             // Compute hash chain using real implementation
@@ -350,7 +351,7 @@ fn generateLeavesFromPrfKey(
 
             // Debug: Print chain end for first few chains
             if (bottom_tree_index == 0 and epoch < 2 and chain_index < 2) {
-                std.debug.print("    Chain {} end: 0x{x}\n", .{ chain_index, chain_end });
+                log.print("    Chain {} end: 0x{x}\n", .{ chain_index, chain_end });
             }
         }
 
@@ -383,7 +384,7 @@ fn generateLeavesFromPrfKey(
 
         // Debug: Print leaf hash for first few epochs
         if (bottom_tree_index == 0 and epoch < 3) {
-            std.debug.print("    Epoch {} leaf hash: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, leaf_hash[0], leaf_hash[1], leaf_hash[2], leaf_hash[3], leaf_hash[4], leaf_hash[5], leaf_hash[6], leaf_hash[7] });
+            log.print("    Epoch {} leaf hash: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, leaf_hash[0], leaf_hash[1], leaf_hash[2], leaf_hash[3], leaf_hash[4], leaf_hash[5], leaf_hash[6], leaf_hash[7] });
         }
 
         leaves[epoch - epoch_range_start] = leaf_hash;
@@ -519,7 +520,7 @@ fn peekRngBytes(rng: *ChaCha12Rng, buf: []u8) void {
 }
 
 pub fn main() !void {
-    std.debug.print("Rust Algorithm Port - Starting implementation\n", .{});
+    log.print("Rust Algorithm Port - Starting implementation\n", .{});
 
     // Use the exact same seed as the Rust debug program
     const seed = [_]u8{0x42} ** 32;
@@ -538,9 +539,9 @@ pub fn main() !void {
     // Debug: Check RNG state after parameter generation (should be unchanged)
     var debug_bytes_after_params: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes_after_params);
-    std.debug.print("ZIG RNG state after parameter generation: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_after_params)});
+    log.print("ZIG RNG state after parameter generation: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_after_params)});
 
-    std.debug.print("Generated parameters: {any}\n", .{parameter});
+    log.print("Generated parameters: {any}\n", .{parameter});
 
     // Generate PRF key WITH consuming RNG state (matching actual Zig implementation - rng.fill() consumes state)
     var prf_key: [32]u8 = undefined;
@@ -549,39 +550,39 @@ pub fn main() !void {
     // Debug: Check RNG state after PRF key generation (should be changed)
     var debug_bytes_after_prf: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes_after_prf);
-    std.debug.print("ZIG RNG state after PRF key generation: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_after_prf)});
+    log.print("ZIG RNG state after PRF key generation: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_after_prf)});
 
-    std.debug.print("Generated PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    log.print("Generated PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
 
     // Debug: Check RNG state after parameter and PRF key generation
     var debug_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG state after params+PRF: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG state after params+PRF: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Debug: Check RNG state before tree building
     var debug_bytes2: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes2);
-    std.debug.print("RNG state before tree building: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes2)});
+    log.print("RNG state before tree building: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes2)});
 
     // Build the complete signature scheme like the original implementation
     // For log_lifetime = 8, we need 2^(8/2) = 16 bottom trees
     const num_bottom_trees = 1 << (8 / 2); // 2^4 = 16 bottom trees
     var bottom_tree_roots = try allocator.alloc([8]FieldElement, num_bottom_trees);
 
-    std.debug.print("Building {} bottom trees\n", .{num_bottom_trees});
+    log.print("Building {} bottom trees\n", .{num_bottom_trees});
 
     // Build bottom trees exactly like Rust: first two sequentially, then rest in parallel
     // First, build trees 0 and 1 sequentially (matching Rust)
-    std.debug.print("\n=== Building Bottom Trees 0 and 1 (Sequential) ===\n", .{});
+    log.print("\n=== Building Bottom Trees 0 and 1 (Sequential) ===\n", .{});
 
     // Build tree 0
     {
-        std.debug.print("\n=== Building Bottom Tree 0 ===\n", .{});
+        log.print("\n=== Building Bottom Tree 0 ===\n", .{});
 
         // Debug: Check RNG state before this bottom tree
         var debug_bytes_bt: [32]u8 = undefined;
         peekRngBytes(&rng, &debug_bytes_bt);
-        std.debug.print("RNG state before bottom tree 0: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_bt)});
+        log.print("RNG state before bottom tree 0: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_bt)});
 
         // Generate leaves from PRF key (matching original implementation)
         const tree_leafs = try generateLeavesFromPrfKey(prf_key, 0, parameter, allocator);
@@ -597,25 +598,25 @@ pub fn main() !void {
             }
         }
 
-        std.debug.print("Bottom tree 0 leaves: {} leaves\n", .{leafs_array.len});
+        log.print("Bottom tree 0 leaves: {} leaves\n", .{leafs_array.len});
         for (leafs_array, 0..) |leaf, j| {
-            std.debug.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leaf[0].value, leaf[1].value, leaf[2].value, leaf[3].value, leaf[4].value, leaf[5].value, leaf[6].value, leaf[7].value });
+            log.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leaf[0].value, leaf[1].value, leaf[2].value, leaf[3].value, leaf[4].value, leaf[5].value, leaf[6].value, leaf[7].value });
         }
 
         const bottom_tree = try new_bottom_tree(8, 0, parameter, leafs_array, &rng);
         bottom_tree_roots[0] = root(&bottom_tree);
 
-        std.debug.print("Bottom tree 0 root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_roots[0][0].value, bottom_tree_roots[0][1].value, bottom_tree_roots[0][2].value, bottom_tree_roots[0][3].value, bottom_tree_roots[0][4].value, bottom_tree_roots[0][5].value, bottom_tree_roots[0][6].value, bottom_tree_roots[0][7].value });
+        log.print("Bottom tree 0 root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_roots[0][0].value, bottom_tree_roots[0][1].value, bottom_tree_roots[0][2].value, bottom_tree_roots[0][3].value, bottom_tree_roots[0][4].value, bottom_tree_roots[0][5].value, bottom_tree_roots[0][6].value, bottom_tree_roots[0][7].value });
     }
 
     // Build tree 1
     {
-        std.debug.print("\n=== Building Bottom Tree 1 ===\n", .{});
+        log.print("\n=== Building Bottom Tree 1 ===\n", .{});
 
         // Debug: Check RNG state before this bottom tree
         var debug_bytes_bt: [32]u8 = undefined;
         peekRngBytes(&rng, &debug_bytes_bt);
-        std.debug.print("RNG state before bottom tree 1: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_bt)});
+        log.print("RNG state before bottom tree 1: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_bt)});
 
         // Generate leaves from PRF key (matching original implementation)
         const tree_leafs = try generateLeavesFromPrfKey(prf_key, 1, parameter, allocator);
@@ -631,26 +632,26 @@ pub fn main() !void {
             }
         }
 
-        std.debug.print("Bottom tree 1 leaves: {} leaves\n", .{leafs_array.len});
+        log.print("Bottom tree 1 leaves: {} leaves\n", .{leafs_array.len});
         for (leafs_array, 0..) |leaf, j| {
-            std.debug.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leaf[0].value, leaf[1].value, leaf[2].value, leaf[3].value, leaf[4].value, leaf[5].value, leaf[6].value, leaf[7].value });
+            log.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leaf[0].value, leaf[1].value, leaf[2].value, leaf[3].value, leaf[4].value, leaf[5].value, leaf[6].value, leaf[7].value });
         }
 
         const bottom_tree = try new_bottom_tree(8, 1, parameter, leafs_array, &rng);
         bottom_tree_roots[1] = root(&bottom_tree);
 
-        std.debug.print("Bottom tree 1 root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_roots[1][0].value, bottom_tree_roots[1][1].value, bottom_tree_roots[1][2].value, bottom_tree_roots[1][3].value, bottom_tree_roots[1][4].value, bottom_tree_roots[1][5].value, bottom_tree_roots[1][6].value, bottom_tree_roots[1][7].value });
+        log.print("Bottom tree 1 root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_roots[1][0].value, bottom_tree_roots[1][1].value, bottom_tree_roots[1][2].value, bottom_tree_roots[1][3].value, bottom_tree_roots[1][4].value, bottom_tree_roots[1][5].value, bottom_tree_roots[1][6].value, bottom_tree_roots[1][7].value });
     }
 
     // Now build the rest of the bottom trees (2-15) in parallel like Rust
-    std.debug.print("\n=== Building Bottom Trees 2-15 (Parallel) ===\n", .{});
+    log.print("\n=== Building Bottom Trees 2-15 (Parallel) ===\n", .{});
     for (2..num_bottom_trees) |tree_index| {
-        std.debug.print("\n=== Building Bottom Tree {} ===\n", .{tree_index});
+        log.print("\n=== Building Bottom Tree {} ===\n", .{tree_index});
 
         // Debug: Check RNG state before this bottom tree
         var debug_bytes_bt: [32]u8 = undefined;
         peekRngBytes(&rng, &debug_bytes_bt);
-        std.debug.print("RNG state before bottom tree {}: {x}\n", .{ tree_index, std.fmt.fmtSliceHexLower(&debug_bytes_bt) });
+        log.print("RNG state before bottom tree {}: {x}\n", .{ tree_index, std.fmt.fmtSliceHexLower(&debug_bytes_bt) });
 
         // Generate leaves from PRF key (matching original implementation)
         const tree_leafs = try generateLeavesFromPrfKey(prf_key, tree_index, parameter, allocator);
@@ -666,34 +667,34 @@ pub fn main() !void {
             }
         }
 
-        std.debug.print("Bottom tree {} leaves: {} leaves\n", .{ tree_index, leafs_array.len });
+        log.print("Bottom tree {} leaves: {} leaves\n", .{ tree_index, leafs_array.len });
         for (leafs_array, 0..) |leaf, j| {
-            std.debug.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leaf[0].value, leaf[1].value, leaf[2].value, leaf[3].value, leaf[4].value, leaf[5].value, leaf[6].value, leaf[7].value });
+            log.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leaf[0].value, leaf[1].value, leaf[2].value, leaf[3].value, leaf[4].value, leaf[5].value, leaf[6].value, leaf[7].value });
         }
 
         const bottom_tree = try new_bottom_tree(8, tree_index, parameter, leafs_array, &rng);
         bottom_tree_roots[tree_index] = root(&bottom_tree);
 
-        std.debug.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
+        log.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
     }
 
     // Now build the top tree from the bottom tree roots
-    std.debug.print("\n=== Building Top Tree ===\n", .{});
+    log.print("\n=== Building Top Tree ===\n", .{});
 
     // Debug: Check RNG state before top tree
     var debug_bytes_tt: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes_tt);
-    std.debug.print("RNG state before top tree: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_tt)});
+    log.print("RNG state before top tree: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_tt)});
 
-    std.debug.print("Top tree input roots: {} roots\n", .{bottom_tree_roots.len});
+    log.print("Top tree input roots: {} roots\n", .{bottom_tree_roots.len});
     for (bottom_tree_roots, 0..) |root_val, i| {
-        std.debug.print("  Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, root_val[0].value, root_val[1].value, root_val[2].value, root_val[3].value, root_val[4].value, root_val[5].value, root_val[6].value, root_val[7].value });
+        log.print("  Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, root_val[0].value, root_val[1].value, root_val[2].value, root_val[3].value, root_val[4].value, root_val[5].value, root_val[6].value, root_val[7].value });
     }
 
     const top_tree = try new_top_tree(&rng, 8, 0, parameter, bottom_tree_roots);
     const final_root = root(&top_tree);
 
-    std.debug.print("\nRust Algorithm Port final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ final_root[0].value, final_root[1].value, final_root[2].value, final_root[3].value, final_root[4].value, final_root[5].value, final_root[6].value, final_root[7].value });
+    log.print("\nRust Algorithm Port final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ final_root[0].value, final_root[1].value, final_root[2].value, final_root[3].value, final_root[4].value, final_root[5].value, final_root[6].value, final_root[7].value });
 
     allocator.free(bottom_tree_roots);
 

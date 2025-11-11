@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -9,8 +10,8 @@ pub fn main() !void {
     const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    std.debug.print("=== Zig Detailed RNG Consumption Analysis ===\n", .{});
-    std.debug.print("SEED: {s}\n", .{seed_hex});
+    log.print("=== Zig Detailed RNG Consumption Analysis ===\n", .{});
+    log.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -25,16 +26,16 @@ pub fn main() !void {
     // Use first 8 bytes as u64 seed for DefaultPrng comparison
     const seed_u64 = std.mem.readInt(u64, seed_array[0..8], .little);
 
-    std.debug.print("\n=== RNG State Analysis ===\n", .{});
-    std.debug.print("First 20 RNG values (DefaultPrng):\n", .{});
+    log.print("\n=== RNG State Analysis ===\n", .{});
+    log.print("First 20 RNG values (DefaultPrng):\n", .{});
     var rng = std.Random.DefaultPrng.init(seed_u64);
     for (0..20) |i| {
         const val = rng.random().int(u32);
-        std.debug.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
+        log.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
     }
 
-    std.debug.print("\n=== Key Generation with RNG Tracking ===\n", .{});
-    std.debug.print("RNG values consumed during key generation:\n", .{});
+    log.print("\n=== Key Generation with RNG Tracking ===\n", .{});
+    log.print("RNG values consumed during key generation:\n", .{});
 
     // Track RNG consumption during key generation
     var rng2 = std.Random.DefaultPrng.init(seed_u64);
@@ -45,7 +46,7 @@ pub fn main() !void {
         const val = rng2.random().int(u32);
         try rng_values.append(val);
         if (i < 20) {
-            std.debug.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
+            log.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
         }
     }
 
@@ -55,29 +56,29 @@ pub fn main() !void {
     const result = try scheme.keyGen(0, 256);
     defer result.secret_key.deinit();
 
-    std.debug.print("\n=== Results ===\n", .{});
-    std.debug.print("Final root values: {any}\n", .{result.public_key.root});
+    log.print("\n=== Results ===\n", .{});
+    log.print("Final root values: {any}\n", .{result.public_key.root});
 
-    std.debug.print("\n=== RNG State After Key Generation ===\n", .{});
+    log.print("\n=== RNG State After Key Generation ===\n", .{});
     var rng3 = std.Random.DefaultPrng.init(seed_u64);
     const next_val = rng3.random().int(u32);
-    std.debug.print("Next RNG value: {} (0x{x})\n", .{ next_val, next_val });
+    log.print("Next RNG value: {} (0x{x})\n", .{ next_val, next_val });
 
     // Calculate total RNG consumption
     const total_consumed = rng_values.items.len;
-    std.debug.print("Total RNG values consumed: {}\n", .{total_consumed});
+    log.print("Total RNG values consumed: {}\n", .{total_consumed});
 
     // Show the pattern of RNG consumption
-    std.debug.print("\n=== RNG Consumption Pattern ===\n", .{});
-    std.debug.print("First 10 values: {any}\n", .{rng_values.items[0..10]});
-    std.debug.print("Values 10-20: {any}\n", .{rng_values.items[10..20]});
+    log.print("\n=== RNG Consumption Pattern ===\n", .{});
+    log.print("First 10 values: {any}\n", .{rng_values.items[0..10]});
+    log.print("Values 10-20: {any}\n", .{rng_values.items[10..20]});
     if (rng_values.items.len > 20) {
-        std.debug.print("Values 20-30: {any}\n", .{rng_values.items[20..30]});
+        log.print("Values 20-30: {any}\n", .{rng_values.items[20..30]});
     }
     if (rng_values.items.len > 30) {
-        std.debug.print("Values 30-40: {any}\n", .{rng_values.items[30..40]});
+        log.print("Values 30-40: {any}\n", .{rng_values.items[30..40]});
     }
     if (rng_values.items.len > 40) {
-        std.debug.print("Values 40-50: {any}\n", .{rng_values.items[40..50]});
+        log.print("Values 40-50: {any}\n", .{rng_values.items[40..50]});
     }
 }

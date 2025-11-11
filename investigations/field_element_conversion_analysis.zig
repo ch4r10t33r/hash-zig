@@ -1,8 +1,9 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    std.debug.print("=== Field Element Conversion Analysis ===\n", .{});
+    log.print("=== Field Element Conversion Analysis ===\n", .{});
 
     // Initialize RNG with fixed seed
     var seed_bytes = [_]u8{0} ** 32;
@@ -22,15 +23,15 @@ pub fn main() !void {
     // Generate PRF key (matching Rust algorithm port)
     var prf_key_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &prf_key_bytes);
-    std.debug.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
+    log.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
 
-    std.debug.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
+    log.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
     var debug_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Analyze field element conversion for tree building
-    std.debug.print("\n=== Field Element Conversion Analysis ===\n", .{});
+    log.print("\n=== Field Element Conversion Analysis ===\n", .{});
 
     // Simulate a tree building operation to analyze field element conversion
     const left_child = [_]u32{ 123456789, 987654321, 456789123, 789123456, 321654987, 654987321, 147258369, 369258147 };
@@ -38,80 +39,80 @@ pub fn main() !void {
     const tweak_level: u8 = 5;
     const position: u32 = 0;
 
-    std.debug.print("Left Child: {any}\n", .{left_child});
-    std.debug.print("Right Child: {any}\n", .{right_child});
-    std.debug.print("Tweak Level: {}\n", .{tweak_level});
-    std.debug.print("Position: {}\n", .{position});
+    log.print("Left Child: {any}\n", .{left_child});
+    log.print("Right Child: {any}\n", .{right_child});
+    log.print("Tweak Level: {}\n", .{tweak_level});
+    log.print("Position: {}\n", .{position});
 
     // Analyze tweak encoding
     const tweak_encoding = (@as(u128, tweak_level) << 32) | @as(u128, position);
-    std.debug.print("Tweak Encoding: {}\n", .{tweak_encoding});
+    log.print("Tweak Encoding: {}\n", .{tweak_encoding});
 
     // Convert to field elements using base-p representation
     const tweak = tweakToFieldElements(tweak_encoding);
-    std.debug.print("Tweak Field Elements: {any}\n", .{tweak});
+    log.print("Tweak Field Elements: {any}\n", .{tweak});
 
     // Analyze field element conversion
-    std.debug.print("\n=== Field Element Conversion Analysis ===\n", .{});
+    log.print("\n=== Field Element Conversion Analysis ===\n", .{});
 
     // Parameter (5 elements)
-    std.debug.print("Parameter (5 elements): {any}\n", .{parameter});
+    log.print("Parameter (5 elements): {any}\n", .{parameter});
 
     // Tweak (2 elements)
-    std.debug.print("Tweak (2 elements): {any}\n", .{tweak});
+    log.print("Tweak (2 elements): {any}\n", .{tweak});
 
     // Message (left + right child, 16 elements total)
-    std.debug.print("Message (16 elements): Left={any}, Right={any}\n", .{ left_child, right_child });
+    log.print("Message (16 elements): Left={any}, Right={any}\n", .{ left_child, right_child });
 
     // Analyze the specific field element conversion
-    std.debug.print("\n=== Field Element Conversion Details ===\n", .{});
+    log.print("\n=== Field Element Conversion Details ===\n", .{});
 
     // Convert left child to field elements
     var left_child_field: [8]hash_zig.core.KoalaBearField = undefined;
     for (0..8) |i| {
         left_child_field[i] = hash_zig.core.KoalaBearField{ .value = left_child[i] };
     }
-    std.debug.print("Left Child Field Elements: {any}\n", .{left_child_field});
+    log.print("Left Child Field Elements: {any}\n", .{left_child_field});
 
     // Convert right child to field elements
     var right_child_field: [8]hash_zig.core.KoalaBearField = undefined;
     for (0..8) |i| {
         right_child_field[i] = hash_zig.core.KoalaBearField{ .value = right_child[i] };
     }
-    std.debug.print("Right Child Field Elements: {any}\n", .{right_child_field});
+    log.print("Right Child Field Elements: {any}\n", .{right_child_field});
 
     // Analyze the specific differences in field element conversion
-    std.debug.print("\n=== Field Element Conversion Differences ===\n", .{});
-    std.debug.print("Rust: Uses KoalaBear field elements directly\n", .{});
-    std.debug.print("Zig: Converts u32 to KoalaBearField{{ .value = u32 }}\n", .{});
+    log.print("\n=== Field Element Conversion Differences ===\n", .{});
+    log.print("Rust: Uses KoalaBear field elements directly\n", .{});
+    log.print("Zig: Converts u32 to KoalaBearField{{ .value = u32 }}\n", .{});
 
     // Show the difference in field element conversion
-    std.debug.print("Rust Field Element Conversion:\n", .{});
-    std.debug.print("  KoalaBear{{ .value = u32 }}\n", .{});
-    std.debug.print("Zig Field Element Conversion:\n", .{});
-    std.debug.print("  KoalaBearField{{ .value = u32 }}\n", .{});
+    log.print("Rust Field Element Conversion:\n", .{});
+    log.print("  KoalaBear{{ .value = u32 }}\n", .{});
+    log.print("Zig Field Element Conversion:\n", .{});
+    log.print("  KoalaBearField{{ .value = u32 }}\n", .{});
 
-    std.debug.print("Both use the same field element conversion!\n", .{});
+    log.print("Both use the same field element conversion!\n", .{});
 
     // Analyze the specific field element conversion for tweak
-    std.debug.print("\n=== Tweak Field Element Conversion ===\n", .{});
-    std.debug.print("Tweak Encoding: {}\n", .{tweak_encoding});
-    std.debug.print("Tweak Field Elements: {any}\n", .{tweak});
+    log.print("\n=== Tweak Field Element Conversion ===\n", .{});
+    log.print("Tweak Encoding: {}\n", .{tweak_encoding});
+    log.print("Tweak Field Elements: {any}\n", .{tweak});
 
     // Analyze the base-p representation
     const p = hash_zig.core.KoalaBearField.PRIME;
-    std.debug.print("Prime: {}\n", .{p});
-    std.debug.print("Tweak[0] = tweak_encoding % p = {}\n", .{tweak[0].value});
-    std.debug.print("Tweak[1] = (tweak_encoding / p) % p = {}\n", .{tweak[1].value});
+    log.print("Prime: {}\n", .{p});
+    log.print("Tweak[0] = tweak_encoding % p = {}\n", .{tweak[0].value});
+    log.print("Tweak[1] = (tweak_encoding / p) % p = {}\n", .{tweak[1].value});
 
     // Analyze the specific differences in tweak field element conversion
-    std.debug.print("\n=== Tweak Field Element Conversion Differences ===\n", .{});
-    std.debug.print("Rust: Uses base-p representation for tweak encoding\n", .{});
-    std.debug.print("Zig: Uses base-p representation for tweak encoding\n", .{});
+    log.print("\n=== Tweak Field Element Conversion Differences ===\n", .{});
+    log.print("Rust: Uses base-p representation for tweak encoding\n", .{});
+    log.print("Zig: Uses base-p representation for tweak encoding\n", .{});
 
-    std.debug.print("Both use the same tweak field element conversion!\n", .{});
+    log.print("Both use the same tweak field element conversion!\n", .{});
 
-    std.debug.print("\n=== Analysis Complete ===\n", .{});
+    log.print("\n=== Analysis Complete ===\n", .{});
 }
 
 // Peek RNG bytes without consuming state (matching rust_algorithm_port.zig)

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 const ascii = std.ascii;
 
@@ -28,19 +29,19 @@ pub fn main() !void {
 
     // Get environment variables
     const public_key_data = std.process.getEnvVarOwned(allocator, "PUBLIC_KEY") catch {
-        std.debug.print("Missing PUBLIC_KEY environment variable\n", .{});
+        log.print("Missing PUBLIC_KEY environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(public_key_data);
 
     const signature_data = std.process.getEnvVarOwned(allocator, "SIGNATURE") catch {
-        std.debug.print("Missing SIGNATURE environment variable\n", .{});
+        log.print("Missing SIGNATURE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(signature_data);
 
     const message = std.process.getEnvVarOwned(allocator, "MESSAGE") catch {
-        std.debug.print("Missing MESSAGE environment variable\n", .{});
+        log.print("Missing MESSAGE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(message);
@@ -103,7 +104,7 @@ pub fn main() !void {
         const path = signature.getPath();
         const rho_dbg = signature.getRho();
         const hashes = signature.getHashes();
-        std.debug.print("ZIG_DEBUG: path_nodes_len={} rho_len={} hashes_len={}\n", .{ path.getNodes().len, rho_dbg.len, hashes.len });
+        log.print("ZIG_DEBUG: path_nodes_len={} rho_len={} hashes_len={}\n", .{ path.getNodes().len, rho_dbg.len, hashes.len });
         try stdout.print("ZIG_VERIFY_DEBUG: path_nodes_len={} rho_len={} hashes_len={}\n", .{ path.getNodes().len, rho_dbg.len, hashes.len });
 
         // Verify the signature

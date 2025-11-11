@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -6,13 +7,13 @@ pub fn main() !void {
     defer gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("Zig hash-zig Standard Implementation Benchmark\n", .{});
-    std.debug.print("===============================================\n", .{});
-    std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
-    std.debug.print("Architecture: Rust-compatible (Generalized XMSS)\n", .{});
-    std.debug.print("Parameters: Winternitz (22 chains of length 256, w=8)\n", .{});
-    std.debug.print("Hash: Poseidon2 (width=16, KoalaBear field)\n", .{});
-    std.debug.print("\n", .{});
+    log.print("Zig hash-zig Standard Implementation Benchmark\n", .{});
+    log.print("===============================================\n", .{});
+    log.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
+    log.print("Architecture: Rust-compatible (Generalized XMSS)\n", .{});
+    log.print("Parameters: Winternitz (22 chains of length 256, w=8)\n", .{});
+    log.print("Hash: Poseidon2 (width=16, KoalaBear field)\n", .{});
+    log.print("\n", .{});
 
     // Initialize parameters with lifetime 2^18 (matching Rust benchmark config)
     const params = hash_zig.Parameters.init(.lifetime_2_8);
@@ -35,25 +36,25 @@ pub fn main() !void {
     }
 
     // Emit seed for reproducibility
-    std.debug.print("SEED: ", .{});
-    for (seed) |b| std.debug.print("{x:0>2}", .{b});
-    std.debug.print("\n", .{});
+    log.print("SEED: ", .{});
+    for (seed) |b| log.print("{x:0>2}", .{b});
+    log.print("\n", .{});
 
     // Debug: Print actual parameters being used
-    std.debug.print("DEBUG: Tree height: {}\n", .{params.tree_height});
-    std.debug.print("DEBUG: Winternitz w: {}\n", .{params.winternitz_w});
-    std.debug.print("DEBUG: Num chains: {}\n", .{params.num_chains});
-    std.debug.print("DEBUG: Hash output len: {}\n", .{params.hash_output_len});
-    std.debug.print("DEBUG: Chain length: {}\n", .{@as(u32, 1) << @intCast(params.winternitz_w)});
+    log.print("DEBUG: Tree height: {}\n", .{params.tree_height});
+    log.print("DEBUG: Winternitz w: {}\n", .{params.winternitz_w});
+    log.print("DEBUG: Num chains: {}\n", .{params.num_chains});
+    log.print("DEBUG: Hash output len: {}\n", .{params.hash_output_len});
+    log.print("DEBUG: Chain length: {}\n", .{@as(u32, 1) << @intCast(params.winternitz_w)});
 
-    std.debug.print("\nGenerating keypair (Rust-compatible implementation)...\n", .{});
+    log.print("\nGenerating keypair (Rust-compatible implementation)...\n", .{});
 
     // Initialize signature scheme
     var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, params);
     defer sig_scheme.deinit();
 
     // Key generation benchmark
-    std.debug.print("BENCHMARK: About to call generateKeyPair with lifetime 2^10\n", .{});
+    log.print("BENCHMARK: About to call generateKeyPair with lifetime 2^10\n", .{});
     const start_time = std.time.nanoTimestamp();
     var keypair = try sig_scheme.generateKeyPair(allocator, &seed, 0, 1024);
     const end_time = std.time.nanoTimestamp();
@@ -63,21 +64,21 @@ pub fn main() !void {
     const keygen_time = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 
     // Display key information
-    std.debug.print("Key generation completed in {d:.3} seconds\n\n", .{keygen_time});
+    log.print("Key generation completed in {d:.3} seconds\n\n", .{keygen_time});
 
-    std.debug.print("Key Structure (Rust-compatible):\n", .{});
-    std.debug.print("  Public Key:\n", .{});
-    std.debug.print("    Root: {d} bytes\n", .{keypair.public_key.root.len});
-    std.debug.print("  Secret Key:\n", .{});
-    std.debug.print("    PRF key: {d} bytes\n", .{keypair.secret_key.prf_key.len});
-    std.debug.print("    Tree nodes: {d}\n", .{keypair.secret_key.tree.len});
-    std.debug.print("    Activation epoch: {d}\n", .{keypair.secret_key.activation_epoch});
-    std.debug.print("    Active epochs: {d}\n\n", .{keypair.secret_key.num_active_epochs});
+    log.print("Key Structure (Rust-compatible):\n", .{});
+    log.print("  Public Key:\n", .{});
+    log.print("    Root: {d} bytes\n", .{keypair.public_key.root.len});
+    log.print("  Secret Key:\n", .{});
+    log.print("    PRF key: {d} bytes\n", .{keypair.secret_key.prf_key.len});
+    log.print("    Tree nodes: {d}\n", .{keypair.secret_key.tree.len});
+    log.print("    Activation epoch: {d}\n", .{keypair.secret_key.activation_epoch});
+    log.print("    Active epochs: {d}\n\n", .{keypair.secret_key.num_active_epochs});
 
     // Self-verify: sign and verify a message
     const msg = "benchmark-message";
 
-    std.debug.print("Testing sign/verify operations...\n", .{});
+    log.print("Testing sign/verify operations...\n", .{});
 
     // Generate RNG seed for encoding randomness
     var rng_seed: [32]u8 = undefined;
@@ -104,9 +105,9 @@ pub fn main() !void {
     const verify_duration_ms = @as(f64, @floatFromInt(verify_end - verify_start)) / 1_000_000.0;
     const verify_time = verify_duration_ms / 1000.0; // Convert to seconds
 
-    std.debug.print("  Sign: {d:.2} ms\n", .{sign_duration_ms});
-    std.debug.print("  Verify: {d:.2} ms\n", .{verify_duration_ms});
-    std.debug.print("  Signature valid: {}\n\n", .{verify_ok});
+    log.print("  Sign: {d:.2} ms\n", .{sign_duration_ms});
+    log.print("  Verify: {d:.2} ms\n", .{verify_duration_ms});
+    log.print("  Signature valid: {}\n\n", .{verify_ok});
 
     // For compatibility testing, compare just the root (28 bytes from 7 field elements)
     // This avoids serialization format differences
@@ -121,7 +122,7 @@ pub fn main() !void {
         std.mem.writeInt(u32, slice[0..4], val, .little);
     }
 
-    std.debug.print("DEBUG: Public key root size: {} bytes\n", .{root_bytes.len});
+    log.print("DEBUG: Public key root size: {} bytes\n", .{root_bytes.len});
 
     // Hash just the root for comparison (matching Rust approach)
     var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
@@ -130,11 +131,11 @@ pub fn main() !void {
     hasher.final(&digest);
 
     // Output public key root (28 bytes, matching Rust)
-    std.debug.print("PUBLIC_KEY_STRUCT_ZIG:\n", .{});
-    std.debug.print("  Root size: {} bytes\n", .{root_bytes.len});
-    std.debug.print("  Root hex: ", .{});
-    for (root_bytes) |b| std.debug.print("{x:0>2}", .{b});
-    std.debug.print("\n", .{});
+    log.print("PUBLIC_KEY_STRUCT_ZIG:\n", .{});
+    log.print("  Root size: {} bytes\n", .{root_bytes.len});
+    log.print("  Root hex: ", .{});
+    for (root_bytes) |b| log.print("{x:0>2}", .{b});
+    log.print("\n", .{});
 
     // Convert seed to hex string
     var seed_hex_buf: [64]u8 = undefined;
@@ -215,17 +216,17 @@ pub fn main() !void {
     defer file.close();
 
     try file.writeAll(json_buffer.items);
-    std.debug.print("✅ Saved public key to {s}\n\n", .{json_filename});
+    log.print("✅ Saved public key to {s}\n\n", .{json_filename});
 
     // Output results (using root for comparison, matching Rust)
-    std.debug.print("PUBLIC_SHA3: ", .{});
-    for (digest) |b| std.debug.print("{x:0>2}", .{b});
-    std.debug.print("\nPUBLIC_KEY_HEX: ", .{});
-    for (root_bytes) |b| std.debug.print("{x:0>2}", .{b});
-    std.debug.print("\nVERIFY_OK: {}\n", .{verify_ok});
-    std.debug.print("BENCHMARK_RESULT: {d:.6}\n", .{keygen_time});
+    log.print("PUBLIC_SHA3: ", .{});
+    for (digest) |b| log.print("{x:0>2}", .{b});
+    log.print("\nPUBLIC_KEY_HEX: ", .{});
+    for (root_bytes) |b| log.print("{x:0>2}", .{b});
+    log.print("\nVERIFY_OK: {}\n", .{verify_ok});
+    log.print("BENCHMARK_RESULT: {d:.6}\n", .{keygen_time});
 
-    std.debug.print("\n✅ Benchmark completed successfully!\n", .{});
-    std.debug.print("Implementation: Standard Rust-compatible (GeneralizedXMSSSignatureScheme)\n", .{});
-    std.debug.print("Parameters: Winternitz (22 chains × 256 length, w=8)\n", .{});
+    log.print("\n✅ Benchmark completed successfully!\n", .{});
+    log.print("Implementation: Standard Rust-compatible (GeneralizedXMSSSignatureScheme)\n", .{});
+    log.print("Parameters: Winternitz (22 chains × 256 length, w=8)\n", .{});
 }

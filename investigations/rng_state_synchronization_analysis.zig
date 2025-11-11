@@ -1,18 +1,19 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    std.debug.print("=== RNG State Synchronization Analysis ===\n", .{});
+    log.print("=== RNG State Synchronization Analysis ===\n", .{});
 
     // Initialize RNG with fixed seed
     var seed_bytes = [_]u8{0} ** 32;
     @memset(&seed_bytes, 123);
     var rng = hash_zig.prf.ChaCha12Rng.init(seed_bytes);
 
-    std.debug.print("=== Initial RNG State ===\n", .{});
+    log.print("=== Initial RNG State ===\n", .{});
     var debug_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Generate parameters and PRF key (matching Rust algorithm port)
     var parameter: [5]hash_zig.core.KoalaBearField = undefined;
@@ -24,79 +25,79 @@ pub fn main() !void {
         parameter[i] = hash_zig.core.KoalaBearField{ .value = random_value >> 1 }; // 31-bit field element
     }
 
-    std.debug.print("=== RNG State After Parameter Generation ===\n", .{});
+    log.print("=== RNG State After Parameter Generation ===\n", .{});
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Generate PRF key (matching Rust algorithm port)
     var prf_key_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &prf_key_bytes);
-    std.debug.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
+    log.print("PRF Key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key_bytes)});
 
-    std.debug.print("=== RNG State After PRF Key Generation ===\n", .{});
+    log.print("=== RNG State After PRF Key Generation ===\n", .{});
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Analyze RNG consumption during tree building
-    std.debug.print("\n=== RNG Consumption During Tree Building ===\n", .{});
+    log.print("\n=== RNG Consumption During Tree Building ===\n", .{});
 
     // Simulate bottom tree building
-    std.debug.print("--- Bottom Tree 0 ---\n", .{});
+    log.print("--- Bottom Tree 0 ---\n", .{});
     for (0..4) |layer| {
         const current_level = @as(u8, @intCast(layer));
         const next_level = current_level + 1;
 
-        std.debug.print("Layer {} -> {}: Building layer\n", .{ current_level, next_level });
+        log.print("Layer {} -> {}: Building layer\n", .{ current_level, next_level });
 
         // Check RNG state before layer
         peekRngBytes(&rng, &debug_bytes);
-        std.debug.print("  RNG State Before Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+        log.print("  RNG State Before Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
         // Simulate padding node generation (if needed)
         if (layer == 0) {
-            std.debug.print("  Generating padding node (1 RNG call)\n", .{});
+            log.print("  Generating padding node (1 RNG call)\n", .{});
             // Consume 1 RNG call for padding
             var padding_bytes: [4]u8 = undefined;
             peekRngBytes(&rng, &padding_bytes);
-            std.debug.print("  Padding Bytes: {x}\n", .{std.fmt.fmtSliceHexLower(&padding_bytes)});
+            log.print("  Padding Bytes: {x}\n", .{std.fmt.fmtSliceHexLower(&padding_bytes)});
         }
 
         // Check RNG state after layer
         peekRngBytes(&rng, &debug_bytes);
-        std.debug.print("  RNG State After Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+        log.print("  RNG State After Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
     }
 
     // Simulate top tree building
-    std.debug.print("\n--- Top Tree ---\n", .{});
+    log.print("\n--- Top Tree ---\n", .{});
     for (0..4) |layer| {
         const current_level = @as(u8, @intCast(layer + 4)); // Top tree starts at level 4
         const next_level = current_level + 1;
 
-        std.debug.print("Layer {} -> {}: Building layer\n", .{ current_level, next_level });
+        log.print("Layer {} -> {}: Building layer\n", .{ current_level, next_level });
 
         // Check RNG state before layer
         peekRngBytes(&rng, &debug_bytes);
-        std.debug.print("  RNG State Before Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+        log.print("  RNG State Before Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
         // Simulate padding node generation (if needed)
         if (layer == 0) {
-            std.debug.print("  Generating padding node (1 RNG call)\n", .{});
+            log.print("  Generating padding node (1 RNG call)\n", .{});
             // Consume 1 RNG call for padding
             var padding_bytes: [4]u8 = undefined;
             peekRngBytes(&rng, &padding_bytes);
-            std.debug.print("  Padding Bytes: {x}\n", .{std.fmt.fmtSliceHexLower(&padding_bytes)});
+            log.print("  Padding Bytes: {x}\n", .{std.fmt.fmtSliceHexLower(&padding_bytes)});
         }
 
         // Check RNG state after layer
         peekRngBytes(&rng, &debug_bytes);
-        std.debug.print("  RNG State After Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+        log.print("  RNG State After Layer: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
     }
 
-    std.debug.print("\n=== Final RNG State ===\n", .{});
+    log.print("\n=== Final RNG State ===\n", .{});
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
-    std.debug.print("\n=== Analysis Complete ===\n", .{});
+    log.print("\n=== Analysis Complete ===\n", .{});
 }
 
 // Peek RNG bytes without consuming state (matching rust_algorithm_port.zig)

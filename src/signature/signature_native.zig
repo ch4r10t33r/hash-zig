@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const log = @import("../utils/log.zig");
 const FieldElement = @import("../core/field.zig").FieldElement;
 const ParametersRustCompat = @import("../core/params_rust_compat.zig").ParametersRustCompat;
 const ShakePRFtoF_8_7 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
@@ -543,7 +544,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                 // Debug: Print domain elements for all epochs and chains in first bottom tree
                 if (bottom_tree_index == 0) {
-                    // std.debug.print("DEBUG: Bottom tree {} epoch {} chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_index, epoch, chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
+                    // log.print("DEBUG: Bottom tree {} epoch {} chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_index, epoch, chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
                 }
 
                 // Walk the chain to get the final 8-wide domain
@@ -551,7 +552,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                 // Debug: Print chain end for all epochs and chains in first bottom tree
                 if (bottom_tree_index == 0) {
-                    std.debug.print("DEBUG: Bottom tree {} epoch {} chain {} chain end[0]: 0x{x}\n", .{ bottom_tree_index, epoch, chain_index, chain_end_domain[0].value });
+                    log.print("DEBUG: Bottom tree {} epoch {} chain {} chain end[0]: 0x{x}\n", .{ bottom_tree_index, epoch, chain_index, chain_end_domain[0].value });
                 }
 
                 chain_domains[chain_index] = chain_end_domain;
@@ -573,14 +574,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: Print leaf domain head for all epochs in first bottom tree
             if (bottom_tree_index == 0) {
-                std.debug.print("DEBUG: Bottom tree {} epoch {} leaf domain[0]: 0x{x}\n", .{ bottom_tree_index, epoch, leaf_domain[0].value });
+                log.print("DEBUG: Bottom tree {} epoch {} leaf domain[0]: 0x{x}\n", .{ bottom_tree_index, epoch, leaf_domain[0].value });
                 if (epoch == 0) {
-                    std.debug.print("ZIG_LEAF_DOMAIN_EPOCH0:[", .{});
+                    log.print("ZIG_LEAF_DOMAIN_EPOCH0:[", .{});
                     for (leaf_domain, 0..) |fe, i| {
-                        std.debug.print("\"0x{x}\"", .{fe.value});
-                        if (i < 7) std.debug.print(",", .{});
+                        log.print("\"0x{x}\"", .{fe.value});
+                        if (i < 7) log.print(",", .{});
                     }
-                    std.debug.print("]\n", .{});
+                    log.print("]\n", .{});
                 }
             }
         }
@@ -617,7 +618,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: Print initial state for first bottom tree, epoch 0, chain 0
         if (epoch == 0 and chain_index == 0) {
-            // std.debug.print("DEBUG: Chain initial state epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value });
+            // log.print("DEBUG: Chain initial state epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value });
         }
 
         // Walk the chain for BASE-1 steps (matching Rust chain function)
@@ -629,7 +630,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: Print chain step for first bottom tree, epoch 0, chain 0
             if (epoch == 0 and chain_index == 0) {
-                // std.debug.print("DEBUG: Chain step {} epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}] -> [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j + 1, epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value, next[0].value, next[1].value, next[2].value, next[3].value, next[4].value, next[5].value, next[6].value, next[7].value });
+                // log.print("DEBUG: Chain step {} epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}] -> [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j + 1, epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value, next[0].value, next[1].value, next[2].value, next[3].value, next[4].value, next[5].value, next[6].value, next[7].value });
             }
 
             // Update current state
@@ -638,7 +639,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: Print final chain result for first bottom tree, epoch 0, chain 0
         if (epoch == 0 and chain_index == 0) {
-            std.debug.print("DEBUG: Chain final result epoch={} chain={}: 0x{x}\n", .{ epoch, chain_index, current[0].value });
+            log.print("DEBUG: Chain final result epoch={} chain={}: 0x{x}\n", .{ epoch, chain_index, current[0].value });
         }
 
         return current[0];
@@ -811,7 +812,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const parent_pos = @as(u32, @intCast(parent_start + i));
             // Debug: log parent computation (only for first parent at level 0)
             if (current_level == 0 and i == 0 and parent_start == 0) {
-                std.debug.print("ZIG_BUILDTREE_DEBUG: Level {} parent {}: parent_start={} parent_pos={} left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ current_level, i, parent_start, parent_pos, left[0].value, right[0].value });
+                log.print("ZIG_BUILDTREE_DEBUG: Level {} parent {}: parent_start={} parent_pos={} left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ current_level, i, parent_start, parent_pos, left[0].value, right[0].value });
             }
             const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
                 // Handle error - in a real implementation, we'd need proper error handling
@@ -821,7 +822,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: log parent result
             if (current_level == 0 and i == 0 and parent_start == 0) {
-                std.debug.print("ZIG_BUILDTREE_DEBUG:   parent[0]=0x{x:0>8}\n", .{hash_result[0].value});
+                log.print("ZIG_BUILDTREE_DEBUG:   parent[0]=0x{x:0>8}\n", .{hash_result[0].value});
             }
 
             // Copy the result to the parents array (only hash_len_fe elements, pad rest with zeros)
@@ -884,7 +885,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Match Rust: let tweak_level = (level as u8) + 1;
         const tweak_level = level + 1;
         const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
-        std.debug.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
+        log.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
 
         // Convert to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
@@ -894,7 +895,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         };
 
         // Debug: print tweak field elements
-        std.debug.print("DEBUG: Sponge tweak_fe: [0x{x}, 0x{x}]\n", .{ tweak[0].value, tweak[1].value });
+        log.print("DEBUG: Sponge tweak_fe: [0x{x}, 0x{x}]\n", .{ tweak[0].value, tweak[1].value });
 
         // Prepare combined input: parameter + tweak + left + right (matching Rust exactly)
         const total_input_len = 5 + 2 + left.len + right.len;
@@ -936,19 +937,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // compress requires comptime output_len, so use max (8) and slice to hash_len_fe
         const full_out = try self.poseidon2.compress(padded, 8);
         // DETAILED HASH LOGGING
-        std.debug.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
+        log.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
         for (combined_input, 0..) |fe, i| {
-            std.debug.print("{}:0x{x}", .{ i, fe.value });
-            if (i < combined_input.len - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < combined_input.len - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
         const hash_len = self.lifetime_params.hash_len_fe;
-        std.debug.print("DEBUG: Hash output (first {} of {} elements): ", .{ hash_len, full_out.len });
+        log.print("DEBUG: Hash output (first {} of {} elements): ", .{ hash_len, full_out.len });
         for (0..hash_len) |i| {
-            std.debug.print("{}:0x{x}", .{ i, full_out[i].value });
-            if (i < hash_len - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, full_out[i].value });
+            if (i < hash_len - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         const result = try self.allocator.alloc(FieldElement, hash_len);
         for (0..hash_len) |i| {
@@ -969,7 +970,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Match Rust: let tweak_level = (level as u8) + 1;
         const tweak_level = level + 1;
         const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
-        std.debug.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
+        log.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
 
         // Convert to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
@@ -1008,19 +1009,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(hash_result);
 
         // DETAILED HASH LOGGING: Log input and output for debugging
-        std.debug.print("DEBUG: Tree Hash input ({} elements): ", .{combined_input.len});
+        log.print("DEBUG: Tree Hash input ({} elements): ", .{combined_input.len});
         for (combined_input, 0..) |fe, i| {
-            std.debug.print("{}:0x{x}", .{ i, fe.value });
-            if (i < combined_input.len - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < combined_input.len - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
-        std.debug.print("DEBUG: Tree Hash output ({} elements): ", .{hash_result.len});
+        log.print("DEBUG: Tree Hash output ({} elements): ", .{hash_result.len});
         for (hash_result, 0..) |fe, i| {
-            std.debug.print("{}:0x{x}", .{ i, fe.value });
-            if (i < hash_result.len - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < hash_result.len - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Return result with hash_len_fe elements (8 for tree hashing)
         const result = try self.allocator.alloc(FieldElement, self.lifetime_params.hash_len_fe);
@@ -1207,12 +1208,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log capacity_value (in Montgomery form, print as canonical for comparison)
-        std.debug.print("DEBUG: Sponge capacity_value ({} elements, Montgomery->canonical): ", .{CAPACITY});
+        log.print("DEBUG: Sponge capacity_value ({} elements, Montgomery->canonical): ", .{CAPACITY});
         for (capacity_value_monty, 0..) |fe, i| {
-            std.debug.print("{}:0x{x}", .{ i, fe.toU32() });
-            if (i < CAPACITY - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, fe.toU32() });
+            if (i < CAPACITY - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Combine parameter + tweak + flattened input (matching Rust's poseidon_sponge input)
         // Rust passes everything in Montgomery form directly to poseidon_sponge
@@ -1244,12 +1245,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print first RATE elements of combined input (in canonical form for comparison)
-        std.debug.print("DEBUG: Sponge combined_input head RATE ({}): ", .{15});
+        log.print("DEBUG: Sponge combined_input head RATE ({}): ", .{15});
         for (0..@min(15, combined_input_monty.len)) |i| {
-            std.debug.print("{}:0x{x}", .{ i, combined_input_monty[i].toU32() });
-            if (i + 1 < @min(15, combined_input_monty.len)) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, combined_input_monty[i].toU32() });
+            if (i + 1 < @min(15, combined_input_monty.len)) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Apply Poseidon2-24 sponge (matching Rust's poseidon_sponge)
         const WIDTH: usize = 24;
@@ -1281,28 +1282,28 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print initial state (after initialization, before absorption)
-        std.debug.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
+        log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
         for (0..WIDTH) |i| {
-            std.debug.print("{}:0x{x}", .{ i, state[i].toU32() });
-            if (i < WIDTH - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, state[i].toU32() });
+            if (i < WIDTH - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Absorb: process padded input in chunks of RATE (matching Rust's poseidon_sponge)
         // Rust's KoalaBear uses Montgomery form internally, so convert canonical input to Montgomery before adding
-        std.debug.print("DEBUG: Sponge padded_input_len={} rate={}\n", .{ padded_input.len, RATE });
+        log.print("DEBUG: Sponge padded_input_len={} rate={}\n", .{ padded_input.len, RATE });
         var chunk_start: usize = 0;
         var chunk_num: usize = 0;
         while (chunk_start < padded_input.len) {
             const chunk_end = chunk_start + RATE;
             // Debug: print input values for first few chunks (in canonical form for comparison)
             if (chunk_num < 3) {
-                std.debug.print("ZIG_SPONGE_DEBUG: Input chunk {} (canonical): ", .{chunk_num});
+                log.print("ZIG_SPONGE_DEBUG: Input chunk {} (canonical): ", .{chunk_num});
                 for (0..RATE) |i| {
-                    std.debug.print("{}:0x{x}", .{ chunk_start + i, padded_input[chunk_start + i].toU32() });
-                    if (i < RATE - 1) std.debug.print(", ", .{});
+                    log.print("{}:0x{x}", .{ chunk_start + i, padded_input[chunk_start + i].toU32() });
+                    if (i < RATE - 1) log.print(", ", .{});
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
             // Add chunk to rate part of state (state[0..RATE])
             // Input is already in Montgomery form, so add directly (matching Rust's state[i] += chunk[i])
@@ -1312,12 +1313,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: print state after adding chunk (before permutation) for first few chunks
             if (chunk_num < 3) {
-                std.debug.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm): ", .{chunk_num});
+                log.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm): ", .{chunk_num});
                 for (0..WIDTH) |i| {
-                    std.debug.print("{}:0x{x}", .{ i, state[i].toU32() });
-                    if (i < WIDTH - 1) std.debug.print(", ", .{});
+                    log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                    if (i < WIDTH - 1) log.print(", ", .{});
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
 
             // Permute state (matching Rust's perm.permute_mut(&mut state))
@@ -1326,12 +1327,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: print state after permutation for first few chunks
             if (chunk_num < 3) {
-                std.debug.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (canonical): ", .{chunk_num});
+                log.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (canonical): ", .{chunk_num});
                 for (0..WIDTH) |i| {
-                    std.debug.print("{}:0x{x}", .{ i, state[i].toU32() });
-                    if (i < WIDTH - 1) std.debug.print(", ", .{});
+                    log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                    if (i < WIDTH - 1) log.print(", ", .{});
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
 
             chunk_start = chunk_end;
@@ -1339,12 +1340,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print state after all absorptions (before squeeze)
-        std.debug.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{});
+        log.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{});
         for (0..WIDTH) |i| {
-            std.debug.print("{}:0x{x}", .{ i, state[i].toU32() });
-            if (i < WIDTH - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, state[i].toU32() });
+            if (i < WIDTH - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Squeeze: extract OUTPUT_LEN elements from rate part (matching Rust's squeeze exactly)
         // Rust's squeeze: while out.len() < OUT_LEN { out.extend_from_slice(&state[..rate]); perm.permute_mut(&mut state); }
@@ -1356,21 +1357,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Read from state[0..rate] (15 elements)
             try out.appendSlice(state[0..RATE]);
             // Debug: print state before squeeze permutation
-            std.debug.print("ZIG_SPONGE_DEBUG: State before squeeze perm (canonical): ", .{});
+            log.print("ZIG_SPONGE_DEBUG: State before squeeze perm (canonical): ", .{});
             for (0..WIDTH) |i| {
-                std.debug.print("{}:0x{x}", .{ i, state[i].toU32() });
-                if (i < WIDTH - 1) std.debug.print(", ", .{});
+                log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                if (i < WIDTH - 1) log.print(", ", .{});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
             // Permute state (matching Rust's perm.permute_mut(&mut state))
             Poseidon24.permutation(&state);
             // Debug: print state after squeeze permutation
-            std.debug.print("ZIG_SPONGE_DEBUG: State after squeeze perm (canonical): ", .{});
+            log.print("ZIG_SPONGE_DEBUG: State after squeeze perm (canonical): ", .{});
             for (0..WIDTH) |i| {
-                std.debug.print("{}:0x{x}", .{ i, state[i].toU32() });
-                if (i < WIDTH - 1) std.debug.print(", ", .{});
+                log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                if (i < WIDTH - 1) log.print(", ", .{});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
         }
 
         // Take first OUTPUT_LEN elements (matching Rust's &out[0..OUT_LEN])
@@ -1379,12 +1380,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             result[i] = FieldElement.fromMontgomery(out.items[i].value);
         }
 
-        std.debug.print("DEBUG: Sponge leaf domain ({} elements): ", .{OUTPUT_LEN});
+        log.print("DEBUG: Sponge leaf domain ({} elements): ", .{OUTPUT_LEN});
         for (result, 0..) |fe, i| {
-            std.debug.print("{}:0x{x}", .{ i, fe.value });
-            if (i < OUTPUT_LEN - 1) std.debug.print(", ", .{});
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < OUTPUT_LEN - 1) log.print(", ", .{});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         return result;
     }
@@ -1399,8 +1400,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const lowest_layer = 0;
         const start_index = bottom_tree_index * 16; // Each bottom tree has 16 leaves
 
-        std.debug.print("DEBUG: Building bottom tree from layer {} to layer {}\n", .{ lowest_layer, full_depth });
-        std.debug.print("DEBUG: Starting with {} leaf hashes\n", .{leaf_hashes.len});
+        log.print("DEBUG: Building bottom tree from layer {} to layer {}\n", .{ lowest_layer, full_depth });
+        log.print("DEBUG: Starting with {} leaf hashes\n", .{leaf_hashes.len});
 
         // Convert single field elements to arrays of 8 field elements
         var leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_hashes.len);
@@ -1420,7 +1421,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Rust uses the real RNG for both bottom trees and top tree
         const initial_padded = try self.padLayer(leaf_nodes, start_index);
 
-        std.debug.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
+        log.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
 
         // Build tree layer by layer (matching Rust exactly)
         // Track all layers for proper truncation
@@ -1436,7 +1437,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         while (current_level < full_depth) {
             const next_level = current_level + 1;
 
-            std.debug.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, next_level, current_layer.nodes.len, current_layer.start_index });
+            log.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, next_level, current_layer.nodes.len, current_layer.start_index });
 
             // Parent layer starts at half the previous start index (matching Rust)
             const parent_start = current_layer.start_index >> 1;
@@ -1445,7 +1446,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const parents_len = current_layer.nodes.len / 2; // This is guaranteed to be exact due to padding
             const parents = try self.allocator.alloc([8]FieldElement, parents_len);
 
-            std.debug.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
+            log.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
 
             // Process all pairs in parallel (matching Rust par_chunks_exact(2))
             try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
@@ -1460,7 +1461,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             current_layer = new_layer;
 
-            std.debug.print("DEBUG: After padding: {} nodes (start_index: {})\n", .{ current_layer.nodes.len, current_layer.start_index });
+            log.print("DEBUG: After padding: {} nodes (start_index: {})\n", .{ current_layer.nodes.len, current_layer.start_index });
 
             // Store this layer for truncation
             // We need to store a copy of the layer, not the original
@@ -1487,25 +1488,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // layers.items[4] = layer 5
         // So layer 4 is at index 3, not 4!
         const target_layer_index = (full_depth / 2) - 1; // 8 / 2 - 1 = 3
-        std.debug.print("DEBUG: Looking for root in layer {} (stored layers: {})\n", .{ target_layer_index + 1, layers.items.len });
+        log.print("DEBUG: Looking for root in layer {} (stored layers: {})\n", .{ target_layer_index + 1, layers.items.len });
 
         if (target_layer_index >= layers.items.len) {
-            std.debug.print("ERROR: target_layer_index {} >= layers.len {}\n", .{ target_layer_index, layers.items.len });
+            log.print("ERROR: target_layer_index {} >= layers.len {}\n", .{ target_layer_index, layers.items.len });
             // Fallback to current layer
             const truncated_root = current_layer.nodes[0];
-            std.debug.print("DEBUG: Using fallback root from current layer: {any}\n", .{truncated_root});
+            log.print("DEBUG: Using fallback root from current layer: {any}\n", .{truncated_root});
             self.allocator.free(current_layer.nodes);
             return truncated_root;
         }
 
         const target_layer = layers.items[target_layer_index];
-        std.debug.print("DEBUG: Target layer has {} nodes\n", .{target_layer.nodes.len});
+        log.print("DEBUG: Target layer has {} nodes\n", .{target_layer.nodes.len});
 
         // Get the root from the correct position in layer 4
         // Rust uses: bottom_tree_index % 2 to select which of the 2 nodes to use
         const root_index = bottom_tree_index % 2;
         const truncated_root = target_layer.nodes[root_index];
-        std.debug.print("DEBUG: Final bottom tree root array (truncated from 8-layer to 4-layer, from layer {}): {any}\n", .{ target_layer_index, truncated_root });
+        log.print("DEBUG: Final bottom tree root array (truncated from 8-layer to 4-layer, from layer {}): {any}\n", .{ target_layer_index, truncated_root });
 
         // Free the final layer
         self.allocator.free(current_layer.nodes);
@@ -1786,7 +1787,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 }
             }
             if (has_nonzero) {
-                std.debug.print("ZIG_DECODE_DEBUG: bigint_u32[0..3]={any} field_elements={any}\n", .{
+                log.print("ZIG_DECODE_DEBUG: bigint_u32[0..3]={any} field_elements={any}\n", .{
                     bigint_u32[0..3],
                     field_elements,
                 });
@@ -2098,7 +2099,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         try BigInt.addScalar(&modulus, &info.prefix_sums[final_layer], 0);
         const mod_str = try std.fmt.allocPrint(self.allocator, "{}", .{modulus.toConst()});
         defer self.allocator.free(mod_str);
-        std.debug.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
+        log.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
 
         var value = try BigInt.initSet(self.allocator, 0);
         defer value.deinit();
@@ -2115,33 +2116,33 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var remainder = try BigInt.init(self.allocator);
         defer remainder.deinit();
 
-        std.debug.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
+        log.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
         for (field_elements, 0..) |fe, i| {
             if (i < 5) {
-                std.debug.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
+                log.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
             }
             try BigInt.mul(&tmp, &value, &multiplier);
             try BigInt.addScalar(&tmp, &tmp, fe.toCanonical());
             try BigInt.divFloor(&quotient, &remainder, &tmp, &modulus);
             try BigInt.addScalar(&value, &remainder, 0);
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         var offset = try BigInt.init(self.allocator);
         defer offset.deinit();
         const layer = try self.hypercubeFindLayerBig(BASE, DIMENSION, final_layer, &value, &offset);
 
-        std.debug.print("ZIG_HYPERCUBE_DEBUG: layer={} offset_bitlen={}\n", .{ layer, offset.toConst().bitCountAbs() });
+        log.print("ZIG_HYPERCUBE_DEBUG: layer={} offset_bitlen={}\n", .{ layer, offset.toConst().bitCountAbs() });
 
         const chunks = try self.mapToVertexBig(BASE, DIMENSION, layer, &offset);
 
         var chunk_sum: usize = 0;
         for (chunks) |chunk| chunk_sum += chunk;
-        std.debug.print("ZIG_HYPERCUBE_DEBUG: chunks[0..5]: ", .{});
+        log.print("ZIG_HYPERCUBE_DEBUG: chunks[0..5]: ", .{});
         for (0..@min(5, chunks.len)) |i| {
-            std.debug.print("chunks[{}]={} ", .{ i, chunks[i] });
+            log.print("chunks[{}]={} ", .{ i, chunks[i] });
         }
-        std.debug.print("sum={}\n", .{chunk_sum});
+        log.print("sum={}\n", .{chunk_sum});
 
         return chunks;
     }
@@ -2220,18 +2221,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             // Debug: print combined_input padded head 24
-            std.debug.print("ZIG_POS_IN: ", .{});
+            log.print("ZIG_POS_IN: ", .{});
             for (0..24) |j| {
-                std.debug.print("0x{x:0>8} ", .{padded_input[j].value});
+                log.print("0x{x:0>8} ", .{padded_input[j].value});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
 
             // Debug: print the 24-word Poseidon input
-            std.debug.print("ZIG_POS_IN:", .{});
+            log.print("ZIG_POS_IN:", .{});
             for (0..24) |k| {
-                std.debug.print(" 0x{x:0>8}", .{padded_input[k].value});
+                log.print(" 0x{x:0>8}", .{padded_input[k].value});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
 
             // Compress with Poseidon2-24 to get POS_OUTPUT_LEN_PER_INV_FE (15) field elements
             const iteration_pos_output = try self.poseidon2.compress(padded_input, POS_OUTPUT_LEN_PER_INV_FE);
@@ -2242,29 +2243,29 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             // Debug: print Poseidon outputs used for hypercube mapping
-            std.debug.print("ZIG_POS_OUT: ", .{});
+            log.print("ZIG_POS_OUT: ", .{});
             for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {
-                std.debug.print("0x{x:0>8} ", .{iteration_pos_output[j].value});
+                log.print("0x{x:0>8} ", .{iteration_pos_output[j].value});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
 
-            std.debug.print("ZIG_POS_CONTEXT rand:", .{});
+            log.print("ZIG_POS_CONTEXT rand:", .{});
             for (randomness[0..RAND_LEN]) |r| {
-                std.debug.print(" 0x{x:0>8}", .{r.toCanonical()});
+                log.print(" 0x{x:0>8}", .{r.toCanonical()});
             }
-            std.debug.print(" param:", .{});
+            log.print(" param:", .{});
             for (parameter) |p| {
-                std.debug.print(" 0x{x:0>8}", .{p.toCanonical()});
+                log.print(" 0x{x:0>8}", .{p.toCanonical()});
             }
-            std.debug.print(" epoch:", .{});
+            log.print(" epoch:", .{});
             for (epoch_fe) |e| {
-                std.debug.print(" 0x{x:0>8}", .{e.toCanonical()});
+                log.print(" 0x{x:0>8}", .{e.toCanonical()});
             }
-            std.debug.print(" msg:", .{});
+            log.print(" msg:", .{});
             for (message_fe) |m| {
-                std.debug.print(" 0x{x:0>8}", .{m.toCanonical()});
+                log.print(" 0x{x:0>8}", .{m.toCanonical()});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
         }
 
         // Map into hypercube part: combine field elements, take modulo, find layer, map to vertex
@@ -2296,19 +2297,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         if (sum != expected_sum) {
-            std.debug.print("ZIG_ENCODING_CHUNKS_FAIL:", .{});
+            log.print("ZIG_ENCODING_CHUNKS_FAIL:", .{});
             for (chunks) |chunk| {
-                std.debug.print(" {d}", .{chunk});
+                log.print(" {d}", .{chunk});
             }
-            std.debug.print(" sum={} expected={}\n", .{ sum, expected_sum });
+            log.print(" sum={} expected={}\n", .{ sum, expected_sum });
             return error.EncodingSumMismatch; // Signal to retry with new randomness
         }
 
-        std.debug.print("ZIG_ENCODING_CHUNKS_FINAL:", .{});
+        log.print("ZIG_ENCODING_CHUNKS_FINAL:", .{});
         for (chunks) |chunk| {
-            std.debug.print(" {d}", .{chunk});
+            log.print(" {d}", .{chunk});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Allocate and copy chunks
         const x = try self.allocator.alloc(u8, dimension);
@@ -2350,11 +2351,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         if (needs_front) {
             // Generate random node for front padding (matching Rust TH::rand_domain(rng))
             // Rust calls rng.random() once to generate a full domain element (8 field elements)
-            std.debug.print("DEBUG: padLayer: Generating front padding node (1 RNG call)\n", .{});
+            log.print("DEBUG: padLayer: Generating front padding node (1 RNG call)\n", .{});
             const random_domain = try self.generateRandomDomainSingleWithRng(rng);
             @memcpy(padded_nodes[output_index][0..8], random_domain[0..8]);
             output_index += 1;
-            std.debug.print("DEBUG: padLayer: Added front padding node at index {}\n", .{output_index - 1});
+            log.print("DEBUG: padLayer: Added front padding node at index {}\n", .{output_index - 1});
         }
 
         // Insert the actual content in order
@@ -2364,15 +2365,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Optional back padding to ensure we end on an odd index
         if (needs_back) {
             // Generate random node for back padding (matching Rust rng.random() for arrays)
-            std.debug.print("DEBUG: padLayer: Generating back padding node (1 RNG call)\n", .{});
+            log.print("DEBUG: padLayer: Generating back padding node (1 RNG call)\n", .{});
             const random_domain = try self.generateRandomDomainSingleWithRng(rng);
             @memcpy(padded_nodes[output_index][0..8], random_domain[0..8]);
-            std.debug.print("DEBUG: padLayer: Added back padding node at index {}\n", .{output_index});
+            log.print("DEBUG: padLayer: Added back padding node at index {}\n", .{output_index});
         }
 
-        std.debug.print("DEBUG: padLayer: start_index={}, nodes.len={}, end_index={}\n", .{ start_index, nodes.len, end_index });
-        std.debug.print("DEBUG: padLayer: needs_front={}, needs_back={}, actual_start_index={}\n", .{ needs_front, needs_back, actual_start_index });
-        std.debug.print("DEBUG: padLayer: total_capacity={}, padded_nodes.len={}\n", .{ total_capacity, padded_nodes.len });
+        log.print("DEBUG: padLayer: start_index={}, nodes.len={}, end_index={}\n", .{ start_index, nodes.len, end_index });
+        log.print("DEBUG: padLayer: needs_front={}, needs_back={}, actual_start_index={}\n", .{ needs_front, needs_back, actual_start_index });
+        log.print("DEBUG: padLayer: total_capacity={}, padded_nodes.len={}\n", .{ total_capacity, padded_nodes.len });
 
         return .{
             .nodes = padded_nodes,
@@ -2399,11 +2400,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         parameter: [5]FieldElement,
         start_bottom_tree_index: usize,
     ) ![8]FieldElement {
-        std.debug.print("DEBUG: Building tree from lowest layer {} up to depth {}\n", .{
+        log.print("DEBUG: Building tree from lowest layer {} up to depth {}\n", .{
             self.lifetime_params.log_lifetime / 2,
             self.lifetime_params.log_lifetime,
         });
-        std.debug.print("DEBUG: Starting with {} bottom tree roots (start index: {})\n", .{ roots_of_bottom_trees.len, start_bottom_tree_index });
+        log.print("DEBUG: Starting with {} bottom tree roots (start index: {})\n", .{ roots_of_bottom_trees.len, start_bottom_tree_index });
 
         const layers = try self.buildTopTreeLayers(roots_of_bottom_trees, parameter, start_bottom_tree_index);
         defer {
@@ -2416,14 +2417,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         const root_array = layers[layers.len - 1].nodes[0];
-        std.debug.print("DEBUG: Final top tree root array: {any}\n", .{root_array});
+        log.print("DEBUG: Final top tree root array: {any}\n", .{root_array});
         return root_array;
     }
 
     /// Build bottom tree from leaf hashes and return as array of 8 field elements
     fn buildBottomTreeAsArray(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
         // Debug: Print input information
-        std.debug.print("DEBUG: buildBottomTreeAsArray called with {} leaf hashes\n", .{leaf_hashes.len});
+        log.print("DEBUG: buildBottomTreeAsArray called with {} leaf hashes\n", .{leaf_hashes.len});
 
         // Instead of building to a single root, build to exactly 8 field elements
         // This matches the Rust implementation which produces 8 different values
@@ -2440,7 +2441,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const next_level_size = (level_size + 1) / 2;
             var next_level = try self.allocator.alloc(FieldElement, next_level_size);
 
-            std.debug.print("DEBUG: Level {}: {} -> {} elements\n", .{ level_count, level_size, next_level_size });
+            log.print("DEBUG: Level {}: {} -> {} elements\n", .{ level_count, level_size, next_level_size });
 
             for (0..next_level_size) |i| {
                 if (i * 2 + 1 < level_size) {
@@ -2449,17 +2450,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     const right = current_level[i * 2 + 1];
                     const pair = [_]FieldElement{ left, right };
 
-                    // std.debug.print("DEBUG: Hashing pair [{}] = 0x{x} + 0x{x}\n", .{ i, left.value, right.value });
+                    // log.print("DEBUG: Hashing pair [{}] = 0x{x} + 0x{x}\n", .{ i, left.value, right.value });
 
                     const hash_result = try self.applyPoseidonTweakHash(&pair, 0, 0, parameter);
                     defer self.allocator.free(hash_result);
                     next_level[i] = hash_result[0];
 
-                    // std.debug.print("DEBUG: Result [{}] = 0x{x}\n", .{ i, next_level[i].value });
+                    // log.print("DEBUG: Result [{}] = 0x{x}\n", .{ i, next_level[i].value });
                 } else {
                     // Odd number of elements, copy the last one
                     next_level[i] = current_level[i * 2];
-                    // std.debug.print("DEBUG: Copying [{}] = 0x{x}\n", .{ i, next_level[i].value });
+                    // log.print("DEBUG: Copying [{}] = 0x{x}\n", .{ i, next_level[i].value });
                 }
             }
 
@@ -2469,7 +2470,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             level_count += 1;
         }
 
-        std.debug.print("DEBUG: Final level {} has {} elements\n", .{ level_count, level_size });
+        log.print("DEBUG: Final level {} has {} elements\n", .{ level_count, level_size });
 
         // Convert to array of 8 field elements
         var result: [8]FieldElement = undefined;
@@ -2477,13 +2478,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Copy existing elements
         for (0..@min(8, level_size)) |i| {
             result[i] = current_level[i];
-            // std.debug.print("DEBUG: result[{}] = 0x{x}\n", .{ i, result[i].value });
+            // log.print("DEBUG: result[{}] = 0x{x}\n", .{ i, result[i].value });
         }
 
         // Fill remaining with zeros if we have fewer than 8 elements
         for (level_size..8) |i| {
             result[i] = FieldElement{ .value = 0 };
-            // std.debug.print("DEBUG: result[{}] = 0x{x} (zero)\n", .{ i, result[i].value });
+            // log.print("DEBUG: result[{}] = 0x{x} (zero)\n", .{ i, result[i].value });
         }
 
         self.allocator.free(current_level);
@@ -2622,7 +2623,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             for (0..8) |_| {
                 _ = self.rng.random().int(u32);
             }
-            std.debug.print("DEBUG: Consumed RNG state for front padding (8 elements)\n", .{});
+            log.print("DEBUG: Consumed RNG state for front padding (8 elements)\n", .{});
         }
 
         if (needs_back_padding) {
@@ -2631,56 +2632,56 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             for (0..8) |_| {
                 _ = self.rng.random().int(u32);
             }
-            std.debug.print("DEBUG: Consumed RNG state for back padding (8 elements)\n", .{});
+            log.print("DEBUG: Consumed RNG state for back padding (8 elements)\n", .{});
         }
 
         // Generate bottom trees and collect their roots as arrays of 8 field elements
         var roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);
         defer self.allocator.free(roots_of_bottom_trees);
 
-        std.debug.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
-        std.debug.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
-        // std.debug.print("DEBUG: Parameter: {any}\n", .{parameter});
+        log.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
+        log.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+        // log.print("DEBUG: Parameter: {any}\n", .{parameter});
 
-        std.debug.print("DEBUG: Expansion result: start={}, end={}\n", .{ expansion_result.start, expansion_result.end });
+        log.print("DEBUG: Expansion result: start={}, end={}\n", .{ expansion_result.start, expansion_result.end });
 
         // Generate left and right bottom trees (first two)
         const left_bottom_tree_index = expansion_result.start;
         const left_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, left_bottom_tree_index, parameter);
         roots_of_bottom_trees[0] = left_bottom_tree.root();
-        std.debug.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{left_bottom_tree_index});
+        log.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{left_bottom_tree_index});
         for (roots_of_bottom_trees[0]) |fe| {
-            std.debug.print("0x{x:0>8} ", .{fe.value});
+            log.print("0x{x:0>8} ", .{fe.value});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         const right_bottom_tree_index = expansion_result.start + 1;
         const right_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, right_bottom_tree_index, parameter);
         roots_of_bottom_trees[1] = right_bottom_tree.root();
-        // std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
+        // log.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
 
         // Generate remaining bottom trees
         for (expansion_result.start + 2..expansion_result.end) |bottom_tree_index| {
             const bottom_tree = try self.bottomTreeFromPrfKey(prf_key, bottom_tree_index, parameter);
             roots_of_bottom_trees[bottom_tree_index - expansion_result.start] = bottom_tree.root();
-            // std.debug.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
+            // log.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
             bottom_tree.deinit(); // Clean up individual trees
         }
 
         // Debug: log all roots before building top tree
-        std.debug.print("ZIG_KEYGEN_DEBUG: All {} roots before building top tree:\n", .{roots_of_bottom_trees.len});
+        log.print("ZIG_KEYGEN_DEBUG: All {} roots before building top tree:\n", .{roots_of_bottom_trees.len});
         for (roots_of_bottom_trees, 0..) |root, i| {
-            std.debug.print("ZIG_KEYGEN_DEBUG:   Root {}: ", .{i});
+            log.print("ZIG_KEYGEN_DEBUG:   Root {}: ", .{i});
             for (root) |fe| {
-                std.debug.print("0x{x:0>8} ", .{fe.value});
+                log.print("0x{x:0>8} ", .{fe.value});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
         }
 
         // Build top tree from bottom tree roots and get root as array
         // This matches Rust's HashSubTree::new_top_tree call which happens after parameter generation
         // Use buildTopTreeLayers to ensure consistency with signing/verification
-        std.debug.print("DEBUG: Building top tree from {} bottom tree roots\n", .{roots_of_bottom_trees.len});
+        log.print("DEBUG: Building top tree from {} bottom tree roots\n", .{roots_of_bottom_trees.len});
         var top_layers = try self.buildTopTreeLayers(roots_of_bottom_trees, parameter, expansion_result.start);
 
         // Extract root from the final layer (should have exactly 1 node)
@@ -2692,21 +2693,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const root_array = top_layers[top_layers.len - 1].nodes[0];
 
         // Debug: log the computed root (canonical)
-        std.debug.print("ZIG_KEYGEN_DEBUG: Computed root during keygen (canonical): ", .{});
+        log.print("ZIG_KEYGEN_DEBUG: Computed root during keygen (canonical): ", .{});
         for (root_array) |fe| {
-            std.debug.print("0x{x:0>8} ", .{fe.value});
+            log.print("0x{x:0>8} ", .{fe.value});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Roots are already represented in Montgomery form in our FieldElement type.
         const root_monty: [8]FieldElement = root_array;
 
         // Debug: log the root in Montgomery form
-        std.debug.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
+        log.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
         for (root_monty) |fe| {
-            std.debug.print("0x{x:0>8} ", .{fe.value});
+            log.print("0x{x:0>8} ", .{fe.value});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Create a top tree for the secret key, preserving the layered structure for future path computation
         const top_tree = try HashSubTree.initWithLayers(self.allocator, root_array, top_layers);
@@ -2716,11 +2717,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const public_key = GeneralizedXMSSPublicKey.init(root_monty, parameter);
 
         // Debug: log the public key root
-        std.debug.print("ZIG_KEYGEN_DEBUG: Public key root: ", .{});
+        log.print("ZIG_KEYGEN_DEBUG: Public key root: ", .{});
         for (public_key.root) |fe| {
-            std.debug.print("0x{x:0>8} ", .{fe.value});
+            log.print("0x{x:0>8} ", .{fe.value});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
             prf_key,
@@ -2778,11 +2779,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
             // Debug: log chain ends before reduction for the signing epoch
             if (e == epoch) {
-                std.debug.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
+                log.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
                 for (0..@min(3, chain_domains.len)) |ci| {
-                    std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
+                    log.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
             const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
             defer self.allocator.free(leaf_domain_slice);
@@ -2799,11 +2800,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: log leaf domain for the signing epoch
             if (e == epoch) {
-                std.debug.print("ZIG_SIGN_DEBUG: Leaf domain for epoch {}: ", .{epoch});
+                log.print("ZIG_SIGN_DEBUG: Leaf domain for epoch {}: ", .{epoch});
                 for (leaf_domain) |fe| {
-                    std.debug.print("0x{x:0>8} ", .{fe.value});
+                    log.print("0x{x:0>8} ", .{fe.value});
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
         }
         const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains_bt, secret_key.parameter, bottom_tree_index);
@@ -2813,9 +2814,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log number of bottom layers
-        std.debug.print("ZIG_SIGN_DEBUG: Built {} bottom tree layers\n", .{bottom_layers.len});
+        log.print("ZIG_SIGN_DEBUG: Built {} bottom tree layers\n", .{bottom_layers.len});
         for (bottom_layers, 0..) |layer, i| {
-            std.debug.print("ZIG_SIGN_DEBUG:   Bottom layer {}: {} nodes, start_index={}\n", .{ i, layer.nodes.len, layer.start_index });
+            log.print("ZIG_SIGN_DEBUG:   Bottom layer {}: {} nodes, start_index={}\n", .{ i, layer.nodes.len, layer.start_index });
         }
 
         // Debug: compare computed bottom tree root with stored left bottom tree root (canonical values)
@@ -2824,22 +2825,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (bottom_root_layer.nodes.len > 0) {
                 const computed_bottom_root = bottom_root_layer.nodes[0];
                 const stored_bottom_root = secret_key.left_bottom_tree.root();
-                std.debug.print("ZIG_SIGN_DEBUG: Computed bottom root (canonical): ", .{});
+                log.print("ZIG_SIGN_DEBUG: Computed bottom root (canonical): ", .{});
                 for (computed_bottom_root) |fe| {
-                    std.debug.print("0x{x:0>8} ", .{fe.value});
+                    log.print("0x{x:0>8} ", .{fe.value});
                 }
-                std.debug.print("\n", .{});
-                std.debug.print("ZIG_SIGN_DEBUG: Stored left bottom root (canonical): ", .{});
+                log.print("\n", .{});
+                log.print("ZIG_SIGN_DEBUG: Stored left bottom root (canonical): ", .{});
                 for (stored_bottom_root) |fe| {
-                    std.debug.print("0x{x:0>8} ", .{fe.value});
+                    log.print("0x{x:0>8} ", .{fe.value});
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
         }
 
         // Use the stored top tree layers from the secret key (generated during keyGen)
         const top_layers = secret_key.top_tree.getLayers() orelse return error.MissingTopTreeLayers;
-        std.debug.print("ZIG_SIGN_DEBUG: top_layers.len={} (log_lifetime={} lowest_layer={})\n", .{
+        log.print("ZIG_SIGN_DEBUG: top_layers.len={} (log_lifetime={} lowest_layer={})\n", .{
             top_layers.len,
             self.lifetime_params.log_lifetime,
             self.lifetime_params.log_lifetime / 2,
@@ -2855,13 +2856,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(top_copath);
 
         // Debug: log path nodes
-        std.debug.print("ZIG_SIGN_DEBUG: Bottom co-path for epoch {}: {} nodes\n", .{ epoch, bottom_copath.len });
+        log.print("ZIG_SIGN_DEBUG: Bottom co-path for epoch {}: {} nodes\n", .{ epoch, bottom_copath.len });
         for (bottom_copath, 0..) |node, i| {
-            std.debug.print("ZIG_SIGN_DEBUG:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+            log.print("ZIG_SIGN_DEBUG:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
         }
-        std.debug.print("ZIG_SIGN_DEBUG: Top co-path for pos {}: {} nodes\n", .{ top_pos, top_copath.len });
+        log.print("ZIG_SIGN_DEBUG: Top co-path for pos {}: {} nodes\n", .{ top_pos, top_copath.len });
         for (top_copath, 0..) |node, i| {
-            std.debug.print("ZIG_SIGN_DEBUG:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+            log.print("ZIG_SIGN_DEBUG:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
         }
 
         var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
@@ -2920,13 +2921,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     var sum: usize = 0;
                     for (chunks) |chunk| sum += chunk;
                     const expected_sum = self.lifetime_params.target_sum;
-                    std.debug.print("ZIG_ENCODING_DEBUG: attempt {} sum={} expected={}\n", .{ attempts, sum, expected_sum });
+                    log.print("ZIG_ENCODING_DEBUG: attempt {} sum={} expected={}\n", .{ attempts, sum, expected_sum });
                 }
             }
         }
 
         if (!encoding_succeeded) {
-            std.debug.print("ZIG_ENCODING_DEBUG: Failed after {} attempts\n", .{MAX_TRIES});
+            log.print("ZIG_ENCODING_DEBUG: Failed after {} attempts\n", .{MAX_TRIES});
             return error.EncodingAttemptsExceeded;
         }
         defer self.allocator.free(x);
@@ -2955,7 +2956,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Walk chain for x[chain_index] steps
             const steps: u8 = x[chain_index];
             if (chain_index == 0) {
-                std.debug.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
+                log.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
             }
             if (steps > 0) {
                 var s: u8 = 1;
@@ -2970,7 +2971,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         current[j] = FieldElement{ .value = 0 };
                     }
                     if (chain_index == 0) {
-                        std.debug.print("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ chain_index, s - 1, s, current[0].value });
+                        log.print("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ chain_index, s - 1, s, current[0].value });
                     }
                 }
             }
@@ -2980,7 +2981,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Convert Montgomery to canonical for comparison
                 const monty_f = F{ .value = current[0].value };
                 const canonical = monty_f.toU32();
-                std.debug.print("ZIG_SIGN_DEBUG: Chain {} final stored[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ chain_index, current[0].value, canonical });
+                log.print("ZIG_SIGN_DEBUG: Chain {} final stored[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ chain_index, current[0].value, canonical });
             }
         }
 
@@ -3046,11 +3047,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: log rho values (only first rand_len_fe elements are used)
         const rand_len = self.lifetime_params.rand_len_fe;
-        std.debug.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements): ", .{rand_len});
+        log.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements): ", .{rand_len});
         for (0..rand_len) |i| {
-            std.debug.print("0x{x:0>8} ", .{rho[i].value});
+            log.print("0x{x:0>8} ", .{rho[i].value});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // Use parameter as-is (canonical); Poseidon handles Montgomery internally
         // Only use first rand_len_fe elements of rho (6 for lifetime 2^18, 7 for lifetime 2^8)
@@ -3066,12 +3067,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Debug: log encoding sum and first few chunks
         var encoding_sum: usize = 0;
         for (x) |chunk| encoding_sum += chunk;
-        std.debug.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum});
-        std.debug.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{});
+        log.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum});
+        log.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{});
         for (0..@min(5, x.len)) |i| {
-            std.debug.print("x[{}]={} ", .{ i, x[i] });
+            log.print("x[{}]={} ", .{ i, x[i] });
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // 2) Advance each chain domain to max based on message-derived x (target-sum digits)
         const base_minus_one: u8 = @as(u8, @intCast(self.lifetime_params.base - 1));
@@ -3104,7 +3105,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (i == 0 or i == 2) {
                 const initial_canonical = domain[0].value;
                 const initial_monty = current[0].value;
-                std.debug.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_canonical[0]=0x{x:0>8} initial_monty[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_canonical, initial_monty });
+                log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_canonical[0]=0x{x:0>8} initial_monty[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_canonical, initial_monty });
             }
 
             // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
@@ -3112,7 +3113,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             for (0..steps) |j| {
                 const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
                 if (i == 0) {
-                    std.debug.print("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ i, j, pos_in_chain, current[0].value });
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ i, j, pos_in_chain, current[0].value });
                 }
                 const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
                 // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
@@ -3122,7 +3123,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     current[k] = FieldElement{ .value = 0 };
                 }
                 if (i == 0) {
-                    std.debug.print("ZIG_VERIFY_DEBUG: Chain {} step {}: next[0]=0x{x:0>8}\n", .{ i, j, current[0].value });
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} step {}: next[0]=0x{x:0>8}\n", .{ i, j, current[0].value });
                 }
             }
 
@@ -3131,16 +3132,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Convert Montgomery to canonical for comparison with Rust
                 const monty_f = F{ .value = current[0].value };
                 const canonical = monty_f.toU32();
-                std.debug.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
+                log.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
             }
         }
 
         // Debug: log chain ends before reduction
-        std.debug.print("ZIG_VERIFY_DEBUG: Chain ends before reduction (first 3 chains): ", .{});
+        log.print("ZIG_VERIFY_DEBUG: Chain ends before reduction (first 3 chains): ", .{});
         for (0..@min(3, final_chain_domains.len)) |ci| {
-            std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
+            log.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // 3) Reduce 64 chain domains to a single leaf domain using tree-tweak hashing
         const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
@@ -3156,11 +3157,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log leaf domain
-        std.debug.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
+        log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
         for (0..hash_len) |i| {
-            std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
+            log.print("0x{x:0>8} ", .{current_domain[i].value});
         }
-        std.debug.print("\n", .{});
+        log.print("\n", .{});
 
         // 4) Walk Merkle path using tweak hash and epoch-based orientation
         // Calculate bottom tree index to know where bottom tree ends
@@ -3173,7 +3174,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var position: u32 = epoch;
         const nodes = signature.getPath().getNodes();
         var level: u8 = 0;
-        std.debug.print("ZIG_VERIFY_DEBUG: Starting Merkle path walk from epoch {} with {} nodes (bottom_tree_index={} top_pos={})\n", .{ epoch, nodes.len, bottom_tree_index, top_pos });
+        log.print("ZIG_VERIFY_DEBUG: Starting Merkle path walk from epoch {} with {} nodes (bottom_tree_index={} top_pos={})\n", .{ epoch, nodes.len, bottom_tree_index, top_pos });
 
         for (nodes, 0..) |sibling_domain, node_idx| {
             // Note: After walking the bottom tree (depth/2 levels), position should naturally
@@ -3196,18 +3197,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             position >>= 1;
             const pos_in_level: u32 = position;
 
-            std.debug.print("ZIG_VERIFY_DEBUG: Level {} node {}: original_position={} is_right={} pos_in_level={}\n", .{ level, node_idx, original_position, is_right, pos_in_level });
+            log.print("ZIG_VERIFY_DEBUG: Level {} node {}: original_position={} is_right={} pos_in_level={}\n", .{ level, node_idx, original_position, is_right, pos_in_level });
 
             // Debug: log first element of left and right before hashing
-            std.debug.print("ZIG_VERIFY_DEBUG:   current[0]=0x{x:0>8} sibling[0]=0x{x:0>8}\n", .{ current_domain[0].value, sibling_domain[0].value });
-            std.debug.print("ZIG_VERIFY_DEBUG:   left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ left_slice[0].value, right_slice[0].value });
+            log.print("ZIG_VERIFY_DEBUG:   current[0]=0x{x:0>8} sibling[0]=0x{x:0>8}\n", .{ current_domain[0].value, sibling_domain[0].value });
+            log.print("ZIG_VERIFY_DEBUG:   left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ left_slice[0].value, right_slice[0].value });
 
             // Use level+1 for tweak (matching Rust: (l + 1))
             const parent = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, level, pos_in_level, public_key.parameter);
             defer self.allocator.free(parent);
 
             // Debug: log parent after hashing
-            std.debug.print("ZIG_VERIFY_DEBUG:   parent[0]=0x{x:0>8}\n", .{parent[0].value});
+            log.print("ZIG_VERIFY_DEBUG:   parent[0]=0x{x:0>8}\n", .{parent[0].value});
 
             // Copy back hash_len_fe elements into current_domain (7 for lifetime 2^18, 8 for lifetime 2^8)
             // current_domain is [8]FieldElement, but we only use the first hash_len_fe elements
@@ -3215,7 +3216,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             for (0..hash_len) |i| current_domain[i] = parent[i];
             level += 1;
         }
-        std.debug.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
+        log.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
 
         // 4) Compare computed root with public key root (both stored as canonical field elements)
         // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
@@ -3223,7 +3224,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var match = true;
         for (0..root_len) |i| {
             if (!current_domain[i].eql(public_key.root[i])) {
-                std.debug.print(
+                log.print(
                     "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
                     .{ i, current_domain[i].value, public_key.root[i].value },
                 );
@@ -3231,17 +3232,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
         }
         if (match) {
-            std.debug.print("ZIG_VERIFY_DEBUG: Root matches! Verification successful.\n", .{});
+            log.print("ZIG_VERIFY_DEBUG: Root matches! Verification successful.\n", .{});
         } else {
-            std.debug.print("ZIG_VERIFY_DEBUG: Root mismatch! Computed root: ", .{});
+            log.print("ZIG_VERIFY_DEBUG: Root mismatch! Computed root: ", .{});
             for (0..root_len) |i| {
-                std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
+                log.print("0x{x:0>8} ", .{current_domain[i].value});
             }
-            std.debug.print("\nZIG_VERIFY_DEBUG: Expected root: ", .{});
+            log.print("\nZIG_VERIFY_DEBUG: Expected root: ", .{});
             for (0..root_len) |i| {
-                std.debug.print("0x{x:0>8} ", .{public_key.root[i].value});
+                log.print("0x{x:0>8} ", .{public_key.root[i].value});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
         }
         return match;
     }

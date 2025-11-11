@@ -1,10 +1,11 @@
 const std = @import("std");
 const hash_zig = @import("root.zig");
+const log = hash_zig.utils.log;
 
 fn readEnvOrExit(allocator: std.mem.Allocator, name: []const u8, required: bool) []u8 {
     const value = std.process.getEnvVarOwned(allocator, name) catch {
         if (required) {
-            std.debug.print("Missing {s} environment variable\n", .{name});
+            log.print("Missing {s} environment variable\n", .{name});
             std.process.exit(1);
         }
         return allocator.dupe(u8, "") catch unreachable;
@@ -52,8 +53,7 @@ pub fn main() !void {
     const secret_key_json = try hash_zig.serialization.serializeSecretKey(allocator, keypair.secret_key);
     defer allocator.free(secret_key_json);
 
-    std.debug.print("SIGNATURE:{s}\n", .{signature_json});
-    std.debug.print("PUBLIC_KEY:{s}\n", .{public_key_json});
-    std.debug.print("SECRET_KEY:{s}\n", .{secret_key_json});
+    log.print("SIGNATURE:{s}\n", .{signature_json});
+    log.print("PUBLIC_KEY:{s}\n", .{public_key_json});
+    log.print("SECRET_KEY:{s}\n", .{secret_key_json});
 }
-

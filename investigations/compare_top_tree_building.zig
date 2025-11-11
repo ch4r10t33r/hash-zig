@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 const FieldElement = hash_zig.core.FieldElement;
@@ -8,8 +9,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    std.debug.print("=== TOP TREE BUILDING COMPARISON ===\n", .{});
-    std.debug.print("Comparing top tree building between Zig and expected Rust\n", .{});
+    log.print("=== TOP TREE BUILDING COMPARISON ===\n", .{});
+    log.print("Comparing top tree building between Zig and expected Rust\n", .{});
 
     // Initialize with same seed
     const seed: [32]u8 = [_]u8{42} ** 32;
@@ -19,8 +20,8 @@ pub fn main() !void {
     const parameter = try generateParameters(&rng);
     const prf_key = try generatePRFKey(&rng);
 
-    std.debug.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
-    std.debug.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    log.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
+    log.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
 
     // Use the actual bottom tree roots from the rust_algorithm_port.zig output
     const bottom_tree_roots = [_][8]FieldElement{
@@ -42,18 +43,18 @@ pub fn main() !void {
         [_]FieldElement{ FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 }, FieldElement{ .value = 0 } },
     };
 
-    std.debug.print("\n=== TOP TREE INPUT ROOTS ===\n", .{});
+    log.print("\n=== TOP TREE INPUT ROOTS ===\n", .{});
     for (bottom_tree_roots, 0..) |tree_root, i| {
-        std.debug.print("Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, tree_root[0].value, tree_root[1].value, tree_root[2].value, tree_root[3].value, tree_root[4].value, tree_root[5].value, tree_root[6].value, tree_root[7].value });
+        log.print("Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, tree_root[0].value, tree_root[1].value, tree_root[2].value, tree_root[3].value, tree_root[4].value, tree_root[5].value, tree_root[6].value, tree_root[7].value });
     }
 
     // Build top tree using the real implementation
     const top_tree = try new_top_tree_real(&rng, 8, 0, parameter, &bottom_tree_roots);
     const final_root = root(&top_tree);
 
-    std.debug.print("\n=== TOP TREE BUILDING RESULT ===\n", .{});
-    std.debug.print("Zig final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ final_root[0].value, final_root[1].value, final_root[2].value, final_root[3].value, final_root[4].value, final_root[5].value, final_root[6].value, final_root[7].value });
-    std.debug.print("Expected Rust: [272571317, 816959513, 1641229267, 1432426756, 1894915310, 1536602969, 679245493, 946325787]\n", .{});
+    log.print("\n=== TOP TREE BUILDING RESULT ===\n", .{});
+    log.print("Zig final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ final_root[0].value, final_root[1].value, final_root[2].value, final_root[3].value, final_root[4].value, final_root[5].value, final_root[6].value, final_root[7].value });
+    log.print("Expected Rust: [272571317, 816959513, 1641229267, 1432426756, 1894915310, 1536602969, 679245493, 946325787]\n", .{});
 
     // Check if they match
     const expected_rust = [_]u32{ 272571317, 816959513, 1641229267, 1432426756, 1894915310, 1536602969, 679245493, 946325787 };
@@ -64,7 +65,7 @@ pub fn main() !void {
             break;
         }
     }
-    std.debug.print("Match: {}\n", .{matches});
+    log.print("Match: {}\n", .{matches});
 }
 
 // Helper functions (simplified versions for testing)

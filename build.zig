@@ -4,6 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
+    const enable_debug_logs = b.option(bool, "debug-logs", "Enable verbose std.debug logging") orelse false;
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_debug_logs", enable_debug_logs);
 
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
@@ -11,6 +15,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    hash_zig_module.addOptions("build_options", build_options);
 
     // Library
     const lib = b.addLibrary(.{

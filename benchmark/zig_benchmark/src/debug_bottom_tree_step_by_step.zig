@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("../../src/root.zig");
 
 pub fn main() !void {
@@ -15,7 +16,7 @@ pub fn main() !void {
         seed[i] = (hi << 4) | lo;
     }
 
-    std.debug.print("SEED (bytes): {any}\n", .{seed});
+    log.print("SEED (bytes): {any}\n", .{seed});
 
     // Create signature scheme
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
@@ -25,13 +26,13 @@ pub fn main() !void {
     const parameter = try scheme.generateRandomParameter();
     const prf_key = try scheme.generateRandomPRFKey();
 
-    std.debug.print("Parameter: {any}\n", .{parameter});
-    std.debug.print("PRF key: {}\n", .{std.fmt.fmtSliceHexLower(prf_key)});
+    log.print("Parameter: {any}\n", .{parameter});
+    log.print("PRF key: {}\n", .{std.fmt.fmtSliceHexLower(prf_key)});
 
     // Generate first bottom tree
     const bottom_tree = try scheme.bottomTreeFromPrfKey(prf_key, 0, parameter);
     defer bottom_tree.deinit();
 
     const root = bottom_tree.root();
-    std.debug.print("Bottom tree 0 root: {any}\n", .{root});
+    log.print("Bottom tree 0 root: {any}\n", .{root});
 }

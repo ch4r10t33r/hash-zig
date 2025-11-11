@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -9,8 +10,8 @@ pub fn main() !void {
     const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    std.debug.print("=== Zig Poseidon2 Isolated Test ===\n", .{});
-    std.debug.print("SEED: {s}\n", .{seed_hex});
+    log.print("=== Zig Poseidon2 Isolated Test ===\n", .{});
+    log.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -25,7 +26,7 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
-    std.debug.print("\n=== Test Isolated Poseidon2 Hash Function ===\n", .{});
+    log.print("\n=== Test Isolated Poseidon2 Hash Function ===\n", .{});
 
     // Test with the exact inputs that should produce 0x31461cb0
     const test_message = [_]hash_zig.FieldElement{
@@ -41,37 +42,37 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = 0x4da34f48 },
     };
 
-    std.debug.print("Test message (2 elements):\n", .{});
+    log.print("Test message (2 elements):\n", .{});
     for (test_message, 0..) |val, i| {
-        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    std.debug.print("Test parameter (5 elements):\n", .{});
+    log.print("Test parameter (5 elements):\n", .{});
     for (test_parameter, 0..) |val, i| {
-        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test the tree hash function with level 5, position 0
     const level: u8 = 5;
     const pos: u32 = 0;
 
-    std.debug.print("\nLevel: {}, Position: {}\n", .{ level, pos });
+    log.print("\nLevel: {}, Position: {}\n", .{ level, pos });
 
     // Test the hash operation
     const hash_result = try scheme.applyPoseidonTreeTweakHash(test_message[0..], level, pos, test_parameter);
     defer allocator.free(hash_result);
 
-    std.debug.print("\nTree hash result:\n", .{});
+    log.print("\nTree hash result:\n", .{});
     for (hash_result, 0..) |val, i| {
-        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    std.debug.print("\nExpected result: 0x31461cb0\n", .{});
-    std.debug.print("Actual result: 0x{x}\n", .{hash_result[0].value});
-    std.debug.print("Match: {}\n", .{hash_result[0].value == 0x31461cb0});
+    log.print("\nExpected result: 0x31461cb0\n", .{});
+    log.print("Actual result: 0x{x}\n", .{hash_result[0].value});
+    log.print("Match: {}\n", .{hash_result[0].value == 0x31461cb0});
 
     // Test with the exact inputs that should produce 0x646a2743 (from our previous test)
-    std.debug.print("\n=== Test with 16-element input ===\n", .{});
+    log.print("\n=== Test with 16-element input ===\n", .{});
 
     const test_message_16 = [_]hash_zig.FieldElement{
         hash_zig.FieldElement{ .value = 0x1640cb16 },
@@ -95,19 +96,19 @@ pub fn main() !void {
     const hash_result_16 = try scheme.applyPoseidonTreeTweakHash(test_message_16[0..], level, pos, test_parameter);
     defer allocator.free(hash_result_16);
 
-    std.debug.print("16-element hash result:\n", .{});
+    log.print("16-element hash result:\n", .{});
     for (hash_result_16, 0..) |val, i| {
-        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    std.debug.print("\nExpected result: 0x646a2743\n", .{});
-    std.debug.print("Actual result: 0x{x}\n", .{hash_result_16[0].value});
-    std.debug.print("Match: {}\n", .{hash_result_16[0].value == 0x646a2743});
+    log.print("\nExpected result: 0x646a2743\n", .{});
+    log.print("Actual result: 0x{x}\n", .{hash_result_16[0].value});
+    log.print("Match: {}\n", .{hash_result_16[0].value == 0x646a2743});
 
     // Test if the issue is in the input preparation
-    std.debug.print("\n=== Input Preparation Analysis ===\n", .{});
-    std.debug.print("The issue might be in how the input is prepared for Poseidon2.\n", .{});
-    std.debug.print("Let's check if the tweak computation is correct.\n", .{});
+    log.print("\n=== Input Preparation Analysis ===\n", .{});
+    log.print("The issue might be in how the input is prepared for Poseidon2.\n", .{});
+    log.print("Let's check if the tweak computation is correct.\n", .{});
 
     // Compute tweak manually
     const tweak_bigint = (@as(u128, level) << 40) | (@as(u128, pos) << 8) | 0x01;
@@ -117,7 +118,7 @@ pub fn main() !void {
         @as(u32, @intCast((tweak_bigint / p) % p)),
     };
 
-    std.debug.print("Tweak bigint: 0x{x}\n", .{tweak_bigint});
-    std.debug.print("Tweak[0]: 0x{x} ({})\n", .{ tweak[0], tweak[0] });
-    std.debug.print("Tweak[1]: 0x{x} ({})\n", .{ tweak[1], tweak[1] });
+    log.print("Tweak bigint: 0x{x}\n", .{tweak_bigint});
+    log.print("Tweak[0]: 0x{x} ({})\n", .{ tweak[0], tweak[0] });
+    log.print("Tweak[1]: 0x{x} ({})\n", .{ tweak[1], tweak[1] });
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 const FieldElement = hash_zig.core.FieldElement;
@@ -9,8 +10,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("=== COMPARE RNG CONSUMPTION ===\n", .{});
-    std.debug.print("Comparing RNG consumption patterns during tree building\n", .{});
+    log.print("=== COMPARE RNG CONSUMPTION ===\n", .{});
+    log.print("Comparing RNG consumption patterns during tree building\n", .{});
 
     // Initialize with same seed
     const seed: [32]u8 = [_]u8{42} ** 32;
@@ -20,16 +21,16 @@ pub fn main() !void {
     const parameter = try generateParameters(&rng);
     const prf_key = try generatePRFKey(&rng);
 
-    std.debug.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
-    std.debug.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    log.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
+    log.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
 
     // Check RNG state before top tree building
     var rng_state_before: [32]u8 = undefined;
     rng.fill(&rng_state_before);
-    std.debug.print("RNG state before top tree: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before)});
+    log.print("RNG state before top tree: {x}\n", .{std.fmt.fmtSliceHexLower(&rng_state_before)});
 
     // Simulate the top tree building process with RNG consumption tracking
-    std.debug.print("\n=== RNG CONSUMPTION DURING TOP TREE BUILDING ===\n", .{});
+    log.print("\n=== RNG CONSUMPTION DURING TOP TREE BUILDING ===\n", .{});
 
     // Use the actual bottom tree roots from the rust_algorithm_port.zig output
     const bottom_tree_roots = [_][8]FieldElement{
@@ -51,7 +52,7 @@ pub fn main() !void {
     };
 
     // Simulate the top tree building process step by step
-    std.debug.print("\n=== TOP TREE BUILDING RNG CONSUMPTION ===\n", .{});
+    log.print("\n=== TOP TREE BUILDING RNG CONSUMPTION ===\n", .{});
 
     // Start with the bottom tree roots (layer 4)
     var current_layer = try allocator.alloc([8]FieldElement, 16);
@@ -61,18 +62,18 @@ pub fn main() !void {
         current_layer[i] = root;
     }
 
-    std.debug.print("Layer 4 (bottom tree roots): {} nodes\n", .{current_layer.len});
+    log.print("Layer 4 (bottom tree roots): {} nodes\n", .{current_layer.len});
 
     // Simulate the tree building process layer by layer
     var current_level: usize = 4;
     while (current_level < 8) : (current_level += 1) {
-        std.debug.print("\n--- Building Layer {} -> {} ---\n", .{ current_level, current_level + 1 });
+        log.print("\n--- Building Layer {} -> {} ---\n", .{ current_level, current_level + 1 });
 
         // Calculate parent layer properties
         const parent_start = 0; // Simplified for this analysis
         const parents_len = current_layer.len / 2;
 
-        std.debug.print("Processing {} pairs to create {} parents\n", .{ current_layer.len, parents_len });
+        log.print("Processing {} pairs to create {} parents\n", .{ current_layer.len, parents_len });
 
         // Simulate RNG consumption during padding
         var rng_consumption_count: usize = 0;
@@ -81,7 +82,7 @@ pub fn main() !void {
         const needs_padding = (current_layer.len % 2) == 1;
         if (needs_padding) {
             rng_consumption_count += 1;
-            std.debug.print("  RNG consumption: {} calls (padding)\n", .{rng_consumption_count});
+            log.print("  RNG consumption: {} calls (padding)\n", .{rng_consumption_count});
         }
 
         // Simulate the processing order
@@ -89,17 +90,17 @@ pub fn main() !void {
             const parent_pos = @as(u32, @intCast(parent_start + i));
             const tweak_level = @as(u8, @intCast(current_level)) + 1;
 
-            std.debug.print("  Pair {}: children [{}] and [{}] -> parent [{}] (tweak_level={}, pos={})\n", .{ i, i * 2, i * 2 + 1, i, tweak_level, parent_pos });
+            log.print("  Pair {}: children [{}] and [{}] -> parent [{}] (tweak_level={}, pos={})\n", .{ i, i * 2, i * 2 + 1, i, tweak_level, parent_pos });
         }
 
         // Check if padding is needed for next layer
         const next_layer_needs_padding = (parents_len % 2) == 1;
         if (next_layer_needs_padding) {
             rng_consumption_count += 1;
-            std.debug.print("  RNG consumption: {} calls (next layer padding)\n", .{rng_consumption_count});
+            log.print("  RNG consumption: {} calls (next layer padding)\n", .{rng_consumption_count});
         }
 
-        std.debug.print("  Total RNG consumption for layer {}: {} calls\n", .{ current_level, rng_consumption_count });
+        log.print("  Total RNG consumption for layer {}: {} calls\n", .{ current_level, rng_consumption_count });
 
         // Create next layer (simplified)
         var next_layer = try allocator.alloc([8]FieldElement, parents_len);
@@ -112,7 +113,7 @@ pub fn main() !void {
             }
         }
 
-        std.debug.print("Layer {}: {} nodes\n", .{ current_level + 1, next_layer.len });
+        log.print("Layer {}: {} nodes\n", .{ current_level + 1, next_layer.len });
 
         // Update current layer
         allocator.free(current_layer);
@@ -120,8 +121,8 @@ pub fn main() !void {
         // Don't free next_layer here as it becomes current_layer
     }
 
-    std.debug.print("\n=== FINAL RESULT ===\n", .{});
-    std.debug.print("Final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ current_layer[0][0].value, current_layer[0][1].value, current_layer[0][2].value, current_layer[0][3].value, current_layer[0][4].value, current_layer[0][5].value, current_layer[0][6].value, current_layer[0][7].value });
+    log.print("\n=== FINAL RESULT ===\n", .{});
+    log.print("Final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ current_layer[0][0].value, current_layer[0][1].value, current_layer[0][2].value, current_layer[0][3].value, current_layer[0][4].value, current_layer[0][5].value, current_layer[0][6].value, current_layer[0][7].value });
 
     // Free the final layer
     allocator.free(current_layer);

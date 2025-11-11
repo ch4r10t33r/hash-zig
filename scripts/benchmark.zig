@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -20,11 +21,11 @@ pub fn main() !void {
         // Removed debug print for performance
     }
 
-    std.debug.print("Hash-Zig Performance Benchmark\n", .{});
-    std.debug.print("==============================\n", .{});
-    std.debug.print("Focus: Key Generation Performance for Lifetime 2^{d}\n", .{lifetime_power});
-    std.debug.print("Parameters: Winternitz (22 chains × 256, w=8)\n", .{});
-    std.debug.print("Target: Measure improvements from optimizations\n\n", .{});
+    log.print("Hash-Zig Performance Benchmark\n", .{});
+    log.print("==============================\n", .{});
+    log.print("Focus: Key Generation Performance for Lifetime 2^{d}\n", .{lifetime_power});
+    log.print("Parameters: Winternitz (22 chains × 256, w=8)\n", .{});
+    log.print("Target: Measure improvements from optimizations\n\n", .{});
 
     // Determine lifetime based on power (only support available lifetimes)
     const lifetime: hash_zig.KeyLifetimeRustCompat = switch (lifetime_power) {
@@ -42,15 +43,15 @@ pub fn main() !void {
     };
 
     for (lifetimes) |config| {
-        std.debug.print("\nTesting lifetime: {s} ({s})\n", .{ config.name, config.description });
-        std.debug.print("Expected time: ~{d:.1}s\n", .{config.expected_time_sec});
-        std.debug.print("-------------------\n", .{});
+        log.print("\nTesting lifetime: {s} ({s})\n", .{ config.name, config.description });
+        log.print("Expected time: ~{d:.1}s\n", .{config.expected_time_sec});
+        log.print("-------------------\n", .{});
 
         var sig_scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, config.lifetime);
         defer sig_scheme.deinit();
 
         // Key generation benchmark - this is the main focus
-        std.debug.print("Starting key generation...\n", .{});
+        log.print("Starting key generation...\n", .{});
         const keygen_start = std.time.nanoTimestamp();
         var keypair = try sig_scheme.keyGen(0, @intCast(num_signatures));
         const keygen_end = std.time.nanoTimestamp();
@@ -87,27 +88,27 @@ pub fn main() !void {
         const verify_duration_sec = @as(f64, @floatFromInt(verify_duration_ns)) / 1_000_000_000.0;
 
         // Display detailed key generation results
-        std.debug.print("\n📊 KEY GENERATION RESULTS:\n", .{});
-        std.debug.print("  Duration: {d:.3}s {s}\n", .{ keygen_duration_sec, performance_status });
-        std.debug.print("  Signatures: {d}\n", .{total_signatures});
-        std.debug.print("  Throughput: {d:.1} signatures/sec\n", .{signatures_per_sec});
-        std.debug.print("  Time per signature: {d:.3}ms\n", .{time_per_signature_ms});
-        std.debug.print("  Expected: ~{d:.1}s (ratio: {d:.2}x)\n", .{ config.expected_time_sec, performance_ratio });
+        log.print("\n📊 KEY GENERATION RESULTS:\n", .{});
+        log.print("  Duration: {d:.3}s {s}\n", .{ keygen_duration_sec, performance_status });
+        log.print("  Signatures: {d}\n", .{total_signatures});
+        log.print("  Throughput: {d:.1} signatures/sec\n", .{signatures_per_sec});
+        log.print("  Time per signature: {d:.3}ms\n", .{time_per_signature_ms});
+        log.print("  Expected: ~{d:.1}s (ratio: {d:.2}x)\n", .{ config.expected_time_sec, performance_ratio });
 
         // Display sign/verify results
-        std.debug.print("\n🔐 SIGN/VERIFY RESULTS:\n", .{});
-        std.debug.print("  Sign: {d:.3}ms\n", .{sign_duration_sec * 1000});
-        std.debug.print("  Verify: {d:.3}ms\n", .{verify_duration_sec * 1000});
-        std.debug.print("  Valid: {}\n", .{is_valid});
+        log.print("\n🔐 SIGN/VERIFY RESULTS:\n", .{});
+        log.print("  Sign: {d:.3}ms\n", .{sign_duration_sec * 1000});
+        log.print("  Verify: {d:.3}ms\n", .{verify_duration_sec * 1000});
+        log.print("  Valid: {}\n", .{is_valid});
 
         // Output results in a format that can be captured by CI
-        std.debug.print("\n📈 CI BENCHMARK DATA:\n", .{});
-        std.debug.print("BENCHMARK_RESULT: {s}:keygen:{d:.6}\n", .{ config.name, keygen_duration_sec });
-        std.debug.print("BENCHMARK_RESULT: {s}:sign:{d:.6}\n", .{ config.name, sign_duration_sec });
-        std.debug.print("BENCHMARK_RESULT: {s}:verify:{d:.6}\n", .{ config.name, verify_duration_sec });
-        std.debug.print("BENCHMARK_RESULT: {s}:throughput:{d:.1}\n", .{ config.name, signatures_per_sec });
-        std.debug.print("BENCHMARK_RESULT: {s}:performance_ratio:{d:.2}\n", .{ config.name, performance_ratio });
+        log.print("\n📈 CI BENCHMARK DATA:\n", .{});
+        log.print("BENCHMARK_RESULT: {s}:keygen:{d:.6}\n", .{ config.name, keygen_duration_sec });
+        log.print("BENCHMARK_RESULT: {s}:sign:{d:.6}\n", .{ config.name, sign_duration_sec });
+        log.print("BENCHMARK_RESULT: {s}:verify:{d:.6}\n", .{ config.name, verify_duration_sec });
+        log.print("BENCHMARK_RESULT: {s}:throughput:{d:.1}\n", .{ config.name, signatures_per_sec });
+        log.print("BENCHMARK_RESULT: {s}:performance_ratio:{d:.2}\n", .{ config.name, performance_ratio });
     }
 
-    std.debug.print("\nBenchmark completed successfully!\n", .{});
+    log.print("\nBenchmark completed successfully!\n", .{});
 }

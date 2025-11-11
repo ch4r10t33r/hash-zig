@@ -2,6 +2,7 @@
 //! Provides JSON-based serialization for cross-compatibility testing
 
 const std = @import("std");
+const log = @import("../utils/log.zig");
 const Allocator = std.mem.Allocator;
 const FieldElement = @import("../core/field.zig").FieldElement;
 const GeneralizedXMSSSignature = @import("signature_native.zig").GeneralizedXMSSSignature;
@@ -113,7 +114,7 @@ pub fn serializeFieldElementArray(allocator: Allocator, elements: []const FieldE
 /// Deserialize a FieldElement array from JSON array of hex strings
 pub fn deserializeFieldElementArray(allocator: Allocator, json_str: []const u8) ![]FieldElement {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch |err| {
-        std.debug.print("JSON parse error: {}\n", .{err});
+        log.print("JSON parse error: {}\n", .{err});
         return err;
     };
     defer parsed.deinit();
@@ -215,7 +216,7 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
 /// Deserialize a GeneralizedXMSSSignature from JSON
 pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*GeneralizedXMSSSignature {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch |err| {
-        std.debug.print("JSON parse error: {}\n", .{err});
+        log.print("JSON parse error: {}\n", .{err});
         return err;
     };
     defer parsed.deinit();
@@ -337,7 +338,7 @@ pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXM
 /// Deserialize a GeneralizedXMSSPublicKey from JSON
 pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
     var parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, json_str, .{}) catch |err| {
-        std.debug.print("JSON parse error: {}\n", .{err});
+        log.print("JSON parse error: {}\n", .{err});
         return err;
     };
     defer parsed.deinit();
@@ -441,7 +442,7 @@ test "serialize and deserialize FieldElement array" {
     defer allocator.free(serialized);
 
     // Debug: print the generated JSON
-    std.debug.print("Generated JSON: {s}\n", .{serialized});
+    log.print("Generated JSON: {s}\n", .{serialized});
 
     const deserialized = try deserializeFieldElementArray(allocator, serialized);
     defer allocator.free(deserialized);

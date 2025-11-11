@@ -1,5 +1,6 @@
 const std = @import("std");
 const hash_zig = @import("root.zig");
+const log = hash_zig.utils.log;
 
 fn readEnv(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     const value = std.process.getEnvVarOwned(allocator, name) catch {
@@ -14,19 +15,19 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const public_key_env = readEnv(allocator, "PUBLIC_KEY") catch {
-        std.debug.print("Missing PUBLIC_KEY environment variable\n", .{});
+        log.print("Missing PUBLIC_KEY environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(public_key_env);
 
     const signature_env = readEnv(allocator, "SIGNATURE") catch {
-        std.debug.print("Missing SIGNATURE environment variable\n", .{});
+        log.print("Missing SIGNATURE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(signature_env);
 
     const message_env = readEnv(allocator, "MESSAGE") catch {
-        std.debug.print("Missing MESSAGE environment variable\n", .{});
+        log.print("Missing MESSAGE environment variable\n", .{});
         std.process.exit(1);
     };
     defer allocator.free(message_env);
@@ -52,12 +53,12 @@ pub fn main() !void {
         signature_env;
 
     var public_key = hash_zig.serialization.deserializePublicKey(public_key_json) catch |err| {
-        std.debug.print("Failed to deserialize public key: {}\n", .{err});
+        log.print("Failed to deserialize public key: {}\n", .{err});
         std.process.exit(1);
     };
 
     var signature = hash_zig.serialization.deserializeSignature(allocator, signature_json) catch |err| {
-        std.debug.print("Failed to deserialize signature: {}\n", .{err});
+        log.print("Failed to deserialize signature: {}\n", .{err});
         std.process.exit(1);
     };
     defer signature.deinit();
@@ -67,6 +68,5 @@ pub fn main() !void {
     defer scheme.deinit();
 
     const is_valid = try scheme.verify(&public_key, epoch, message_bytes, signature);
-    std.debug.print("VERIFY_RESULT:{s}\n", .{if (is_valid) "true" else "false"});
+    log.print("VERIFY_RESULT:{s}\n", .{if (is_valid) "true" else "false"});
 }
-

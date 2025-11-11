@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -6,7 +7,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("=== Deep Processing Order and RNG Analysis ===\n\n", .{});
+    log.print("=== Deep Processing Order and RNG Analysis ===\n\n", .{});
 
     // Initialize RNG with fixed seed (matching rust_algorithm_port.zig)
     const seed = [_]u8{0x42} ** 32;
@@ -27,23 +28,23 @@ pub fn main() !void {
     peekRngBytes(&rng, &prf_key_bytes);
     const prf_key = prf_key_bytes;
 
-    std.debug.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
+    log.print("=== RNG State After Parameter/PRF Generation ===\n", .{});
     var debug_bytes: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes)});
 
     // Generate bottom tree roots with detailed tracking
     var bottom_tree_roots = std.ArrayList([8]hash_zig.core.KoalaBearField).init(allocator);
     defer bottom_tree_roots.deinit();
 
-    std.debug.print("\n=== Bottom Tree Generation with Processing Order ===\n", .{});
+    log.print("\n=== Bottom Tree Generation with Processing Order ===\n", .{});
     for (0..16) |bottom_tree_index| {
-        std.debug.print("\n--- Bottom Tree {} ---\n", .{bottom_tree_index});
+        log.print("\n--- Bottom Tree {} ---\n", .{bottom_tree_index});
 
         // Track RNG state before bottom tree generation
         var debug_bytes_before: [32]u8 = undefined;
         peekRngBytes(&rng, &debug_bytes_before);
-        std.debug.print("RNG State Before: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_before)});
+        log.print("RNG State Before: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_before)});
 
         // Generate leaves for this bottom tree
         const leaves = try generateLeavesFromPrfKey(prf_key, bottom_tree_index, parameter, allocator);
@@ -56,27 +57,27 @@ pub fn main() !void {
         // Track RNG state after bottom tree generation
         var debug_bytes_after: [32]u8 = undefined;
         peekRngBytes(&rng, &debug_bytes_after);
-        std.debug.print("RNG State After: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_after)});
+        log.print("RNG State After: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_after)});
 
-        std.debug.print("Bottom Tree {} Root: {any}\n", .{ bottom_tree_index, root });
+        log.print("Bottom Tree {} Root: {any}\n", .{ bottom_tree_index, root });
     }
 
-    std.debug.print("\n=== RNG State After Bottom Tree Generation ===\n", .{});
+    log.print("\n=== RNG State After Bottom Tree Generation ===\n", .{});
     var debug_bytes_bottom: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes_bottom);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_bottom)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_bottom)});
 
     // Build top tree with detailed processing order tracking
-    std.debug.print("\n=== Top Tree Building with Processing Order ===\n", .{});
+    log.print("\n=== Top Tree Building with Processing Order ===\n", .{});
     const final_root = try buildTopTreeWithOrder(bottom_tree_roots.items, parameter, allocator);
-    std.debug.print("Final Root: {any}\n", .{final_root});
+    log.print("Final Root: {any}\n", .{final_root});
 
-    std.debug.print("\n=== RNG State After Top Tree Generation ===\n", .{});
+    log.print("\n=== RNG State After Top Tree Generation ===\n", .{});
     var debug_bytes_top: [32]u8 = undefined;
     peekRngBytes(&rng, &debug_bytes_top);
-    std.debug.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_top)});
+    log.print("RNG State: {x}\n", .{std.fmt.fmtSliceHexLower(&debug_bytes_top)});
 
-    std.debug.print("\n=== Analysis Complete ===\n", .{});
+    log.print("\n=== Analysis Complete ===\n", .{});
 }
 
 // Peek RNG bytes without consuming state (matching rust_algorithm_port.zig)
@@ -319,19 +320,19 @@ fn buildBottomTreeWithOrder(
     var level: usize = 0;
 
     while (current_len > 1) {
-        std.debug.print("DEBUG: Bottom Tree Layer {} -> {}: {} nodes\n", .{ level, level + 1, current_len });
+        log.print("DEBUG: Bottom Tree Layer {} -> {}: {} nodes\n", .{ level, level + 1, current_len });
 
         const parents_len = current_len / 2;
         var next_nodes = try alloc.alloc([8]hash_zig.core.KoalaBearField, parents_len);
 
         const parent_start: usize = 0;
-        std.debug.print("DEBUG: Processing {} parent nodes in layer {}\n", .{ parents_len, level });
+        log.print("DEBUG: Processing {} parent nodes in layer {}\n", .{ parents_len, level });
 
         for (0..parents_len) |i| {
             const parent_pos = @as(u32, @intCast(parent_start + i));
             const tweak_level = @as(u8, @intCast(level)) + 1;
 
-            std.debug.print("DEBUG: Processing parent {} at position {} with tweak level {}\n", .{ i, parent_pos, tweak_level });
+            log.print("DEBUG: Processing parent {} at position {} with tweak level {}\n", .{ i, parent_pos, tweak_level });
 
             const left_child = current_nodes[i * 2];
             const right_child = current_nodes[i * 2 + 1];
@@ -364,7 +365,7 @@ fn buildTopTreeWithOrder(
 ) ![8]hash_zig.core.KoalaBearField {
     if (bottom_tree_roots.len == 0) return error.EmptyRoots;
 
-    std.debug.print("DEBUG: Building top tree from {} bottom tree roots\n", .{bottom_tree_roots.len});
+    log.print("DEBUG: Building top tree from {} bottom tree roots\n", .{bottom_tree_roots.len});
 
     var current_nodes = try alloc.alloc([8]hash_zig.core.KoalaBearField, bottom_tree_roots.len);
     defer alloc.free(current_nodes);
@@ -377,19 +378,19 @@ fn buildTopTreeWithOrder(
     var level: usize = 0;
 
     while (current_len > 1) {
-        std.debug.print("DEBUG: Top Tree Layer {} -> {}: {} nodes\n", .{ level, level + 1, current_len });
+        log.print("DEBUG: Top Tree Layer {} -> {}: {} nodes\n", .{ level, level + 1, current_len });
 
         const parents_len = current_len / 2;
         var next_nodes = try alloc.alloc([8]hash_zig.core.KoalaBearField, parents_len);
 
         const parent_start: usize = 0;
-        std.debug.print("DEBUG: Processing {} parent nodes in layer {}\n", .{ parents_len, level });
+        log.print("DEBUG: Processing {} parent nodes in layer {}\n", .{ parents_len, level });
 
         for (0..parents_len) |i| {
             const parent_pos = @as(u32, @intCast(parent_start + i));
             const tweak_level = @as(u8, @intCast(level)) + 5; // Top tree starts at level 5
 
-            std.debug.print("DEBUG: Processing parent {} at position {} with tweak level {}\n", .{ i, parent_pos, tweak_level });
+            log.print("DEBUG: Processing parent {} at position {} with tweak level {}\n", .{ i, parent_pos, tweak_level });
 
             const left_child = current_nodes[i * 2];
             const right_child = current_nodes[i * 2 + 1];

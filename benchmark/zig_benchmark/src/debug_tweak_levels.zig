@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -9,8 +10,8 @@ pub fn main() !void {
     const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    std.debug.print("=== Zig Tweak Level Debug ===\n", .{});
-    std.debug.print("SEED: {s}\n", .{seed_hex});
+    log.print("=== Zig Tweak Level Debug ===\n", .{});
+    log.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -25,7 +26,7 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
-    std.debug.print("\n=== Test Tweak Computation for Each Level ===\n", .{});
+    log.print("\n=== Test Tweak Computation for Each Level ===\n", .{});
 
     // Test parameters
     const test_parameter = [_]hash_zig.FieldElement{
@@ -37,7 +38,7 @@ pub fn main() !void {
     };
 
     // Test the exact tree building process step by step
-    std.debug.print("\n=== Step-by-Step Tree Building ===\n", .{});
+    log.print("\n=== Step-by-Step Tree Building ===\n", .{});
 
     // Layer 4 -> 5: First hash operation (should produce 0x31461cb0)
     const left_child_1 = hash_zig.FieldElement{ .value = 0x1640cb16 };
@@ -45,7 +46,7 @@ pub fn main() !void {
     const level_1: u8 = 5;
     const pos_1: u32 = 0;
 
-    std.debug.print("Layer 4 -> 5: Level={}, Pos={}\n", .{ level_1, pos_1 });
+    log.print("Layer 4 -> 5: Level={}, Pos={}\n", .{ level_1, pos_1 });
 
     // Compute tweak for level 5, position 0
     const tweak_bigint_1 = (@as(u128, level_1) << 40) | (@as(u128, pos_1) << 8) | 0x01;
@@ -55,18 +56,18 @@ pub fn main() !void {
         @as(u32, @intCast((tweak_bigint_1 / p) % p)),
     };
 
-    std.debug.print("Tweak bigint: 0x{x}\n", .{tweak_bigint_1});
-    std.debug.print("Tweak[0]: 0x{x} ({})\n", .{ tweak_1[0], tweak_1[0] });
-    std.debug.print("Tweak[1]: 0x{x} ({})\n", .{ tweak_1[1], tweak_1[1] });
+    log.print("Tweak bigint: 0x{x}\n", .{tweak_bigint_1});
+    log.print("Tweak[0]: 0x{x} ({})\n", .{ tweak_1[0], tweak_1[0] });
+    log.print("Tweak[1]: 0x{x} ({})\n", .{ tweak_1[1], tweak_1[1] });
 
     // Test the hash operation
     const input_1 = [_]hash_zig.FieldElement{ left_child_1, right_child_1 };
     const hash_result_1 = try scheme.applyPoseidonTreeTweakHash(input_1[0..], level_1, pos_1, test_parameter);
     defer allocator.free(hash_result_1);
 
-    std.debug.print("Hash result: 0x{x}\n", .{hash_result_1[0].value});
-    std.debug.print("Expected: 0x31461cb0\n", .{});
-    std.debug.print("Match: {}\n", .{hash_result_1[0].value == 0x31461cb0});
+    log.print("Hash result: 0x{x}\n", .{hash_result_1[0].value});
+    log.print("Expected: 0x31461cb0\n", .{});
+    log.print("Match: {}\n", .{hash_result_1[0].value == 0x31461cb0});
 
     // Layer 5 -> 6: Second hash operation (this is where divergence occurs)
     const left_child_2 = hash_zig.FieldElement{ .value = 0x31461cb0 }; // Result from first hash
@@ -74,7 +75,7 @@ pub fn main() !void {
     const level_2: u8 = 6;
     const pos_2: u32 = 0;
 
-    std.debug.print("\nLayer 5 -> 6: Level={}, Pos={}\n", .{ level_2, pos_2 });
+    log.print("\nLayer 5 -> 6: Level={}, Pos={}\n", .{ level_2, pos_2 });
 
     // Compute tweak for level 6, position 0
     const tweak_bigint_2 = (@as(u128, level_2) << 40) | (@as(u128, pos_2) << 8) | 0x01;
@@ -83,22 +84,22 @@ pub fn main() !void {
         @as(u32, @intCast((tweak_bigint_2 / p) % p)),
     };
 
-    std.debug.print("Tweak bigint: 0x{x}\n", .{tweak_bigint_2});
-    std.debug.print("Tweak[0]: 0x{x} ({})\n", .{ tweak_2[0], tweak_2[0] });
-    std.debug.print("Tweak[1]: 0x{x} ({})\n", .{ tweak_2[1], tweak_2[1] });
+    log.print("Tweak bigint: 0x{x}\n", .{tweak_bigint_2});
+    log.print("Tweak[0]: 0x{x} ({})\n", .{ tweak_2[0], tweak_2[0] });
+    log.print("Tweak[1]: 0x{x} ({})\n", .{ tweak_2[1], tweak_2[1] });
 
     // Test the hash operation
     const input_2 = [_]hash_zig.FieldElement{ left_child_2, right_child_2 };
     const hash_result_2 = try scheme.applyPoseidonTreeTweakHash(input_2[0..], level_2, pos_2, test_parameter);
     defer allocator.free(hash_result_2);
 
-    std.debug.print("Hash result: 0x{x}\n", .{hash_result_2[0].value});
-    std.debug.print("Expected from debug: 0x1ee6716\n", .{});
-    std.debug.print("Match: {}\n", .{hash_result_2[0].value == 0x1ee6716});
+    log.print("Hash result: 0x{x}\n", .{hash_result_2[0].value});
+    log.print("Expected from debug: 0x1ee6716\n", .{});
+    log.print("Match: {}\n", .{hash_result_2[0].value == 0x1ee6716});
 
     // Test if the issue is in the tweak computation
-    std.debug.print("\n=== Tweak Computation Analysis ===\n", .{});
-    std.debug.print("Level 5 tweak: 0x{x}\n", .{tweak_bigint_1});
-    std.debug.print("Level 6 tweak: 0x{x}\n", .{tweak_bigint_2});
-    std.debug.print("Difference: 0x{x}\n", .{tweak_bigint_2 - tweak_bigint_1});
+    log.print("\n=== Tweak Computation Analysis ===\n", .{});
+    log.print("Level 5 tweak: 0x{x}\n", .{tweak_bigint_1});
+    log.print("Level 6 tweak: 0x{x}\n", .{tweak_bigint_2});
+    log.print("Difference: 0x{x}\n", .{tweak_bigint_2 - tweak_bigint_1});
 }

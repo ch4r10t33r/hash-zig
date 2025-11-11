@@ -19,7 +19,7 @@ fn main() {
     let mut rng = StdRng::from_seed(seed_array);
 
     // Generate keypair and extract detailed information
-    let (pk, sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
+    let (pk, _sk) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
     let pk_json = serde_json::to_string(&pk).unwrap();
 
     println!("\n=== Public Key Analysis ===");
