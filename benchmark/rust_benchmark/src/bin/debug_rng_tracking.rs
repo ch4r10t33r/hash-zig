@@ -23,7 +23,7 @@ fn main() {
     // Track RNG state at various points
     println!("\nRNG state at start:");
     for i in 0..10 {
-        let val = rng.gen::<u32>();
+        let val = rng.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 
@@ -41,7 +41,7 @@ fn main() {
     // Check RNG state after key generation
     println!("\nRNG state after key generation:");
     for i in 0..10 {
-        let val = rng2.gen::<u32>();
+        let val = rng2.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 }

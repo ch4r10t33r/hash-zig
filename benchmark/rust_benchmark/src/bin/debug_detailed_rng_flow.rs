@@ -37,7 +37,7 @@ fn main() {
     // Step 3: Check RNG state before key_gen
     println!("\nStep 3: RNG state before key_gen");
     for i in 0..10 {
-        let val = rng.gen::<u32>();
+        let val = rng.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 
@@ -51,7 +51,7 @@ fn main() {
     // Step 5: Check RNG state after key_gen
     println!("\nStep 5: RNG state after key_gen");
     for i in 0..10 {
-        let val = rng2.gen::<u32>();
+        let val = rng2.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 }

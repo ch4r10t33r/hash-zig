@@ -41,7 +41,7 @@ fn main() {
     let signature = SIGTopLevelTargetSumLifetime8Dim64Base8::sign(&sk, epoch, &message_bytes)
         .expect("signing failed");
 
-    let mut pk_value = serde_json::to_value(&pk).expect("serialize pk");
+    let pk_value = serde_json::to_value(&pk).expect("serialize pk");
     let mut sig_value = serde_json::to_value(&signature).expect("serialize sig");
 
     if let Some(sig_obj) = sig_value.as_object_mut() {
