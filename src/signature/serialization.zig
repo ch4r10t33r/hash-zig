@@ -14,9 +14,9 @@ fn fromMontgomeryValue(value: u32) FieldElement {
     return FieldElement.fromMontgomery(value);
 }
 
-/// Serialize a FieldElement to a hex string
+/// Serialize a FieldElement to a decimal string (Montgomery residue)
 pub fn serializeFieldElement(allocator: Allocator, elem: FieldElement) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "0x{x:0>8}", .{elem.toMontgomery()});
+    return try std.fmt.allocPrint(allocator, "{}", .{elem.toMontgomery()});
 }
 
 /// Deserialize a FieldElement from a hex string
@@ -83,28 +83,17 @@ fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
     }
 }
 
-/// Serialize a FieldElement array to JSON array of hex strings
+/// Serialize a FieldElement array to JSON array of decimal numbers
 pub fn serializeFieldElementArray(allocator: Allocator, elements: []const FieldElement) ![]u8 {
-    var json_parts = std.ArrayList([]u8).init(allocator);
-    defer {
-        for (json_parts.items) |part| allocator.free(part);
-        json_parts.deinit();
-    }
-
-    for (elements) |elem| {
-        const hex_str = try serializeFieldElement(allocator, elem);
-        try json_parts.append(hex_str);
-    }
-
     var result = std.ArrayList(u8).init(allocator);
     defer result.deinit();
 
     try result.append('[');
-    for (json_parts.items, 0..) |part, i| {
+    for (elements, 0..) |elem, i| {
         if (i > 0) try result.append(',');
-        try result.append('"');
-        try result.appendSlice(part);
-        try result.append('"');
+        const value_str = try serializeFieldElement(allocator, elem);
+        defer allocator.free(value_str);
+        try result.appendSlice(value_str);
     }
     try result.append(']');
 
@@ -151,11 +140,9 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
         try nodes_str.append('[');
         for (node, 0..) |fe, j| {
             if (j > 0) try nodes_str.append(',');
-            const hex_str = try serializeFieldElement(allocator, fe);
-            defer allocator.free(hex_str);
-            try nodes_str.append('"');
-            try nodes_str.appendSlice(hex_str);
-            try nodes_str.append('"');
+            const value_str = try serializeFieldElement(allocator, fe);
+            defer allocator.free(value_str);
+            try nodes_str.appendSlice(value_str);
         }
         try nodes_str.append(']');
     }
@@ -173,11 +160,9 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
     try rho_json_builder.append('[');
     for (&rho, 0..) |fe, i| {
         if (i > 0) try rho_json_builder.append(',');
-        const hex_str = try serializeFieldElement(allocator, fe);
-        defer allocator.free(hex_str);
-        try rho_json_builder.append('"');
-        try rho_json_builder.appendSlice(hex_str);
-        try rho_json_builder.append('"');
+        const value_str = try serializeFieldElement(allocator, fe);
+        defer allocator.free(value_str);
+        try rho_json_builder.appendSlice(value_str);
     }
     try rho_json_builder.append(']');
     const rho_json = try rho_json_builder.toOwnedSlice();
@@ -195,11 +180,9 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
         try hashes_str.append('[');
         for (domain, 0..) |fe, j| {
             if (j > 0) try hashes_str.append(',');
-            const hex_str = try serializeFieldElement(allocator, fe);
-            defer allocator.free(hex_str);
-            try hashes_str.append('"');
-            try hashes_str.appendSlice(hex_str);
-            try hashes_str.append('"');
+            const value_str = try serializeFieldElement(allocator, fe);
+            defer allocator.free(value_str);
+            try hashes_str.appendSlice(value_str);
         }
         try hashes_str.append(']');
     }

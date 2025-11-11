@@ -1,6 +1,7 @@
 use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
 use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
-use rand::{rngs::StdRng, SeedableRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use serde_json;
 use std::env;
 
@@ -28,7 +29,7 @@ fn main() {
         seed[i] = (hi_v << 4) | lo_v;
     }
 
-    let mut rng = StdRng::from_seed(seed);
+    let mut rng = ChaCha20Rng::from_seed(seed);
     let (pk, mut sk) = SIGTopLevelTargetSumLifetime18Dim64Base8::key_gen(&mut rng, 0, 256);
 
     let mut message_bytes = [0u8; 32];
