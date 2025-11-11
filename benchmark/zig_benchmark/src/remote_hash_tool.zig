@@ -44,15 +44,15 @@ fn readFieldElement(reader: anytype) !FieldElement {
     return FieldElement.fromMontgomery(mont);
 }
 
-fn writeDomain(writer: anytype, domain: [8]FieldElement) !void {
-    for (domain) |fe| {
+fn writeDomain(writer: anytype, domain: [8]FieldElement, active_len: usize) !void {
+    for (domain[0..active_len]) |fe| {
         try writeFieldElement(writer, fe);
     }
 }
 
-fn readDomain(reader: anytype) ![8]FieldElement {
-    var domain: [8]FieldElement = undefined;
-    for (0..domain.len) |i| {
+fn readDomain(reader: anytype, active_len: usize) ![8]FieldElement {
+    var domain: [8]FieldElement = .{ FieldElement.zero(), FieldElement.zero(), FieldElement.zero(), FieldElement.zero(), FieldElement.zero(), FieldElement.zero(), FieldElement.zero(), FieldElement.zero() };
+    for (0..active_len) |i| {
         domain[i] = try readFieldElement(reader);
     }
     return domain;
@@ -114,7 +114,7 @@ fn readPublicKeyFromJson(path: []const u8, allocator: std.mem.Allocator) !hash_z
     return try hash_zig.serialization.deserializePublicKey(bytes);
 }
 
-fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.GeneralizedXMSSSignature, rand_len: usize) !void {
+fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.GeneralizedXMSSSignature, rand_len: usize, hash_len: usize) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
 
@@ -122,7 +122,7 @@ fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.Generalize
     const path_nodes = signature.getPath().getNodes();
     try writeLength(writer, path_nodes.len);
     for (path_nodes) |node| {
-        try writeDomain(writer, node);
+        try writeDomain(writer, node, hash_len);
     }
 
     const rho = signature.getRho();
@@ -134,22 +134,22 @@ fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.Generalize
     const hashes = signature.getHashes();
     try writeLength(writer, hashes.len);
     for (hashes) |domain| {
-        try writeDomain(writer, domain);
+        try writeDomain(writer, domain, hash_len);
     }
 }
 
-fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len: usize, expected_path_len: usize, expected_hashes_len: usize) !*hash_zig.GeneralizedXMSSSignature {
+fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len: usize, max_path_len: usize, hash_len: usize, max_hashes: usize) !*hash_zig.GeneralizedXMSSSignature {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
     const reader = file.reader();
 
     const path_len = try readLength(reader);
-    if (path_len != expected_path_len) return error.InvalidPathLength;
+    if (path_len == 0 or path_len > max_path_len) return BincodeError.InvalidPathLength;
     var path_nodes = try allocator.alloc([8]FieldElement, path_len);
     errdefer allocator.free(path_nodes);
     for (0..path_len) |i| {
-        path_nodes[i] = try readDomain(reader);
+        path_nodes[i] = try readDomain(reader, hash_len);
     }
 
     var path_ptr = HashTreeOpening.init(allocator, path_nodes) catch |err| {
@@ -160,7 +160,7 @@ fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len
 
     if (rand_len > 7) {
         path_ptr.deinit();
-        return error.InvalidRandLength;
+        return BincodeError.InvalidRandLength;
     }
     var rho = [_]FieldElement{FieldElement.zero()} ** 7;
     for (0..rand_len) |i| {
@@ -168,14 +168,14 @@ fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len
     }
 
     const hashes_len = try readLength(reader);
-    if (hashes_len != expected_hashes_len) {
+    if (hashes_len == 0 or hashes_len > max_hashes) {
         path_ptr.deinit();
-        return error.InvalidHashesLength;
+        return BincodeError.InvalidHashesLength;
     }
     var hashes_tmp = try allocator.alloc([8]FieldElement, hashes_len);
     errdefer allocator.free(hashes_tmp);
     for (0..hashes_len) |i| {
-        hashes_tmp[i] = try readDomain(reader);
+        hashes_tmp[i] = try readDomain(reader, hash_len);
     }
 
     const signature_ptr = hash_zig.GeneralizedXMSSSignature.initDeserialized(allocator, path_ptr, rho, hashes_tmp) catch |err| {
@@ -229,7 +229,7 @@ fn signCommand(
     log.print("ZIG_REMOTE_DEBUG: internal verify result: {}\n", .{verify_ok});
 
     try writePublicKeyToJson(pk_path, &keypair.public_key);
-    try writeSignatureBincode(sig_path, signature_ptr, scheme.lifetime_params.rand_len_fe);
+    try writeSignatureBincode(sig_path, signature_ptr, scheme.lifetime_params.rand_len_fe, scheme.lifetime_params.hash_len_fe);
 }
 
 fn verifyCommand(
@@ -260,6 +260,7 @@ fn verifyCommand(
         scheme.lifetime_params.rand_len_fe,
         scheme.lifetime_params.final_layer,
         scheme.lifetime_params.hash_len_fe,
+        scheme.lifetime_params.dimension,
     );
     defer signature_ptr.deinit();
 

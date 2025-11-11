@@ -1,3 +1,6 @@
+env:
+  BENCHMARK_INCLUDE_2_32: "false"
+
 name: CI
 
 on:

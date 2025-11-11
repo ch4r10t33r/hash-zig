@@ -9,6 +9,7 @@ includes a formatted summary of every operation.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ ZIG_BIN = REPO_ROOT / "zig-out" / "bin" / "zig-remote-hash-tool"
 
 TMP_DIR = Path("/tmp")
 DEFAULT_SEED = "4242424242424242424242424242424242424242424242424242424242424242"
+INCLUDE_LIFETIME_2_32 = os.environ.get("BENCHMARK_INCLUDE_2_32", "").lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -68,6 +70,19 @@ SCENARIOS = [
         seed_hex=DEFAULT_SEED,
     ),
 ]
+
+if INCLUDE_LIFETIME_2_32:
+    SCENARIOS.append(
+        ScenarioConfig(
+            lifetime="2^32",
+            label="Lifetime 2^32",
+            message="Cross-language benchmark message",
+            epoch=0,
+            start_epoch=0,
+            num_active_epochs=256,
+            seed_hex=DEFAULT_SEED,
+        )
+    )
 
 SUMMARY_ORDER = [
     "rust_sign",
