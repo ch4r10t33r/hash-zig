@@ -36,6 +36,8 @@ class SignResult:
     time: float
     success: bool
     signature_data: Optional[str] = None
+    public_key_data: Optional[str] = None
+    secret_key_data: Optional[str] = None
     error_message: Optional[str] = None
 
 
@@ -105,7 +107,11 @@ class HashSigImplementationRust(HashSigImplementation):
             print(f"  Building {self.name} wrapper with cargo...")
             # Build our custom wrapper that uses the hash-sig library
             result = subprocess.run(
-                ['cargo', 'build', '--release'],
+                ['cargo', 'build', '--release',
+                 '--bin', 'compare_lifetime_2_8',
+                 '--bin', 'sign_message',
+                 '--bin', 'verify_signature',
+                 '--bin', 'keygen_bench'],
                 cwd=str(self.wrapper_dir),
                 capture_output=True,
                 text=True
@@ -132,7 +138,8 @@ class HashSigImplementationRust(HashSigImplementation):
         
         try:
             # Use the correct binary for lifetime_2_8
-            binary = self.wrapper_dir / 'target' / 'release' / 'test_lifetime_2_8'
+            # This binary exists in rust_benchmark/src/bin/compare_lifetime_2_8.rs
+            binary = self.wrapper_dir / 'target' / 'release' / 'compare_lifetime_2_8'
             
             if not binary.exists():
                 # Attempt to build on-demand, then re-check
@@ -229,6 +236,9 @@ class HashSigImplementationRust(HashSigImplementation):
             )
             end_time = time.perf_counter()
             
+            if result.stderr:
+                print(result.stderr.strip())
+
             if result.returncode != 0:
                 return SignResult(0, False, None, f"Signing failed: {result.stderr[:300]}")
             
@@ -246,7 +256,7 @@ class HashSigImplementationRust(HashSigImplementation):
                     secret_key_data = line.split(":", 1)[1].strip()
             
             elapsed = end_time - start_time
-            return SignResult(elapsed, True, signature_data)
+            return SignResult(elapsed, True, signature_data, public_key_data, secret_key_data)
             
         except Exception as e:
             return SignResult(0, False, None, str(e)[:200])
@@ -276,6 +286,9 @@ class HashSigImplementationRust(HashSigImplementation):
             )
             end_time = time.perf_counter()
             
+            if result.stderr:
+                print(result.stderr.strip())
+
             if result.returncode != 0:
                 return VerifyResult(0, False, False, f"Verification failed: {result.stderr[:300]}")
             
@@ -437,6 +450,9 @@ class HashZigImplementation(HashSigImplementation):
             )
             end_time = time.perf_counter()
             
+            if result.stderr:
+                print(result.stderr.strip())
+
             if result.returncode != 0:
                 return SignResult(0, False, None, f"Signing failed: {result.stderr[:300]}")
             
@@ -454,7 +470,7 @@ class HashZigImplementation(HashSigImplementation):
                     secret_key_data = line.split(":", 1)[1].strip()
             
             elapsed = end_time - start_time
-            return SignResult(elapsed, True, signature_data)
+            return SignResult(elapsed, True, signature_data, public_key_data, secret_key_data)
             
         except Exception as e:
             return SignResult(0, False, None, str(e)[:200])
@@ -484,6 +500,9 @@ class HashZigImplementation(HashSigImplementation):
             )
             end_time = time.perf_counter()
             
+            if result.stderr:
+                print(result.stderr.strip())
+
             if result.returncode != 0:
                 return VerifyResult(0, False, False, f"Verification failed: {result.stderr[:300]}")
             
@@ -791,8 +810,8 @@ class BenchmarkRunner:
             print(f"    ✓ Rust signing successful ({rust_sign_result.time:.3f}s)")
             
             print("    Verifying with Zig...")
-            # Use the public key data from the signing result (properly serialized)
-            public_key_for_verification = rust_key_result.public_hex or ""
+            # Use the public key JSON emitted by the Rust signing step
+            public_key_for_verification = rust_sign_result.public_key_data or ""
             zig_verify_result = zig_impl.verify_signature(
                 public_key_for_verification, 
                 rust_sign_result.signature_data or "", 
@@ -818,7 +837,7 @@ class BenchmarkRunner:
             
             print("    Verifying with Rust...")
             rust_verify_result = rust_impl.verify_signature(
-                zig_key_result.public_hex or "", 
+                zig_sign_result.public_key_data or "", 
                 zig_sign_result.signature_data or "", 
                 test_message, 
                 test_epoch

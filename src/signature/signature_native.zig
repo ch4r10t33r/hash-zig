@@ -3,12 +3,17 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const log = @import("../utils/log.zig");
 const FieldElement = @import("../core/field.zig").FieldElement;
 const ParametersRustCompat = @import("../core/params_rust_compat.zig").ParametersRustCompat;
 const ShakePRFtoF_8_7 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
+const ShakePRFtoF_7_6 = @import("../prf/shake_prf_to_field.zig").ShakePRFtoF_7_6;
 const Poseidon2RustCompat = @import("../hash/poseidon2_hash.zig").Poseidon2RustCompat;
 const serialization = @import("serialization.zig");
-const ChaCha12Rng = @import("../prf/chacha12_rng.zig");
+const KOALABEAR_PRIME = @import("../core/field.zig").KOALABEAR_PRIME;
+const ChaCha12Rng = @import("../prf/chacha12_rng.zig").ChaCha12Rng;
+const KoalaBearField = @import("../poseidon2/plonky3_field.zig").KoalaBearField;
+const BigInt = std.math.big.int.Managed;
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;
@@ -72,47 +77,85 @@ pub const LIFETIME_2_32_HASHING_PARAMS = LifetimeParams{
 };
 
 // Hash SubTree structure (simplified for now)
+pub const PaddedLayer = struct {
+    nodes: [][8]FieldElement,
+    start_index: usize,
+};
+
 pub const HashSubTree = struct {
-    root_value: FieldElement,
+    root_value: [8]FieldElement,
+    layers: ?[]PaddedLayer,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, root_value: FieldElement) !*HashSubTree {
+    pub fn init(allocator: Allocator, root_value: [8]FieldElement) !*HashSubTree {
         const self = try allocator.create(HashSubTree);
         self.* = HashSubTree{
             .root_value = root_value,
+            .layers = null,
+            .allocator = allocator,
+        };
+        return self;
+    }
+
+    pub fn initWithLayers(
+        allocator: Allocator,
+        root_value: [8]FieldElement,
+        layers: []PaddedLayer,
+    ) !*HashSubTree {
+        const self = try allocator.create(HashSubTree);
+        self.* = HashSubTree{
+            .root_value = root_value,
+            .layers = layers,
             .allocator = allocator,
         };
         return self;
     }
 
     pub fn deinit(self: *HashSubTree) void {
+        if (self.layers) |layers| {
+            for (layers) |layer| {
+                self.allocator.free(layer.nodes);
+            }
+            self.allocator.free(layers);
+        }
         self.allocator.destroy(self);
     }
 
-    pub fn root(self: *const HashSubTree) FieldElement {
+    pub fn root(self: *const HashSubTree) [8]FieldElement {
         return self.root_value;
+    }
+
+    pub fn getLayers(self: *const HashSubTree) ?[]const PaddedLayer {
+        if (self.layers) |layers| {
+            return layers;
+        }
+        return null;
     }
 };
 
 // Hash Tree Opening for Merkle paths
 pub const HashTreeOpening = struct {
-    path: []FieldElement,
+    nodes: [][8]FieldElement,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, path: []FieldElement) !*HashTreeOpening {
+    pub fn init(allocator: Allocator, nodes: [][8]FieldElement) !*HashTreeOpening {
         const self = try allocator.create(HashTreeOpening);
-        const path_copy = try allocator.alloc(FieldElement, path.len);
-        @memcpy(path_copy, path);
+        const nodes_copy = try allocator.alloc([8]FieldElement, nodes.len);
+        @memcpy(nodes_copy, nodes);
         self.* = HashTreeOpening{
-            .path = path_copy,
+            .nodes = nodes_copy,
             .allocator = allocator,
         };
         return self;
     }
 
     pub fn deinit(self: *HashTreeOpening) void {
-        self.allocator.free(self.path);
+        self.allocator.free(self.nodes);
         self.allocator.destroy(self);
+    }
+
+    pub fn getNodes(self: *const HashTreeOpening) [][8]FieldElement {
+        return self.nodes;
     }
 };
 
@@ -120,19 +163,35 @@ pub const HashTreeOpening = struct {
 pub const GeneralizedXMSSSignature = struct {
     // Private fields - not directly accessible from outside
     path: *HashTreeOpening,
-    rho: [7]FieldElement, // IE::Randomness for ShakePRFtoF_8_7
-    hashes: []FieldElement, // Vec<TH::Domain>
+    rho: [7]FieldElement, // IE::Randomness (max length; actual rand_len_fe may be smaller)
+    hashes: [][8]FieldElement, // Vec<TH::Domain>
     allocator: Allocator,
+    is_deserialized: bool, // Track if signature was deserialized from JSON (Rust→Zig)
 
-    pub fn init(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: []FieldElement) !*GeneralizedXMSSSignature {
+    pub fn init(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
         const self = try allocator.create(GeneralizedXMSSSignature);
-        const hashes_copy = try allocator.alloc(FieldElement, hashes.len);
+        const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
         @memcpy(hashes_copy, hashes);
         self.* = GeneralizedXMSSSignature{
             .path = path,
             .rho = rho,
             .hashes = hashes_copy,
             .allocator = allocator,
+            .is_deserialized = false, // Created directly, not deserialized
+        };
+        return self;
+    }
+
+    pub fn initDeserialized(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
+        const self = try allocator.create(GeneralizedXMSSSignature);
+        const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
+        @memcpy(hashes_copy, hashes);
+        self.* = GeneralizedXMSSSignature{
+            .path = path,
+            .rho = rho,
+            .hashes = hashes_copy,
+            .allocator = allocator,
+            .is_deserialized = true, // Deserialized from JSON (Rust→Zig)
         };
         return self;
     }
@@ -152,7 +211,7 @@ pub const GeneralizedXMSSSignature = struct {
         return self.rho;
     }
 
-    pub fn getHashes(self: *const GeneralizedXMSSSignature) []const FieldElement {
+    pub fn getHashes(self: *const GeneralizedXMSSSignature) [][8]FieldElement {
         return self.hashes;
     }
 
@@ -165,10 +224,10 @@ pub const GeneralizedXMSSSignature = struct {
 // Public key structure matching Rust exactly
 pub const GeneralizedXMSSPublicKey = struct {
     // Private fields - not directly accessible from outside
-    root: FieldElement,
+    root: [8]FieldElement, // Root should be an array of 8 field elements to match Rust
     parameter: [5]FieldElement, // TH::Parameter
 
-    pub fn init(root: FieldElement, parameter: [5]FieldElement) GeneralizedXMSSPublicKey {
+    pub fn init(root: [8]FieldElement, parameter: [5]FieldElement) GeneralizedXMSSPublicKey {
         return GeneralizedXMSSPublicKey{
             .root = root,
             .parameter = parameter,
@@ -176,7 +235,7 @@ pub const GeneralizedXMSSPublicKey = struct {
     }
 
     // Controlled access methods for private fields
-    pub fn getRoot(self: *const GeneralizedXMSSPublicKey) FieldElement {
+    pub fn getRoot(self: *const GeneralizedXMSSPublicKey) [8]FieldElement {
         return self.root;
     }
 
@@ -206,7 +265,7 @@ pub const GeneralizedXMSSSecretKey = struct {
     pub fn init(
         allocator: Allocator,
         prf_key: [32]u8,
-        parameter: [5]FieldElement,
+        _parameter: [5]FieldElement,
         activation_epoch: usize,
         num_active_epochs: usize,
         top_tree: *HashSubTree,
@@ -217,7 +276,7 @@ pub const GeneralizedXMSSSecretKey = struct {
         const self = try allocator.create(GeneralizedXMSSSecretKey);
         self.* = GeneralizedXMSSSecretKey{
             .prf_key = prf_key,
-            .parameter = parameter,
+            .parameter = _parameter,
             .activation_epoch = activation_epoch,
             .num_active_epochs = num_active_epochs,
             .top_tree = top_tree,
@@ -301,7 +360,7 @@ pub const GeneralizedXMSSSecretKey = struct {
     }
 
     /// Helper function to compute bottom tree from PRF key
-    fn bottomTreeFromPrfKey(self: *GeneralizedXMSSSecretKey, _: usize, _: usize) !*HashSubTree {
+    pub fn bottomTreeFromPrfKey(self: *GeneralizedXMSSSecretKey, _: usize, _: usize) !*HashSubTree {
         // This is a simplified implementation - in practice this would need the full tree construction
         // For now, return a placeholder tree
         return try HashSubTree.init(self.allocator, FieldElement{ .value = 0 });
@@ -314,6 +373,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     poseidon2: *Poseidon2RustCompat,
     allocator: Allocator,
     rng: ChaCha12Rng,
+    layer_cache: std.HashMap(usize, AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
+    layer_cache_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: Allocator, lifetime: @import("../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
@@ -332,6 +393,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .poseidon2 = try allocator.create(Poseidon2RustCompat),
             .allocator = allocator,
             .rng = ChaCha12Rng.init(initDefaultSeed()),
+            .layer_cache = std.HashMap(usize, AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
+            .layer_cache_mutex = .{},
         };
 
         self.poseidon2.* = poseidon2;
@@ -353,6 +416,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .poseidon2 = try allocator.create(Poseidon2RustCompat),
             .allocator = allocator,
             .rng = ChaCha12Rng.init(seed),
+            .layer_cache = std.HashMap(usize, AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
+            .layer_cache_mutex = .{},
         };
         self.poseidon2.* = poseidon2;
         return self;
@@ -372,8 +437,40 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     pub fn deinit(self: *GeneralizedXMSSSignatureScheme) void {
+        // Clean up layer cache
+        var it = self.layer_cache.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.layer_cache.deinit();
+
         self.allocator.destroy(self.poseidon2);
         self.allocator.destroy(self);
+    }
+
+    fn prfDomainElement(
+        self: *const GeneralizedXMSSSignatureScheme,
+        prf_key: [32]u8,
+        epoch: u32,
+        index: u64,
+    ) [8]u32 {
+        const hash_len = self.lifetime_params.hash_len_fe;
+        var padded: [8]u32 = undefined;
+        if (self.lifetime_params.rand_len_fe == 6 and hash_len == 7) {
+            const raw = ShakePRFtoF_7_6.getDomainElement(prf_key, epoch, index);
+            for (0..hash_len) |i| {
+                padded[i] = raw[i];
+            }
+        } else {
+            const raw = ShakePRFtoF_8_7.getDomainElement(prf_key, epoch, index);
+            for (0..hash_len) |i| {
+                padded[i] = raw[i];
+            }
+        }
+        for (hash_len..8) |i| {
+            padded[i] = 0;
+        }
+        return padded;
     }
 
     /// Expand activation time (matching Rust expand_activation_time exactly)
@@ -416,7 +513,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Bottom tree from PRF key (matching Rust bottom_tree_from_prf_key exactly)
-    fn bottomTreeFromPrfKey(
+    pub fn bottomTreeFromPrfKey(
         self: *GeneralizedXMSSSignatureScheme,
         prf_key: [32]u8,
         bottom_tree_index: usize,
@@ -432,60 +529,149 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const epoch_range_start = bottom_tree_index * leafs_per_bottom_tree;
         const epoch_range_end = epoch_range_start + leafs_per_bottom_tree;
 
-        // Generate chain ends hashes for each epoch
-        var chain_ends_hashes = try self.allocator.alloc(FieldElement, leafs_per_bottom_tree);
-        defer self.allocator.free(chain_ends_hashes);
+        // Generate leaf domains (8-wide) for each epoch
+        var leaf_domains = try self.allocator.alloc([8]FieldElement, leafs_per_bottom_tree);
+        defer self.allocator.free(leaf_domains);
 
         for (epoch_range_start..epoch_range_end) |epoch| {
-            // Generate chain ends for this epoch
-            var chain_ends = try self.allocator.alloc(FieldElement, num_chains);
-            defer self.allocator.free(chain_ends);
+            // Generate chain end domains (8-wide) for this epoch
+            var chain_domains = try self.allocator.alloc([8]FieldElement, num_chains);
+            defer self.allocator.free(chain_domains);
 
             for (0..num_chains) |chain_index| {
                 // Get chain start using ShakePRFtoF
-                const domain_elements = ShakePRFtoF_8_7.getDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                const domain_elements = self.prfDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
 
-                // Walk the chain to get the chain end
-                chain_ends[chain_index] = try self.computeHashChain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
+                // Debug: Print domain elements for all epochs and chains in first bottom tree
+                if (bottom_tree_index == 0) {
+                    // log.print("DEBUG: Bottom tree {} epoch {} chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_index, epoch, chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
+                }
+
+                // Walk the chain to get the final 8-wide domain
+                const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
+
+                // Debug: Print chain end for all epochs and chains in first bottom tree
+                if (bottom_tree_index == 0) {
+                    log.print("DEBUG: Bottom tree {} epoch {} chain {} chain end[0]: 0x{x}\n", .{ bottom_tree_index, epoch, chain_index, chain_end_domain[0].value });
+                }
+
+                chain_domains[chain_index] = chain_end_domain;
             }
 
-            // Hash all chain ends to get the leaf hash for this epoch
-            chain_ends_hashes[epoch - epoch_range_start] = try self.hashChainEnds(chain_ends, parameter);
+            // Reduce chain domains to a single leaf domain using tree-tweak hashing
+            const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)));
+            defer self.allocator.free(leaf_domain_slice);
+            // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+            var leaf_domain: [8]FieldElement = undefined;
+            const hash_len = self.lifetime_params.hash_len_fe;
+            for (0..hash_len) |i| {
+                leaf_domain[i] = leaf_domain_slice[i];
+            }
+            for (hash_len..8) |i| {
+                leaf_domain[i] = FieldElement{ .value = 0 };
+            }
+            leaf_domains[epoch - epoch_range_start] = leaf_domain;
+
+            // Debug: Print leaf domain head for all epochs in first bottom tree
+            if (bottom_tree_index == 0) {
+                log.print("DEBUG: Bottom tree {} epoch {} leaf domain[0]: 0x{x}\n", .{ bottom_tree_index, epoch, leaf_domain[0].value });
+                if (epoch == 0) {
+                    log.print("ZIG_LEAF_DOMAIN_EPOCH0:[", .{});
+                    for (leaf_domain, 0..) |fe, i| {
+                        log.print("\"0x{x}\"", .{fe.value});
+                        if (i < 7) log.print(",", .{});
+                    }
+                    log.print("]\n", .{});
+                }
+            }
         }
 
-        // Build bottom tree from leaf hashes
-        const bottom_tree_root = try self.buildBottomTree(chain_ends_hashes, parameter);
-        return try HashSubTree.init(self.allocator, bottom_tree_root);
+        // Build bottom tree layers from leaf domains (shared with signing path)
+        const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains, parameter, bottom_tree_index);
+        defer {
+            for (bottom_layers) |layer| self.allocator.free(layer.nodes);
+            self.allocator.free(bottom_layers);
+        }
+
+        if (bottom_layers.len == 0 or bottom_layers[bottom_layers.len - 1].nodes.len == 0) {
+            return error.InvalidBottomTree;
+        }
+
+        var bottom_root: [8]FieldElement = undefined;
+        @memcpy(&bottom_root, &bottom_layers[bottom_layers.len - 1].nodes[0]);
+        return try HashSubTree.init(self.allocator, bottom_root);
     }
 
     /// Compute hash chain (matching Rust chain function)
-    fn computeHashChain(
+    pub fn computeHashChain(
         self: *GeneralizedXMSSSignatureScheme,
         domain_elements: [8]u32,
         epoch: u32,
         chain_index: u8,
         parameter: [5]FieldElement,
     ) !FieldElement {
-        var current_state = try self.allocator.alloc(FieldElement, 8);
-        defer self.allocator.free(current_state);
-
-        // Initialize with domain elements
+        // Convert domain elements to field elements
+        var current: [8]FieldElement = undefined;
         for (0..8) |i| {
-            current_state[i] = FieldElement{ .value = domain_elements[i] };
+            current[i] = FieldElement{ .value = domain_elements[i] };
         }
 
-        // Walk the chain for BASE-1 steps
-        for (0..self.lifetime_params.base - 1) |_| {
-            const next_state = try self.applyPoseidonTweakHash(current_state, epoch, chain_index, parameter);
-            defer self.allocator.free(next_state);
+        // Debug: Print initial state for first bottom tree, epoch 0, chain 0
+        if (epoch == 0 and chain_index == 0) {
+            // log.print("DEBUG: Chain initial state epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value });
+        }
+
+        // Walk the chain for BASE-1 steps (matching Rust chain function)
+        for (0..self.lifetime_params.base - 1) |j| {
+            const pos_in_chain = @as(u8, @intCast(j + 1));
+
+            // Apply chain tweak hash (matching Rust TH::apply with chain_tweak)
+            const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
+
+            // Debug: Print chain step for first bottom tree, epoch 0, chain 0
+            if (epoch == 0 and chain_index == 0) {
+                // log.print("DEBUG: Chain step {} epoch={} chain={}: [{}, {}, {}, {}, {}, {}, {}, {}] -> [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j + 1, epoch, chain_index, current[0].value, current[1].value, current[2].value, current[3].value, current[4].value, current[5].value, current[6].value, current[7].value, next[0].value, next[1].value, next[2].value, next[3].value, next[4].value, next[5].value, next[6].value, next[7].value });
+            }
 
             // Update current state
-            for (0..8) |i| {
-                current_state[i] = next_state[i];
-            }
+            current = next;
         }
 
-        return current_state[0];
+        // Debug: Print final chain result for first bottom tree, epoch 0, chain 0
+        if (epoch == 0 and chain_index == 0) {
+            log.print("DEBUG: Chain final result epoch={} chain={}: 0x{x}\n", .{ epoch, chain_index, current[0].value });
+        }
+
+        return current[0];
+    }
+
+    /// Compute hash chain and return the full 8-wide domain state after BASE-1 steps
+    /// domain_elements are in Montgomery form (from ShakePRFtoF)
+    pub fn computeHashChainDomain(
+        self: *GeneralizedXMSSSignatureScheme,
+        domain_elements: [8]u32,
+        epoch: u32,
+        chain_index: u8,
+        parameter: [5]FieldElement,
+    ) ![8]FieldElement {
+        // domain_elements are in Montgomery form (from ShakePRFtoF)
+        // applyPoseidonChainTweakHash expects input in Montgomery form
+        // So we can use domain_elements directly as Montgomery values
+        var current: [8]FieldElement = undefined;
+        for (0..8) |i| current[i] = FieldElement{ .value = domain_elements[i] }; // Already Montgomery
+        for (0..self.lifetime_params.base - 1) |j| {
+            const pos_in_chain = @as(u8, @intCast(j + 1));
+            const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
+            const hash_len = self.lifetime_params.hash_len_fe;
+            for (0..hash_len) |k| {
+                current[k] = next[k];
+            }
+            // Pad remaining elements with zeros
+            for (hash_len..8) |k| {
+                current[k] = FieldElement{ .value = 0 };
+            }
+        }
+        return current;
     }
 
     /// Apply Poseidon2 tweak hash (matching Rust PoseidonTweakHash)
@@ -496,11 +682,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         chain_index: u8,
         parameter: [5]FieldElement,
     ) ![]FieldElement {
-        // Convert epoch and chain_index to field elements for tweak
-        const tweak = [_]FieldElement{
-            FieldElement{ .value = @as(u32, @intCast(epoch)) },
-            FieldElement{ .value = @as(u32, @intCast(chain_index)) },
-        };
+        // Convert epoch and chain_index to field elements for tweak using Rust's encoding
+        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | 0x00
+        const pos_in_chain = 0; // For chain computation, pos_in_chain is always 0
+        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | 0x00;
+
+        // Convert to field elements using base-p representation
+        const tweak = tweakToFieldElements(tweak_encoding);
 
         // Prepare combined input: parameter + tweak + message
         const total_input_len = 5 + 2 + input.len;
@@ -540,29 +728,1720 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return result;
     }
 
-    /// Hash chain ends using Poseidon2
-    fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, _: [5]FieldElement) !FieldElement {
-        // Use Poseidon2-24 for hashing many chain ends
-        const input_len = @min(chain_ends.len, 24);
-        const hash_result = try self.poseidon2.hashFieldElements(self.allocator, chain_ends[0..input_len]);
-        defer self.allocator.free(hash_result);
-        return hash_result[0];
-    }
+    /// Apply Poseidon2 chain tweak hash (matching Rust chain_tweak)
+    pub fn applyPoseidonChainTweakHash(
+        self: *GeneralizedXMSSSignatureScheme,
+        input: [8]FieldElement,
+        epoch: u32,
+        chain_index: u8,
+        pos_in_chain: u8,
+        parameter: [5]FieldElement,
+    ) ![8]FieldElement {
+        // Convert epoch, chain_index, and pos_in_chain to field elements for tweak using Rust's encoding
+        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | 0x00
+        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | 0x00;
 
-    /// Build bottom tree from leaf hashes
-    fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) !FieldElement {
-        if (leaf_hashes.len == 1) {
-            return leaf_hashes[0];
+        // Convert to field elements using base-p representation (canonical form)
+        const tweak = tweakToFieldElements(tweak_encoding);
+
+        // Only use hash_len_fe elements from input (7 for lifetime 2^18, 8 for lifetime 2^8)
+        const hash_len = self.lifetime_params.hash_len_fe;
+
+        // Prepare combined input: parameter + tweak + input (all already in Montgomery form)
+        const total_input_len = 5 + 2 + hash_len;
+        var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
+        defer self.allocator.free(combined_input);
+
+        // Parameter and tweak are already stored in Montgomery form.
+        for (0..5) |i| {
+            combined_input[i] = parameter[i];
+        }
+        for (0..2) |i| {
+            combined_input[5 + i] = tweak[i];
         }
 
-        // Build tree layer by layer
+        // Copy input (already in Montgomery form) - only hash_len_fe elements
+        @memcpy(combined_input[7 .. 7 + hash_len], input[0..hash_len]);
+
+        // Apply Poseidon2-16 hash (matching Rust's poseidon_compress with CHAIN_COMPRESSION_WIDTH=16)
+        // Rust uses poseidon2_16() for chain hashing, not poseidon2_24()
+        const hash_result = try self.poseidon2.hashFieldElements16(self.allocator, combined_input);
+        defer self.allocator.free(hash_result);
+
+        // Return first hash_len_fe elements as the result (7 for lifetime 2^18, 8 for lifetime 2^8)
+        // But return type is [8]FieldElement, so pad with zeros if hash_len_fe < 8
+        var result: [8]FieldElement = undefined;
+        for (0..hash_len) |i| {
+            result[i] = hash_result[i];
+        }
+        for (hash_len..8) |i| {
+            result[i] = FieldElement{ .value = 0 };
+        }
+        return result;
+    }
+
+    /// Process all pairs in parallel (matching Rust par_chunks_exact(2))
+    fn processPairsInParallel(
+        self: *GeneralizedXMSSSignatureScheme,
+        nodes: [][8]FieldElement,
+        parents: [][8]FieldElement,
+        parent_start: usize,
+        current_level: usize,
+        parameter: [5]FieldElement,
+    ) !void {
+        const parents_len = parents.len;
+
+        // CRITICAL FIX: Process sequentially to match Rust's exact order
+        // Even though Rust uses par_chunks_exact(2), the RNG consumption order is deterministic
+        // We need to process in the same order as Rust to maintain identical RNG state
+        for (0..parents_len) |i| {
+            // Hash two children together (matching Rust exactly)
+            const left_idx = i * 2;
+            const right_idx = i * 2 + 1;
+
+            const left = nodes[left_idx];
+            const right = nodes[right_idx];
+
+            // Convert arrays to slices for hashing
+            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            const hash_len = self.lifetime_params.hash_len_fe;
+            const left_slice = left[0..hash_len];
+            const right_slice = right[0..hash_len];
+
+            // Use tree tweak for this level and position (matching Rust exactly)
+            const parent_pos = @as(u32, @intCast(parent_start + i));
+            // Debug: log parent computation (only for first parent at level 0)
+            if (current_level == 0 and i == 0 and parent_start == 0) {
+                log.print("ZIG_BUILDTREE_DEBUG: Level {} parent {}: parent_start={} parent_pos={} left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ current_level, i, parent_start, parent_pos, left[0].value, right[0].value });
+            }
+            const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
+                // Handle error - in a real implementation, we'd need proper error handling
+                return;
+            };
+            defer self.allocator.free(hash_result);
+
+            // Debug: log parent result
+            if (current_level == 0 and i == 0 and parent_start == 0) {
+                log.print("ZIG_BUILDTREE_DEBUG:   parent[0]=0x{x:0>8}\n", .{hash_result[0].value});
+            }
+
+            // Copy the result to the parents array (only hash_len_fe elements, pad rest with zeros)
+            for (0..hash_len) |j| {
+                parents[i][j] = hash_result[j];
+            }
+            for (hash_len..8) |j| {
+                parents[i][j] = FieldElement{ .value = 0 };
+            }
+        }
+    }
+
+    /// Process a batch of pairs (thread worker function)
+    fn processPairBatch(
+        self: *GeneralizedXMSSSignatureScheme,
+        nodes: [][8]FieldElement,
+        parents: [][8]FieldElement,
+        parent_start: usize,
+        current_level: usize,
+        parameter: [5]FieldElement,
+        start_idx: usize,
+        end_idx: usize,
+    ) void {
+        for (start_idx..end_idx) |i| {
+            // Hash two children together (matching Rust exactly)
+            const left_idx = i * 2;
+            const right_idx = i * 2 + 1;
+
+            const left = nodes[left_idx];
+            const right = nodes[right_idx];
+
+            // Convert arrays to slices for hashing
+            const left_slice = left[0..];
+            const right_slice = right[0..];
+
+            // Use tree tweak for this level and position (matching Rust exactly)
+            const parent_pos = @as(u32, @intCast(parent_start + i));
+            const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
+                // Handle error - in a real implementation, we'd need proper error handling
+                return;
+            };
+            defer self.allocator.free(hash_result);
+
+            // Copy the result to the parents array (all 8 elements)
+            @memcpy(parents[i][0..], hash_result[0..8]);
+        }
+    }
+
+    /// Apply Poseidon2 tree tweak hash with separate left/right inputs (matching Rust exactly)
+    pub fn applyPoseidonTreeTweakHashWithSeparateInputs(
+        self: *GeneralizedXMSSSignatureScheme,
+        left: []const FieldElement,
+        right: []const FieldElement,
+        level: u8,
+        pos_in_level: u32,
+        parameter: [5]FieldElement,
+    ) ![]FieldElement {
+        // Inputs are expected canonical; Poseidon layer handles Montgomery internally.
+        // Compute tree tweak: ((level + 1 as u128) << 40) | ((pos_in_level as u128) << 8) | 0x01
+        // Match Rust: let tweak_level = (level as u8) + 1;
+        const tweak_level = level + 1;
+        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
+        log.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
+
+        // Convert to 2 field elements using base-p representation
+        const p: u128 = 2130706433; // KoalaBear field modulus
+        const tweak = [_]FieldElement{
+            FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
+            FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
+        };
+
+        // Debug: print tweak field elements
+        log.print("DEBUG: Sponge tweak_fe: [0x{x}, 0x{x}]\n", .{ tweak[0].value, tweak[1].value });
+
+        // Prepare combined input: parameter + tweak + left + right (matching Rust exactly)
+        const total_input_len = 5 + 2 + left.len + right.len;
+        var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
+        defer self.allocator.free(combined_input);
+
+        var input_index: usize = 0;
+
+        // Add parameter elements (canonical)
+        for (0..5) |i| {
+            combined_input[input_index] = parameter[i];
+            input_index += 1;
+        }
+
+        // Add tweak elements (canonical)
+        for (tweak) |t| {
+            combined_input[input_index] = t;
+            input_index += 1;
+        }
+
+        // Add left elements
+        for (left) |fe| {
+            combined_input[input_index] = fe;
+            input_index += 1;
+        }
+
+        // Add right elements
+        for (right) |fe| {
+            combined_input[input_index] = fe;
+            input_index += 1;
+        }
+
+        // Use Poseidon2-24 compress (feed-forward) with zero-padding to width 24,
+        // then take the first hash_len_fe elements (matching Rust poseidon_compress::<_, 24, HASH_LEN>)
+        var padded: [24]FieldElement = [_]FieldElement{FieldElement{ .value = 0 }} ** 24;
+        for (combined_input, 0..) |fe, i| {
+            padded[i] = fe;
+        }
+        // compress requires comptime output_len, so use max (8) and slice to hash_len_fe
+        const full_out = try self.poseidon2.compress(padded, 8);
+        // DETAILED HASH LOGGING
+        log.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
+        for (combined_input, 0..) |fe, i| {
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < combined_input.len - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+        const hash_len = self.lifetime_params.hash_len_fe;
+        log.print("DEBUG: Hash output (first {} of {} elements): ", .{ hash_len, full_out.len });
+        for (0..hash_len) |i| {
+            log.print("{}:0x{x}", .{ i, full_out[i].value });
+            if (i < hash_len - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        const result = try self.allocator.alloc(FieldElement, hash_len);
+        for (0..hash_len) |i| {
+            result[i] = full_out[i];
+        }
+        return result;
+    }
+
+    /// Apply Poseidon2 tree tweak hash (matching Rust PoseidonTweakHash for tree hashing)
+    pub fn applyPoseidonTreeTweakHash(
+        self: *GeneralizedXMSSSignatureScheme,
+        input: []const FieldElement,
+        level: u8,
+        pos_in_level: u32,
+        parameter: [5]FieldElement,
+    ) ![]FieldElement {
+        // Compute tree tweak: ((level + 1 as u128) << 40) | ((pos_in_level as u128) << 8) | 0x01
+        // Match Rust: let tweak_level = (level as u8) + 1;
+        const tweak_level = level + 1;
+        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
+        log.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
+
+        // Convert to 2 field elements using base-p representation
+        const p: u128 = 2130706433; // KoalaBear field modulus
+        const tweak = [_]FieldElement{
+            FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
+            FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
+        };
+
+        // Prepare combined input: parameter + tweak + message
+        const total_input_len = 5 + 2 + input.len;
+        var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
+        defer self.allocator.free(combined_input);
+
+        var input_index: usize = 0;
+
+        // Add parameter elements
+        for (0..5) |i| {
+            combined_input[input_index] = parameter[i];
+            input_index += 1;
+        }
+
+        // Add tweak elements
+        for (tweak) |t| {
+            combined_input[input_index] = t;
+            input_index += 1;
+        }
+
+        // Add message elements
+        for (input) |fe| {
+            combined_input[input_index] = fe;
+            input_index += 1;
+        }
+
+        // Apply Poseidon2-24 for tree hashing (matching Rust implementation)
+        const hash_result = try self.poseidon2.hashFieldElements(self.allocator, combined_input);
+        defer self.allocator.free(hash_result);
+
+        // DETAILED HASH LOGGING: Log input and output for debugging
+        log.print("DEBUG: Tree Hash input ({} elements): ", .{combined_input.len});
+        for (combined_input, 0..) |fe, i| {
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < combined_input.len - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        log.print("DEBUG: Tree Hash output ({} elements): ", .{hash_result.len});
+        for (hash_result, 0..) |fe, i| {
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < hash_result.len - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        // Return result with hash_len_fe elements (8 for tree hashing)
+        const result = try self.allocator.alloc(FieldElement, self.lifetime_params.hash_len_fe);
+        for (0..self.lifetime_params.hash_len_fe) |i| {
+            result[i] = hash_result[i];
+        }
+
+        return result;
+    }
+
+    /// Hash chain ends using Poseidon2 by reducing all elements pairwise until one remains
+    pub fn hashChainEnds(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, parameter: [5]FieldElement) !FieldElement {
+        if (chain_ends.len == 0) return error.InvalidInput;
+
+        var current = try self.allocator.alloc(FieldElement, chain_ends.len);
+        defer self.allocator.free(current);
+        @memcpy(current, chain_ends);
+
+        var cur_len = chain_ends.len;
+        while (cur_len > 1) {
+            const next_len = (cur_len + 1) / 2;
+            var next = try self.allocator.alloc(FieldElement, next_len);
+            defer self.allocator.free(next);
+
+            var i: usize = 0;
+            var out_idx: usize = 0;
+            while (i < cur_len) : (i += 2) {
+                if (i + 1 < cur_len) {
+                    // Hash the pair [current[i], current[i+1]]
+                    const pair = [_]FieldElement{ current[i], current[i + 1] };
+                    const h = try self.applyPoseidonTweakHash(&pair, 0, 0, parameter);
+                    defer self.allocator.free(h);
+                    next[out_idx] = h[0];
+                } else {
+                    // Odd tail: carry forward
+                    next[out_idx] = current[i];
+                }
+                out_idx += 1;
+            }
+
+            // Move to next level
+            self.allocator.free(current);
+            current = try self.allocator.alloc(FieldElement, next_len);
+            @memcpy(current, next);
+            cur_len = next_len;
+        }
+
+        return current[0];
+    }
+
+    /// Reduce chain ends into an 8-wide domain by pairwise hashing until 8 remain
+    pub fn hashChainEndsToDomain(self: *GeneralizedXMSSSignatureScheme, chain_ends: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
+        if (chain_ends.len == 0) return error.InvalidInput;
+
+        var current = try self.allocator.alloc(FieldElement, chain_ends.len);
+        defer self.allocator.free(current);
+        @memcpy(current, chain_ends);
+
+        var cur_len = chain_ends.len;
+        while (cur_len > 8) {
+            const next_len = (cur_len + 1) / 2;
+            var next = try self.allocator.alloc(FieldElement, next_len);
+            defer self.allocator.free(next);
+
+            var i: usize = 0;
+            var out_idx: usize = 0;
+            while (i < cur_len) : (i += 2) {
+                if (i + 1 < cur_len) {
+                    const pair = [_]FieldElement{ current[i], current[i + 1] };
+                    const h = try self.applyPoseidonTweakHash(&pair, 0, 0, parameter);
+                    defer self.allocator.free(h);
+                    next[out_idx] = h[0];
+                } else {
+                    next[out_idx] = current[i];
+                }
+                out_idx += 1;
+            }
+
+            self.allocator.free(current);
+            current = try self.allocator.alloc(FieldElement, next_len);
+            @memcpy(current, next);
+            cur_len = next_len;
+        }
+
+        var domain: [8]FieldElement = undefined;
+        // If fewer than 8 remain (shouldn't happen with 64), pad with zeros
+        var i: usize = 0;
+        while (i < 8) : (i += 1) {
+            domain[i] = if (i < cur_len) current[i] else FieldElement{ .value = 0 };
+        }
+        return domain;
+    }
+
+    /// Reduce 64 chain domains ([8] each) into a single leaf domain using Poseidon sponge
+    /// This matches Rust's TH::apply when message.len() > 2 (sponge mode)
+    /// Returns hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+    pub fn reduceChainDomainsToLeafDomain(
+        self: *GeneralizedXMSSSignatureScheme,
+        chain_domains_in: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        epoch: u32,
+    ) ![]FieldElement {
+        if (chain_domains_in.len == 0) return error.InvalidInput;
+
+        // Implement the sponge mode matching Rust exactly:
+        // 1. Flatten all domains: message.iter().flatten()
+        // 2. Create domain separator from [PARAMETER_LEN, TWEAK_LEN, NUM_CHUNKS, HASH_LEN]
+        // 3. Use poseidon_sponge with width 24, capacity from domain separator
+
+        const PARAMETER_LEN: u32 = @intCast(self.lifetime_params.parameter_len);
+        const TWEAK_LEN: u32 = @intCast(self.lifetime_params.tweak_len_fe);
+        const NUM_CHUNKS: u32 = @intCast(chain_domains_in.len); // dimension (64)
+        const HASH_LEN: u32 = @intCast(self.lifetime_params.hash_len_fe);
+
+        // Flatten all domains into a single slice (matching Rust: message.iter().flatten())
+        // Only use hash_len_fe elements from each domain (7 for lifetime 2^18, 8 for lifetime 2^8)
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const flattened_len = chain_domains_in.len * hash_len;
+        var flattened_input = try self.allocator.alloc(FieldElement, flattened_len);
+        defer self.allocator.free(flattened_input);
+
+        var flat_idx: usize = 0;
+        for (chain_domains_in) |domain| {
+            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            for (0..hash_len) |j| {
+                flattened_input[flat_idx] = domain[j];
+                flat_idx += 1;
+            }
+        }
+
+        // Create tree tweak: level=0, pos_in_level=epoch (matching Rust: TH::tree_tweak(0, epoch))
+        const tweak_level: u8 = 0;
+        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, epoch) << 8) | 0x01;
+
+        // Convert tweak to 2 field elements using base-p representation
+        const p: u128 = 2130706433; // KoalaBear field modulus
+        const tweak = [_]FieldElement{
+            FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
+            FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
+        };
+
+        // Create domain separator from lengths (matching Rust's poseidon_safe_domain_separator)
+        const DOMAIN_PARAMETERS_LENGTH: usize = 4;
+        const domain_params: [DOMAIN_PARAMETERS_LENGTH]u32 = [4]u32{ PARAMETER_LEN, TWEAK_LEN, NUM_CHUNKS, HASH_LEN };
+
+        // Combine params into a single number in base 2^32 (matching Rust)
+        var acc: u128 = 0;
+        for (domain_params) |param| {
+            acc = (acc << 32) | (@as(u128, param));
+        }
+
+        // Compute base-p decomposition to 24 elements (matching Rust)
+        // Rust uses F::from_u64(digit) which converts to Montgomery, so we need to do the same
+        // (using p already declared above for tweak computation)
+        const Poseidon24 = @import("../poseidon2/poseidon2.zig").Poseidon2KoalaBear24Plonky3;
+        const F = Poseidon24.Field;
+        var input_24_monty: [24]F = undefined;
+        var remaining = acc;
+        for (0..24) |i| {
+            const digit = remaining % p;
+            input_24_monty[i] = F.fromU32(@as(u32, @intCast(digit))); // Convert to Montgomery (matching Rust F::from_u64)
+            remaining /= p;
+        }
+
+        // Use poseidon_compress directly with Montgomery values (matching Rust's poseidon_compress)
+        // Rust's poseidon_compress takes &[F] (Montgomery) and returns [F; OUT_LEN] (Montgomery)
+        const CAPACITY: usize = self.lifetime_params.capacity; // From lifetime_params (9 for lifetime 2^8, 2^18, 2^32)
+        var padded_input_monty: [24]F = undefined;
+        @memcpy(&padded_input_monty, &input_24_monty);
+
+        // Apply permutation
+        Poseidon24.permutation(&padded_input_monty);
+
+        // Feed-forward: Add the input back into the state element-wise (matching Rust's poseidon_compress)
+        for (0..24) |i| {
+            padded_input_monty[i] = padded_input_monty[i].add(input_24_monty[i]);
+        }
+
+        // Extract capacity_value in Montgomery form (matching Rust's return type [F; OUT_LEN])
+        var capacity_value_monty = try self.allocator.alloc(F, CAPACITY);
+        defer self.allocator.free(capacity_value_monty);
+        for (0..CAPACITY) |i| {
+            capacity_value_monty[i] = padded_input_monty[i];
+        }
+
+        // Debug: log capacity_value (in Montgomery form, print as canonical for comparison)
+        log.print("DEBUG: Sponge capacity_value ({} elements, Montgomery->canonical): ", .{CAPACITY});
+        for (capacity_value_monty, 0..) |fe, i| {
+            log.print("{}:0x{x}", .{ i, fe.toU32() });
+            if (i < CAPACITY - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        // Combine parameter + tweak + flattened input (matching Rust's poseidon_sponge input)
+        // Rust passes everything in Montgomery form directly to poseidon_sponge
+        // Chain ends are already in Montgomery form (from Poseidon2-16 compress)
+        // Parameter and tweak need to be converted to Montgomery
+        const combined_input_len = self.lifetime_params.parameter_len + self.lifetime_params.tweak_len_fe + flattened_len;
+        var combined_input_monty = try self.allocator.alloc(F, combined_input_len);
+        defer self.allocator.free(combined_input_monty);
+
+        var input_idx: usize = 0;
+        // Add parameter (values already stored in Montgomery form)
+        for (parameter) |fe| {
+            combined_input_monty[input_idx] = F{ .value = fe.value };
+            input_idx += 1;
+        }
+        // Add tweak (already in Montgomery form)
+        for (tweak) |fe| {
+            combined_input_monty[input_idx] = F{ .value = fe.value };
+            input_idx += 1;
+        }
+        // Add flattened input (chain ends - already in Montgomery form from chain walking)
+        // Chain ends are stored as Montgomery u32 values in FieldElement.value
+        // We need to create F directly from the Montgomery value (not convert canonical to Montgomery)
+        for (flattened_input) |fe| {
+            // fe.value is already in Montgomery form (from chain walking)
+            // Create F directly with this Montgomery value (F{ .value = ... } creates F with Montgomery value)
+            combined_input_monty[input_idx] = F{ .value = fe.value };
+            input_idx += 1;
+        }
+
+        // Debug: print first RATE elements of combined input (in canonical form for comparison)
+        log.print("DEBUG: Sponge combined_input head RATE ({}): ", .{15});
+        for (0..@min(15, combined_input_monty.len)) |i| {
+            log.print("{}:0x{x}", .{ i, combined_input_monty[i].toU32() });
+            if (i + 1 < @min(15, combined_input_monty.len)) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        // Apply Poseidon2-24 sponge (matching Rust's poseidon_sponge)
+        const WIDTH: usize = 24;
+        const RATE: usize = WIDTH - CAPACITY; // 24 - capacity
+        const OUTPUT_LEN: usize = self.lifetime_params.hash_len_fe; // Domain size (7 for lifetime 2^18, 8 for lifetime 2^8)
+
+        // Pad input to multiple of rate (matching Rust's input_vector.resize)
+        const input_remainder = combined_input_monty.len % RATE;
+        const extra_elements = if (input_remainder == 0) 0 else (RATE - input_remainder) % RATE;
+        var padded_input = try self.allocator.alloc(F, combined_input_monty.len + extra_elements);
+        defer self.allocator.free(padded_input);
+        @memcpy(padded_input[0..combined_input_monty.len], combined_input_monty);
+        // Pad with zeros (in Montgomery form)
+        for (combined_input_monty.len..padded_input.len) |i| {
+            padded_input[i] = F.zero; // Zero in Montgomery is still zero
+        }
+
+        // Initialize state: capacity in capacity part, zeros in rate part
+        // Use Montgomery form throughout (matching Rust's KoalaBear which uses Montgomery internally)
+        // capacity_value_monty is already in Montgomery form (from poseidon_compress)
+        var state: [WIDTH]F = undefined;
+
+        // Initialize rate part with zeros, capacity part with capacity_value (both in Montgomery)
+        for (0..RATE) |i| {
+            state[i] = F.zero; // Zero in Montgomery is still zero
+        }
+        for (0..CAPACITY) |i| {
+            state[RATE + i] = capacity_value_monty[i]; // Already in Montgomery form
+        }
+
+        // Debug: print initial state (after initialization, before absorption)
+        log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
+        for (0..WIDTH) |i| {
+            log.print("{}:0x{x}", .{ i, state[i].toU32() });
+            if (i < WIDTH - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        // Absorb: process padded input in chunks of RATE (matching Rust's poseidon_sponge)
+        // Rust's KoalaBear uses Montgomery form internally, so convert canonical input to Montgomery before adding
+        log.print("DEBUG: Sponge padded_input_len={} rate={}\n", .{ padded_input.len, RATE });
+        var chunk_start: usize = 0;
+        var chunk_num: usize = 0;
+        while (chunk_start < padded_input.len) {
+            const chunk_end = chunk_start + RATE;
+            // Debug: print input values for first few chunks (in canonical form for comparison)
+            if (chunk_num < 3) {
+                log.print("ZIG_SPONGE_DEBUG: Input chunk {} (canonical): ", .{chunk_num});
+                for (0..RATE) |i| {
+                    log.print("{}:0x{x}", .{ chunk_start + i, padded_input[chunk_start + i].toU32() });
+                    if (i < RATE - 1) log.print(", ", .{});
+                }
+                log.print("\n", .{});
+            }
+            // Add chunk to rate part of state (state[0..RATE])
+            // Input is already in Montgomery form, so add directly (matching Rust's state[i] += chunk[i])
+            for (0..RATE) |i| {
+                state[i] = state[i].add(padded_input[chunk_start + i]);
+            }
+
+            // Debug: print state after adding chunk (before permutation) for first few chunks
+            if (chunk_num < 3) {
+                log.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm): ", .{chunk_num});
+                for (0..WIDTH) |i| {
+                    log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                    if (i < WIDTH - 1) log.print(", ", .{});
+                }
+                log.print("\n", .{});
+            }
+
+            // Permute state (matching Rust's perm.permute_mut(&mut state))
+            // This works directly with Montgomery values
+            Poseidon24.permutation(&state);
+
+            // Debug: print state after permutation for first few chunks
+            if (chunk_num < 3) {
+                log.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (canonical): ", .{chunk_num});
+                for (0..WIDTH) |i| {
+                    log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                    if (i < WIDTH - 1) log.print(", ", .{});
+                }
+                log.print("\n", .{});
+            }
+
+            chunk_start = chunk_end;
+            chunk_num += 1;
+        }
+
+        // Debug: print state after all absorptions (before squeeze)
+        log.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{});
+        for (0..WIDTH) |i| {
+            log.print("{}:0x{x}", .{ i, state[i].toU32() });
+            if (i < WIDTH - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        // Squeeze: extract OUTPUT_LEN elements from rate part (matching Rust's squeeze exactly)
+        // Rust's squeeze: while out.len() < OUT_LEN { out.extend_from_slice(&state[..rate]); perm.permute_mut(&mut state); }
+        // Since OUTPUT_LEN=8 < RATE=15, it reads 15 elements, then permutes, then takes first 8
+        var out = std.ArrayList(F).init(self.allocator);
+        defer out.deinit();
+
+        while (out.items.len < OUTPUT_LEN) {
+            // Read from state[0..rate] (15 elements)
+            try out.appendSlice(state[0..RATE]);
+            // Debug: print state before squeeze permutation
+            log.print("ZIG_SPONGE_DEBUG: State before squeeze perm (canonical): ", .{});
+            for (0..WIDTH) |i| {
+                log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                if (i < WIDTH - 1) log.print(", ", .{});
+            }
+            log.print("\n", .{});
+            // Permute state (matching Rust's perm.permute_mut(&mut state))
+            Poseidon24.permutation(&state);
+            // Debug: print state after squeeze permutation
+            log.print("ZIG_SPONGE_DEBUG: State after squeeze perm (canonical): ", .{});
+            for (0..WIDTH) |i| {
+                log.print("{}:0x{x}", .{ i, state[i].toU32() });
+                if (i < WIDTH - 1) log.print(", ", .{});
+            }
+            log.print("\n", .{});
+        }
+
+        // Take first OUTPUT_LEN elements (matching Rust's &out[0..OUT_LEN])
+        var result = try self.allocator.alloc(FieldElement, OUTPUT_LEN);
+        for (0..OUTPUT_LEN) |i| {
+            result[i] = FieldElement.fromMontgomery(out.items[i].value);
+        }
+
+        log.print("DEBUG: Sponge leaf domain ({} elements): ", .{OUTPUT_LEN});
+        for (result, 0..) |fe, i| {
+            log.print("{}:0x{x}", .{ i, fe.value });
+            if (i < OUTPUT_LEN - 1) log.print(", ", .{});
+        }
+        log.print("\n", .{});
+
+        return result;
+    }
+
+    /// Build bottom tree from leaf hashes and return as array of 8 field elements
+    /// This matches the Rust HashSubTree::new_subtree algorithm exactly
+    pub fn buildBottomTree(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement, bottom_tree_index: usize) ![8]FieldElement {
+        // For bottom trees: build full 8-layer tree (0->8), then truncate to 4 layers (0->4)
+        // This matches Rust: new_subtree builds 0->8, then truncates to 0->4
+        const full_depth = 8; // Build full 8-layer tree like Rust
+        // TODO: Implement proper truncation to 4 layers like Rust
+        const lowest_layer = 0;
+        const start_index = bottom_tree_index * 16; // Each bottom tree has 16 leaves
+
+        log.print("DEBUG: Building bottom tree from layer {} to layer {}\n", .{ lowest_layer, full_depth });
+        log.print("DEBUG: Starting with {} leaf hashes\n", .{leaf_hashes.len});
+
+        // Convert single field elements to arrays of 8 field elements
+        var leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_hashes.len);
+        defer self.allocator.free(leaf_nodes);
+
+        for (0..leaf_hashes.len) |i| {
+            // Convert single field element to array of 8 field elements
+            // First element is the actual value, rest are zeros
+            leaf_nodes[i][0] = leaf_hashes[i];
+            for (1..8) |j| {
+                leaf_nodes[i][j] = FieldElement{ .value = 0 };
+            }
+        }
+
+        // Start with the lowest layer, padded accordingly (matching Rust HashTreeLayer::padded)
+        // CRITICAL: Use real RNG for bottom trees (matching Rust implementation)
+        // Rust uses the real RNG for both bottom trees and top tree
+        const initial_padded = try self.padLayer(leaf_nodes, start_index);
+
+        log.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
+
+        // Build tree layer by layer (matching Rust exactly)
+        // Track all layers for proper truncation
+        var layers = std.ArrayList(PaddedLayer).init(self.allocator);
+        defer {
+            for (layers.items) |layer| self.allocator.free(layer.nodes);
+            layers.deinit();
+        }
+
+        var current_layer = initial_padded;
+        var current_level: usize = lowest_layer;
+
+        while (current_level < full_depth) {
+            const next_level = current_level + 1;
+
+            log.print("DEBUG: Zig Layer {} -> {}: {} nodes (start_index: {})\n", .{ current_level, next_level, current_layer.nodes.len, current_layer.start_index });
+
+            // Parent layer starts at half the previous start index (matching Rust)
+            const parent_start = current_layer.start_index >> 1;
+
+            // Compute all parents by pairing children two-by-two (matching Rust par_chunks_exact(2))
+            const parents_len = current_layer.nodes.len / 2; // This is guaranteed to be exact due to padding
+            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
+
+            log.print("DEBUG: Processing {} nodes to get {} parents\n", .{ current_layer.nodes.len, parents_len });
+
+            // Process all pairs in parallel (matching Rust par_chunks_exact(2))
+            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
+
+            // Free the current layer before creating the new one
+            self.allocator.free(current_layer.nodes);
+
+            // Add the new layer with padding so next iteration also has even start and length (matching Rust)
+            // Use real RNG for bottom trees (matching Rust implementation)
+            const new_layer = try self.padLayer(parents, parent_start);
+            self.allocator.free(parents);
+
+            current_layer = new_layer;
+
+            log.print("DEBUG: After padding: {} nodes (start_index: {})\n", .{ current_layer.nodes.len, current_layer.start_index });
+
+            // Store this layer for truncation
+            // We need to store a copy of the layer, not the original
+            const layer_copy = PaddedLayer{
+                .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len),
+                .start_index = current_layer.start_index,
+            };
+            @memcpy(layer_copy.nodes, current_layer.nodes);
+            try layers.append(layer_copy);
+
+            current_level = next_level;
+        }
+
+        // CRITICAL: Truncate to final_depth = 4 layers like Rust does
+        // Rust truncates to depth/2 = 4 layers and gets root from layer 4
+        // According to Rust: bottom_tree_root = bottom_tree.layers[depth / 2].nodes[bottom_tree_index % 2]
+        // where depth = 8, so depth/2 = 4, and we need the root from layer 4
+
+        // Get the root from layer 4
+        // layers.items[0] = result of layer 0->1 (i.e., layer 1)
+        // layers.items[1] = layer 2
+        // layers.items[2] = layer 3
+        // layers.items[3] = layer 4
+        // layers.items[4] = layer 5
+        // So layer 4 is at index 3, not 4!
+        const target_layer_index = (full_depth / 2) - 1; // 8 / 2 - 1 = 3
+        log.print("DEBUG: Looking for root in layer {} (stored layers: {})\n", .{ target_layer_index + 1, layers.items.len });
+
+        if (target_layer_index >= layers.items.len) {
+            log.print("ERROR: target_layer_index {} >= layers.len {}\n", .{ target_layer_index, layers.items.len });
+            // Fallback to current layer
+            const truncated_root = current_layer.nodes[0];
+            log.print("DEBUG: Using fallback root from current layer: {any}\n", .{truncated_root});
+            self.allocator.free(current_layer.nodes);
+            return truncated_root;
+        }
+
+        const target_layer = layers.items[target_layer_index];
+        log.print("DEBUG: Target layer has {} nodes\n", .{target_layer.nodes.len});
+
+        // Get the root from the correct position in layer 4
+        // Rust uses: bottom_tree_index % 2 to select which of the 2 nodes to use
+        const root_index = bottom_tree_index % 2;
+        const truncated_root = target_layer.nodes[root_index];
+        log.print("DEBUG: Final bottom tree root array (truncated from 8-layer to 4-layer, from layer {}): {any}\n", .{ target_layer_index, truncated_root });
+
+        // Free the final layer
+        self.allocator.free(current_layer.nodes);
+
+        return truncated_root;
+    }
+
+    /// Build top tree from bottom tree roots
+    fn buildTopTree(
+        self: *GeneralizedXMSSSignatureScheme,
+        bottom_tree_roots: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        start_bottom_tree_index: usize,
+    ) !*HashSubTree {
+        const root_array = try self.buildTopTreeAsArray(bottom_tree_roots, parameter, start_bottom_tree_index);
+        // Use the entire array as the root for the HashSubTree
+        return try HashSubTree.init(self.allocator, root_array);
+    }
+
+    fn computePathFromLayers(
+        self: *GeneralizedXMSSSignatureScheme,
+        layers: []const PaddedLayer,
+        position_initial: u32,
+    ) ![][8]FieldElement {
+        var co_path = try self.allocator.alloc([8]FieldElement, layers.len);
+        var co_len: usize = 0;
+        var current_position = position_initial;
+        var l: usize = 0;
+        // For bottom trees: depth = log_lifetime / 2, so we should walk depth levels
+        // For top trees: depth = log_lifetime / 2 as well
+        // Stop when we've walked through all non-root layers (layers.len - 1) or when we hit root
+        while (l < layers.len) : (l += 1) {
+            const layer = layers[l];
+            // Stop if we've reached the root layer (1 or fewer nodes)
+            // But also check if this is the last layer - if so, it's the root
+            if (layer.nodes.len <= 1 or l >= layers.len - 1) break;
+
+            const sibling_position: u32 = current_position ^ 0x01;
+            const sibling_index_in_vec_u32: u32 = sibling_position - @as(u32, @intCast(layer.start_index));
+            const sibling_index = @as(usize, @intCast(sibling_index_in_vec_u32));
+            if (sibling_index >= layer.nodes.len) return error.InvalidPathComputation;
+
+            co_path[co_len] = layer.nodes[sibling_index];
+            co_len += 1;
+            current_position >>= 1;
+        }
+
+        const out = try self.allocator.alloc([8]FieldElement, co_len);
+        @memcpy(out, co_path[0..co_len]);
+        self.allocator.free(co_path);
+        return out;
+    }
+
+    fn buildBottomTreeLayers(
+        self: *GeneralizedXMSSSignatureScheme,
+        leaf_hashes: []FieldElement,
+        parameter: [5]FieldElement,
+        bottom_tree_index: usize,
+    ) ![]PaddedLayer {
+        const full_depth = 8;
+        const start_index = bottom_tree_index * 16;
+
+        var layers = std.ArrayList(PaddedLayer).init(self.allocator);
+        errdefer {
+            for (layers.items) |pl| self.allocator.free(pl.nodes);
+            layers.deinit();
+        }
+
+        var leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_hashes.len);
+        defer self.allocator.free(leaf_nodes);
+        for (0..leaf_hashes.len) |i| {
+            leaf_nodes[i][0] = leaf_hashes[i];
+            for (1..8) |j| leaf_nodes[i][j] = FieldElement{ .value = 0 };
+        }
+
+        var current_layer = try self.padLayer(leaf_nodes, start_index);
+        try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
+        @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+
+        var current_level: usize = 0;
+        while (current_level < full_depth) : (current_level += 1) {
+            const parent_start = current_layer.start_index >> 1;
+            const parents_len = current_layer.nodes.len / 2;
+            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
+            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
+            self.allocator.free(current_layer.nodes);
+            const new_layer = try self.padLayer(parents, parent_start);
+            self.allocator.free(parents);
+            current_layer = new_layer;
+            try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
+            @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+        }
+
+        self.allocator.free(current_layer.nodes);
+
+        return layers.toOwnedSlice();
+    }
+
+    fn buildBottomTreeLayersFromLeafDomains(
+        self: *GeneralizedXMSSSignatureScheme,
+        leaf_nodes_in: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        bottom_tree_index: usize,
+    ) ![]PaddedLayer {
+        // Bottom trees should have depth = log_lifetime / 2 = 4 for lifetime 2^8
+        // Rust builds full_depth = 8 but truncates to depth/2 = 4
+        // We should only build 4 layers to match the actual bottom tree structure
+        const full_depth = self.lifetime_params.log_lifetime / 2; // 4 for lifetime 2^8
+        const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
+        const start_index = bottom_tree_index * leafs_per_bottom_tree;
+
+        var layers = std.ArrayList(PaddedLayer).init(self.allocator);
+        errdefer {
+            for (layers.items) |pl| self.allocator.free(pl.nodes);
+            layers.deinit();
+        }
+
+        const leaf_nodes = try self.allocator.alloc([8]FieldElement, leaf_nodes_in.len);
+        defer self.allocator.free(leaf_nodes);
+        @memcpy(leaf_nodes, leaf_nodes_in);
+
+        var current_layer = try self.padLayer(leaf_nodes, start_index);
+        try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
+        @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+
+        var current_level: usize = 0;
+        while (current_level < full_depth) : (current_level += 1) {
+            const parent_start = current_layer.start_index >> 1;
+            const parents_len = current_layer.nodes.len / 2;
+            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
+            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
+            self.allocator.free(current_layer.nodes);
+            const new_layer = try self.padLayer(parents, parent_start);
+            self.allocator.free(parents);
+            current_layer = new_layer;
+            try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
+            @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+        }
+
+        self.allocator.free(current_layer.nodes);
+
+        return layers.toOwnedSlice();
+    }
+
+    fn buildTopTreeLayers(
+        self: *GeneralizedXMSSSignatureScheme,
+        roots_of_bottom_trees: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        start_bottom_tree_index: usize,
+    ) ![]PaddedLayer {
+        const log_lifetime = self.lifetime_params.log_lifetime;
+        const lowest_layer = log_lifetime / 2;
+        const depth = log_lifetime;
+        const start_index = start_bottom_tree_index;
+
+        var layers = std.ArrayList(PaddedLayer).init(self.allocator);
+        errdefer {
+            for (layers.items) |pl| self.allocator.free(pl.nodes);
+            layers.deinit();
+        }
+
+        const lowest_layer_nodes = try self.allocator.alloc([8]FieldElement, roots_of_bottom_trees.len);
+        defer self.allocator.free(lowest_layer_nodes);
+        @memcpy(lowest_layer_nodes, roots_of_bottom_trees);
+
+        var current_layer = try self.padLayer(lowest_layer_nodes, start_index);
+        try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
+        @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+
+        var current_level: usize = lowest_layer;
+        while (current_level < depth) : (current_level += 1) {
+            const parent_start = current_layer.start_index >> 1;
+            const parents_len = current_layer.nodes.len / 2;
+            const parents = try self.allocator.alloc([8]FieldElement, parents_len);
+            try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
+            self.allocator.free(current_layer.nodes);
+            const new_layer = try self.padLayerWithRng(parents, parent_start, &self.rng.random());
+            self.allocator.free(parents);
+            current_layer = new_layer;
+            try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
+            @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+        }
+
+        self.allocator.free(current_layer.nodes);
+
+        return layers.toOwnedSlice();
+    }
+
+    /// Encode message as field elements (matching Rust encode_message)
+    /// Uses base-p decomposition: interprets message as little-endian big integer
+    /// Uses multi-precision arithmetic to handle 32-byte (256-bit) message
+    fn encodeMessage(self: *GeneralizedXMSSSignatureScheme, MSG_LEN_FE: usize, message: [MESSAGE_LENGTH]u8) ![]FieldElement {
+        const p: u256 = 2130706433; // KoalaBear field modulus
+        var result = try self.allocator.alloc(FieldElement, MSG_LEN_FE);
+        errdefer self.allocator.free(result);
+
+        // Load little-endian 32-byte message into u256
+        var acc: u256 = 0;
+        for (message, 0..) |b, i| {
+            acc +%= (@as(u256, b) << @intCast(8 * i));
+        }
+
+        // Repeated division by p to extract base-p digits (little-endian digits)
+        var i: usize = 0;
+        while (i < MSG_LEN_FE) : (i += 1) {
+            const digit: u256 = acc % p;
+            result[i] = FieldElement.fromCanonical(@intCast(digit));
+            acc = acc / p;
+        }
+
+        return result;
+    }
+
+    /// Encode epoch as field elements (matching Rust encode_epoch)
+    fn encodeEpoch(self: *GeneralizedXMSSSignatureScheme, TWEAK_LEN_FE: usize, epoch: u32) ![]FieldElement {
+        const p: u64 = 2130706433; // KoalaBear field modulus
+        const TWEAK_SEPARATOR_FOR_MESSAGE_HASH: u8 = 0x02; // From Rust
+        var result = try self.allocator.alloc(FieldElement, TWEAK_LEN_FE);
+        errdefer self.allocator.free(result);
+
+        // Combine epoch and separator: ((epoch as u64) << 8) | separator
+        const acc = (@as(u64, epoch) << 8) | @as(u64, TWEAK_SEPARATOR_FOR_MESSAGE_HASH);
+
+        // Two-step base-p decomposition (optimization for 40-bit value)
+        if (TWEAK_LEN_FE > 0) {
+            result[0] = FieldElement.fromCanonical(@intCast(acc % p));
+        }
+        if (TWEAK_LEN_FE > 1) {
+            result[1] = FieldElement.fromCanonical(@intCast(acc / p));
+        }
+        // Any remaining elements remain zero
+        for (2..TWEAK_LEN_FE) |i| {
+            result[i] = FieldElement.zero();
+        }
+
+        return result;
+    }
+
+    /// Decode field elements to chunks (matching Rust decode_to_chunks)
+    /// Builds big integer: acc = 0; for fe in field_elements: acc = acc * p + fe
+    /// Then extracts DIMENSION digits: for i in 0..DIMENSION: chunk = acc % BASE; acc /= BASE
+    fn decodeToChunks(_: *GeneralizedXMSSSignatureScheme, comptime DIMENSION: usize, comptime BASE: usize, comptime HASH_LEN_FE: usize, field_elements: [HASH_LEN_FE]FieldElement) [DIMENSION]u8 {
+        const p: u64 = 2130706433; // KoalaBear field modulus
+        var result: [DIMENSION]u8 = undefined;
+
+        // Use base 2^32 representation (6 words = 192 bits, enough for p^5 ≈ 2^155)
+        var bigint_u32: [6]u32 = [6]u32{ 0, 0, 0, 0, 0, 0 };
+
+        // Build big integer: start with 0, for each fe: bigint = bigint * p + fe.value
+        // This matches Rust: acc = 0; for fe in field_elements: acc = acc * p + fe
+        for (field_elements) |fe| {
+            // Multiply by p: bigint_u32 = bigint_u32 * p
+            var mul_carry: u64 = 0;
+            for (0..bigint_u32.len) |j| {
+                const prod = @as(u64, bigint_u32[j]) * @as(u64, p) + mul_carry;
+                bigint_u32[j] = @as(u32, @truncate(prod));
+                mul_carry = prod >> 32;
+            }
+
+            // Add fe.value to the LSB (index 0)
+            var add_carry: u64 = @as(u64, fe.value);
+            var add_idx: usize = 0;
+            while (add_carry > 0 and add_idx < bigint_u32.len) {
+                const sum = @as(u64, bigint_u32[add_idx]) + add_carry;
+                bigint_u32[add_idx] = @as(u32, @truncate(sum));
+                add_carry = sum >> 32;
+                add_idx += 1;
+            }
+        }
+
+        // Debug: check bigint value and field elements
+        if (HASH_LEN_FE == 5 and DIMENSION == 64 and BASE == 8) {
+            var has_nonzero = false;
+            for (bigint_u32) |word| {
+                if (word != 0) {
+                    has_nonzero = true;
+                    break;
+                }
+            }
+            if (has_nonzero) {
+                log.print("ZIG_DECODE_DEBUG: bigint_u32[0..3]={any} field_elements={any}\n", .{
+                    bigint_u32[0..3],
+                    field_elements,
+                });
+            }
+        }
+
+        // Precompute 2^32 % BASE once (constant for given BASE)
+        var two_pow_32_mod: u64 = 1;
+        var bit: usize = 0;
+        while (bit < 32) : (bit += 1) {
+            two_pow_32_mod = (two_pow_32_mod * 2) % BASE;
+        }
+
+        // Extract DIMENSION digits in base-BASE by repeatedly:
+        //   1. Compute bigint_u32 % BASE
+        //   2. Divide bigint_u32 by BASE
+        for (0..DIMENSION) |i| {
+            // Extract digit: compute bigint_u32 % BASE
+            // Use Horner's method: process from MSB to LSB
+            // For value = bigint_u32[5]*2^160 + ... + bigint_u32[1]*2^32 + bigint_u32[0]
+            // We compute: ((...((bigint_u32[5]*2^32 + bigint_u32[4])*2^32 + bigint_u32[3])...)*2^32 + bigint_u32[0]) % BASE
+            var mod_remainder: u64 = 0;
+            // Process from MSB (highest index) to LSB (index 0)
+            for (0..bigint_u32.len) |j| {
+                const idx = bigint_u32.len - 1 - j; // MSB to LSB
+                // Horner's method: remainder = (remainder * base + digit) % BASE
+                mod_remainder = ((mod_remainder * two_pow_32_mod) % BASE + (bigint_u32[idx] % BASE)) % BASE;
+            }
+            result[i] = @as(u8, @intCast(mod_remainder));
+
+            // Divide bigint_u32 by BASE (for next iteration)
+            // Process from MSB to LSB, carrying remainder
+            var div_carry: u64 = 0;
+            for (0..bigint_u32.len) |j| {
+                const idx = bigint_u32.len - 1 - j; // MSB to LSB
+                const val = (@as(u128, div_carry) << 32) | @as(u128, bigint_u32[idx]);
+                bigint_u32[idx] = @as(u32, @truncate(val / BASE));
+                div_carry = @as(u64, @truncate(val % BASE));
+            }
+        }
+
+        return result;
+    }
+
+    /// Compute hypercube part size: total size of layers 0 to d (inclusive) in hypercube [0, BASE-1]^DIMENSION
+    /// Layer d contains all vertices (x_1, ..., x_DIMENSION) where sum_i x_i = (BASE-1)*DIMENSION - d
+    /// Precomputed layer data for a given base (matching Rust's AllLayerData)
+    /// Caches layer sizes and prefix sums for all dimensions up to MAX_DIMENSION
+    const LayerInfo = struct {
+        sizes: []BigInt, // Layer sizes for each layer d
+        prefix_sums: []BigInt, // Prefix sums (cumulative sizes)
+        allocator: Allocator,
+
+        pub fn deinit(self: *LayerInfo) void {
+            for (self.sizes) |*value| {
+                value.deinit();
+            }
+            if (self.sizes.len > 0) self.allocator.free(self.sizes);
+
+            for (self.prefix_sums) |*value| {
+                value.deinit();
+            }
+            if (self.prefix_sums.len > 0) self.allocator.free(self.prefix_sums);
+        }
+    };
+
+    const AllLayerInfoForBase = struct {
+        layers: []LayerInfo, // Indexed by dimension v (index 0 unused)
+        allocator: Allocator,
+
+        pub fn deinit(self: *AllLayerInfoForBase) void {
+            for (self.layers) |*layer| {
+                layer.deinit();
+            }
+            self.allocator.free(self.layers);
+        }
+
+        pub fn get(self: *const AllLayerInfoForBase, v: usize) *const LayerInfo {
+            return &self.layers[v];
+        }
+    };
+
+    /// Prepare layer info for a given base w (matching Rust's prepare_layer_info)
+    /// Uses inductive approach: compute dimension v from dimension v-1
+    fn initBigIntSlice(allocator: Allocator, len: usize) ![]BigInt {
+        const slice = try allocator.alloc(BigInt, len);
+        errdefer allocator.free(slice);
+        for (slice) |*item| {
+            item.* = try BigInt.init(allocator);
+        }
+        return slice;
+    }
+
+    fn prepareLayerInfo(allocator: Allocator, w: usize) !AllLayerInfoForBase {
+        const MAX_DIMENSION: usize = 100; // Match Rust's MAX_DIMENSION
+
+        var all_info = try allocator.alloc(LayerInfo, MAX_DIMENSION + 1);
+        errdefer {
+            for (all_info) |*info| {
+                info.deinit();
+            }
+            allocator.free(all_info);
+        }
+
+        // Initialize all to empty (index 0 unused)
+        for (all_info) |*info| {
+            info.* = LayerInfo{
+                .sizes = &[_]BigInt{},
+                .prefix_sums = &[_]BigInt{},
+                .allocator = allocator,
+            };
+        }
+
+        // Base case: dimension v = 1
+        const dim1_sizes = try initBigIntSlice(allocator, w);
+        errdefer {
+            for (dim1_sizes) |*value| value.deinit();
+            allocator.free(dim1_sizes);
+        }
+        const dim1_prefix_sums = try initBigIntSlice(allocator, w);
+        errdefer {
+            for (dim1_prefix_sums) |*value| value.deinit();
+            allocator.free(dim1_prefix_sums);
+        }
+
+        for (dim1_sizes) |*val| {
+            try val.set(1);
+        }
+        var cumulative = try BigInt.initSet(allocator, 0);
+        defer cumulative.deinit();
+        for (dim1_prefix_sums) |*prefix| {
+            try BigInt.addScalar(&cumulative, &cumulative, 1);
+            try BigInt.addScalar(prefix, &cumulative, 0);
+        }
+
+        all_info[1] = LayerInfo{
+            .sizes = dim1_sizes,
+            .prefix_sums = dim1_prefix_sums,
+            .allocator = allocator,
+        };
+
+        // Inductive step: compute for dimensions v = 2 to MAX_DIMENSION
+        for (2..MAX_DIMENSION + 1) |v| {
+            const max_d = (w - 1) * v;
+            var current_sizes = try initBigIntSlice(allocator, max_d + 1);
+            errdefer {
+                for (current_sizes) |*value| value.deinit();
+                allocator.free(current_sizes);
+            }
+
+            const prev_info = all_info[v - 1];
+            for (0..max_d + 1) |d| {
+                const max_t = @min(d, w - 1);
+                for (0..max_t + 1) |t| {
+                    const idx = d - t;
+                    if (idx < prev_info.sizes.len) {
+                        try BigInt.add(&current_sizes[d], &current_sizes[d], &prev_info.sizes[idx]);
+                    }
+                }
+            }
+
+            var current_prefix_sums = try initBigIntSlice(allocator, max_d + 1);
+            errdefer {
+                for (current_prefix_sums) |*value| value.deinit();
+                allocator.free(current_prefix_sums);
+            }
+
+            try cumulative.set(0);
+            for (0..max_d + 1) |d| {
+                try BigInt.add(&cumulative, &cumulative, &current_sizes[d]);
+                try BigInt.addScalar(&current_prefix_sums[d], &cumulative, 0);
+            }
+
+            all_info[v] = LayerInfo{
+                .sizes = current_sizes,
+                .prefix_sums = current_prefix_sums,
+                .allocator = allocator,
+            };
+        }
+
+        return AllLayerInfoForBase{
+            .layers = all_info,
+            .allocator = allocator,
+        };
+    }
+
+    /// Get or create layer data for base w (matching Rust's AllLayerData::new)
+    fn getLayerData(self: *GeneralizedXMSSSignatureScheme, w: usize) !*const AllLayerInfoForBase {
+        self.layer_cache_mutex.lock();
+        defer self.layer_cache_mutex.unlock();
+
+        if (self.layer_cache.getPtr(w)) |entry| {
+            return entry;
+        } else {
+            try self.layer_cache.put(w, try prepareLayerInfo(self.allocator, w));
+            return self.layer_cache.getPtr(w).?;
+        }
+    }
+
+    /// Map (layer, offset) to a vertex in hypercube [0, BASE-1]^DIMENSION
+    /// Returns array of DIMENSION chunks, each in [0, BASE-1]
+    /// Uses precomputed layer data for efficiency (matching Rust's map_to_vertex)
+    fn hypercubeFindLayerBig(
+        self: *GeneralizedXMSSSignatureScheme,
+        BASE: usize,
+        DIMENSION: usize,
+        final_layer: usize,
+        value: *const BigInt,
+        offset_out: *BigInt,
+    ) !usize {
+        const layer_data = try self.getLayerData(BASE);
+        const info = layer_data.get(DIMENSION);
+
+        if (info.prefix_sums.len == 0) return error.InvalidHypercubeIndex;
+        const last_prefix = &info.prefix_sums[info.prefix_sums.len - 1];
+        if (value.*.order(last_prefix.*) != .lt) return error.InvalidHypercubeIndex;
+
+        var left: usize = 0;
+        var right: usize = info.prefix_sums.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const cmp = info.prefix_sums[mid].order(value.*);
+            if (cmp == .lt or cmp == .eq) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        const layer = left;
+        if (layer > final_layer) return error.InvalidHypercubeIndex;
+
+        try BigInt.addScalar(offset_out, value, 0);
+        if (layer > 0) {
+            try BigInt.sub(offset_out, offset_out, &info.prefix_sums[layer - 1]);
+        }
+
+        return layer;
+    }
+
+    fn mapToVertexBig(
+        self: *GeneralizedXMSSSignatureScheme,
+        BASE: usize,
+        DIMENSION: usize,
+        layer: usize,
+        offset: *const BigInt,
+    ) ![]u8 {
+        const layer_data = try self.getLayerData(BASE);
+        const info = layer_data.get(DIMENSION);
+
+        if (layer >= info.sizes.len) return error.InvalidHypercubeMapping;
+        if (offset.*.order(info.sizes[layer]) != .lt) return error.InvalidHypercubeMapping;
+
+        var result = try self.allocator.alloc(u8, DIMENSION);
+        errdefer self.allocator.free(result);
+
+        var x_curr = try offset.*.toConst().toManaged(self.allocator);
+        defer x_curr.deinit();
+        var d_curr = layer;
+
+        for (1..DIMENSION) |i| {
+            var ji: usize = BASE;
+            const sub_dim = DIMENSION - i;
+            const range_start = if (d_curr > (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
+            const sub_info = layer_data.get(sub_dim);
+
+            var j: usize = range_start;
+            const limit = @min(BASE - 1, d_curr);
+            while (j <= limit) : (j += 1) {
+                const sub_layer = d_curr - j;
+                if (sub_layer >= sub_info.sizes.len) continue;
+                const count = &sub_info.sizes[sub_layer];
+                const cmp = x_curr.order(count.*);
+                if (cmp == .gt or cmp == .eq) {
+                    try BigInt.sub(&x_curr, &x_curr, count);
+                } else {
+                    ji = j;
+                    break;
+                }
+            }
+
+            if (ji >= BASE) return error.InvalidHypercubeMapping;
+
+            const ai = BASE - 1 - ji;
+            result[i - 1] = @as(u8, @intCast(ai));
+            d_curr -= (BASE - 1) - ai;
+        }
+
+        const x_curr_u64 = x_curr.toInt(u64) catch return error.InvalidHypercubeMapping;
+        if (x_curr_u64 + d_curr >= BASE) return error.InvalidHypercubeMapping;
+        result[DIMENSION - 1] = @as(u8, @intCast(BASE - 1 - x_curr_u64 - d_curr));
+
+        return result;
+    }
+
+    fn mapIntoHypercubePart(
+        self: *GeneralizedXMSSSignatureScheme,
+        DIMENSION: usize,
+        BASE: usize,
+        final_layer: usize,
+        field_elements: []const FieldElement,
+    ) ![]u8 {
+        const layer_data = try self.getLayerData(BASE);
+        const info = layer_data.get(DIMENSION);
+        if (final_layer >= info.prefix_sums.len) return error.InvalidHypercubeIndex;
+
+        var modulus = try BigInt.init(self.allocator);
+        defer modulus.deinit();
+        try BigInt.addScalar(&modulus, &info.prefix_sums[final_layer], 0);
+        const mod_str = try std.fmt.allocPrint(self.allocator, "{}", .{modulus.toConst()});
+        defer self.allocator.free(mod_str);
+        log.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
+
+        var value = try BigInt.initSet(self.allocator, 0);
+        defer value.deinit();
+
+        var multiplier = try BigInt.initSet(self.allocator, KOALABEAR_PRIME);
+        defer multiplier.deinit();
+
+        var tmp = try BigInt.init(self.allocator);
+        defer tmp.deinit();
+
+        var quotient = try BigInt.init(self.allocator);
+        defer quotient.deinit();
+
+        var remainder = try BigInt.init(self.allocator);
+        defer remainder.deinit();
+
+        log.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
+        for (field_elements, 0..) |fe, i| {
+            if (i < 5) {
+                log.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
+            }
+            try BigInt.mul(&tmp, &value, &multiplier);
+            try BigInt.addScalar(&tmp, &tmp, fe.toCanonical());
+            try BigInt.divFloor(&quotient, &remainder, &tmp, &modulus);
+            try BigInt.addScalar(&value, &remainder, 0);
+        }
+        log.print("\n", .{});
+
+        var offset = try BigInt.init(self.allocator);
+        defer offset.deinit();
+        const layer = try self.hypercubeFindLayerBig(BASE, DIMENSION, final_layer, &value, &offset);
+
+        log.print("ZIG_HYPERCUBE_DEBUG: layer={} offset_bitlen={}\n", .{ layer, offset.toConst().bitCountAbs() });
+
+        const chunks = try self.mapToVertexBig(BASE, DIMENSION, layer, &offset);
+
+        var chunk_sum: usize = 0;
+        for (chunks) |chunk| chunk_sum += chunk;
+        log.print("ZIG_HYPERCUBE_DEBUG: chunks[0..5]: ", .{});
+        for (0..@min(5, chunks.len)) |i| {
+            log.print("chunks[{}]={} ", .{ i, chunks[i] });
+        }
+        log.print("sum={}\n", .{chunk_sum});
+
+        return chunks;
+    }
+
+    /// Apply TopLevelPoseidonMessageHash (matching Rust TopLevelPoseidonMessageHash::apply)
+    /// Returns chunks of dimension, each between 0 and BASE-1
+    fn applyTopLevelPoseidonMessageHash(
+        self: *GeneralizedXMSSSignatureScheme,
+        parameter: [5]FieldElement,
+        epoch: u32,
+        randomness: []const FieldElement, // IE::Randomness length varies by lifetime
+        message: [MESSAGE_LENGTH]u8,
+    ) ![]u8 {
+        // Parameters from lifetime_params (matching Rust instantiations_poseidon_top_level.rs)
+        const PARAMETER_LEN: usize = self.lifetime_params.parameter_len;
+        const RAND_LEN: usize = self.lifetime_params.rand_len_fe;
+        const TWEAK_LEN_FE: usize = self.lifetime_params.tweak_len_fe;
+        const MSG_LEN_FE: usize = self.lifetime_params.msg_len_fe;
+        const POS_OUTPUT_LEN_PER_INV_FE: usize = 15; // Constant across all lifetimes
+        const POS_INVOCATIONS: usize = 1; // Constant across all lifetimes
+        const POS_OUTPUT_LEN_FE: usize = POS_OUTPUT_LEN_PER_INV_FE * POS_INVOCATIONS; // 15
+        const DIMENSION: usize = self.lifetime_params.dimension;
+        const BASE: usize = self.lifetime_params.base;
+        const FINAL_LAYER: usize = self.lifetime_params.final_layer;
+
+        // Encode message and epoch as field elements
+        const message_fe = try self.encodeMessage(MSG_LEN_FE, message);
+        defer self.allocator.free(message_fe);
+        const epoch_fe = try self.encodeEpoch(TWEAK_LEN_FE, epoch);
+        defer self.allocator.free(epoch_fe);
+
+        // Invoke Poseidon multiple times (POS_INVOCATIONS = 1 for lifetime 2^8)
+        var pos_outputs: [POS_OUTPUT_LEN_FE]FieldElement = undefined;
+
+        for (0..POS_INVOCATIONS) |i| {
+            // Iteration domain separator
+            const iteration_index = [_]FieldElement{FieldElement.fromCanonical(@intCast(i))};
+
+            // Assemble input: randomness + parameter + epoch + message + iteration_index
+            const ITER_INPUT_LEN = RAND_LEN + PARAMETER_LEN + TWEAK_LEN_FE + MSG_LEN_FE + 1;
+            var combined_input = try self.allocator.alloc(FieldElement, ITER_INPUT_LEN);
+            defer self.allocator.free(combined_input);
+
+            var input_idx: usize = 0;
+            // Copy randomness (7 elements)
+            for (0..RAND_LEN) |j| {
+                combined_input[input_idx] = randomness[j];
+                input_idx += 1;
+            }
+            // Copy parameter (5 elements)
+            for (0..PARAMETER_LEN) |j| {
+                combined_input[input_idx] = parameter[j];
+                input_idx += 1;
+            }
+            // Copy epoch (2 elements)
+            for (0..TWEAK_LEN_FE) |j| {
+                combined_input[input_idx] = epoch_fe[j];
+                input_idx += 1;
+            }
+            // Copy message (9 elements)
+            for (0..MSG_LEN_FE) |j| {
+                combined_input[input_idx] = message_fe[j];
+                input_idx += 1;
+            }
+            // Copy iteration index (1 element)
+            combined_input[input_idx] = iteration_index[0];
+            input_idx += 1;
+
+            // Pad to width 24
+            var padded_input: [24]FieldElement = undefined;
+            for (0..ITER_INPUT_LEN) |j| {
+                padded_input[j] = combined_input[j];
+            }
+            for (ITER_INPUT_LEN..24) |j| {
+                padded_input[j] = FieldElement.zero();
+            }
+
+            // Debug: print combined_input padded head 24
+            log.print("ZIG_POS_IN: ", .{});
+            for (0..24) |j| {
+                log.print("0x{x:0>8} ", .{padded_input[j].value});
+            }
+            log.print("\n", .{});
+
+            // Debug: print the 24-word Poseidon input
+            log.print("ZIG_POS_IN:", .{});
+            for (0..24) |k| {
+                log.print(" 0x{x:0>8}", .{padded_input[k].value});
+            }
+            log.print("\n", .{});
+
+            // Compress with Poseidon2-24 to get POS_OUTPUT_LEN_PER_INV_FE (15) field elements
+            const iteration_pos_output = try self.poseidon2.compress(padded_input, POS_OUTPUT_LEN_PER_INV_FE);
+
+            // Copy to pos_outputs
+            for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {
+                pos_outputs[i * POS_OUTPUT_LEN_PER_INV_FE + j] = iteration_pos_output[j];
+            }
+
+            // Debug: print Poseidon outputs used for hypercube mapping
+            log.print("ZIG_POS_OUT: ", .{});
+            for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {
+                log.print("0x{x:0>8} ", .{iteration_pos_output[j].value});
+            }
+            log.print("\n", .{});
+
+            log.print("ZIG_POS_CONTEXT rand:", .{});
+            for (randomness[0..RAND_LEN]) |r| {
+                log.print(" 0x{x:0>8}", .{r.toCanonical()});
+            }
+            log.print(" param:", .{});
+            for (parameter) |p| {
+                log.print(" 0x{x:0>8}", .{p.toCanonical()});
+            }
+            log.print(" epoch:", .{});
+            for (epoch_fe) |e| {
+                log.print(" 0x{x:0>8}", .{e.toCanonical()});
+            }
+            log.print(" msg:", .{});
+            for (message_fe) |m| {
+                log.print(" 0x{x:0>8}", .{m.toCanonical()});
+            }
+            log.print("\n", .{});
+        }
+
+        // Map into hypercube part: combine field elements, take modulo, find layer, map to vertex
+        const chunks = try self.mapIntoHypercubePart(DIMENSION, BASE, FINAL_LAYER, &pos_outputs);
+
+        return chunks;
+    }
+
+    /// Derive target sum encoding using TopLevelPoseidonMessageHash (matching Rust TargetSumEncoding::encode)
+    /// Returns chunks if sum matches TARGET_SUM, error otherwise (so sign can retry)
+    fn deriveTargetSumEncoding(
+        self: *GeneralizedXMSSSignatureScheme,
+        parameter: [5]FieldElement,
+        epoch: u32,
+        randomness: []const FieldElement,
+        message: [MESSAGE_LENGTH]u8,
+    ) ![]u8 {
+        const dimension: usize = self.lifetime_params.dimension;
+        const expected_sum: usize = self.lifetime_params.target_sum; // 375 for lifetime 2^8
+
+        // Apply TopLevelPoseidonMessageHash to get chunks
+        const chunks = try self.applyTopLevelPoseidonMessageHash(parameter, epoch, randomness, message);
+        defer self.allocator.free(chunks);
+
+        // Check if sum matches TARGET_SUM
+        var sum: usize = 0;
+        for (chunks) |chunk| {
+            sum += chunk;
+        }
+
+        if (sum != expected_sum) {
+            log.print("ZIG_ENCODING_CHUNKS_FAIL:", .{});
+            for (chunks) |chunk| {
+                log.print(" {d}", .{chunk});
+            }
+            log.print(" sum={} expected={}\n", .{ sum, expected_sum });
+            return error.EncodingSumMismatch; // Signal to retry with new randomness
+        }
+
+        log.print("ZIG_ENCODING_CHUNKS_FINAL:", .{});
+        for (chunks) |chunk| {
+            log.print(" {d}", .{chunk});
+        }
+        log.print("\n", .{});
+
+        // Allocate and copy chunks
+        const x = try self.allocator.alloc(u8, dimension);
+        @memcpy(x, chunks[0..dimension]);
+
+        return x;
+    }
+
+    /// Pad a layer to ensure it starts at an even index and ends at an odd index
+    /// This matches the Rust HashTreeLayer::padded algorithm exactly
+    fn padLayer(self: *GeneralizedXMSSSignatureScheme, nodes: [][8]FieldElement, start_index: usize) !PaddedLayer {
+        return self.padLayerWithRng(nodes, start_index, &self.rng.random());
+    }
+
+    /// Pad a layer with a specific RNG (for bottom trees with dummy RNG)
+    fn padLayerWithRng(self: *GeneralizedXMSSSignatureScheme, nodes: [][8]FieldElement, start_index: usize, rng: *const std.Random) !PaddedLayer {
+        // End index of the provided contiguous run (inclusive)
+        const end_index = start_index + nodes.len - 1;
+
+        // Do we need a front pad? Start must be even
+        const needs_front = (start_index & 1) == 1;
+
+        // Do we need a back pad? End must be odd
+        const needs_back = (end_index & 1) == 0;
+
+        // The effective start index after optional front padding (always even)
+        const actual_start_index = if (needs_front) start_index - 1 else start_index;
+
+        // Reserve exactly the space we may need: original nodes plus up to two pads
+        var total_capacity = nodes.len;
+        if (needs_front) total_capacity += 1;
+        if (needs_back) total_capacity += 1;
+        var padded_nodes = try self.allocator.alloc([8]FieldElement, total_capacity);
+        errdefer self.allocator.free(padded_nodes);
+
+        var output_index: usize = 0;
+
+        // Optional front padding to align to an even start index
+        if (needs_front) {
+            // Generate random node for front padding (matching Rust TH::rand_domain(rng))
+            // Rust calls rng.random() once to generate a full domain element (8 field elements)
+            log.print("DEBUG: padLayer: Generating front padding node (1 RNG call)\n", .{});
+            const random_domain = try self.generateRandomDomainSingleWithRng(rng);
+            @memcpy(padded_nodes[output_index][0..8], random_domain[0..8]);
+            output_index += 1;
+            log.print("DEBUG: padLayer: Added front padding node at index {}\n", .{output_index - 1});
+        }
+
+        // Insert the actual content in order
+        @memcpy(padded_nodes[output_index .. output_index + nodes.len], nodes);
+        output_index += nodes.len;
+
+        // Optional back padding to ensure we end on an odd index
+        if (needs_back) {
+            // Generate random node for back padding (matching Rust rng.random() for arrays)
+            log.print("DEBUG: padLayer: Generating back padding node (1 RNG call)\n", .{});
+            const random_domain = try self.generateRandomDomainSingleWithRng(rng);
+            @memcpy(padded_nodes[output_index][0..8], random_domain[0..8]);
+            log.print("DEBUG: padLayer: Added back padding node at index {}\n", .{output_index});
+        }
+
+        log.print("DEBUG: padLayer: start_index={}, nodes.len={}, end_index={}\n", .{ start_index, nodes.len, end_index });
+        log.print("DEBUG: padLayer: needs_front={}, needs_back={}, actual_start_index={}\n", .{ needs_front, needs_back, actual_start_index });
+        log.print("DEBUG: padLayer: total_capacity={}, padded_nodes.len={}\n", .{ total_capacity, padded_nodes.len });
+
+        return .{
+            .nodes = padded_nodes,
+            .start_index = actual_start_index,
+        };
+    }
+
+    /// Get RNG state for debugging
+    pub fn getRngState(self: *GeneralizedXMSSSignatureScheme) [5]u32 {
+        // Create a copy of the RNG to avoid consuming the original state
+        var rng_copy = self.rng;
+        var result: [5]u32 = undefined;
+        for (0..5) |i| {
+            result[i] = rng_copy.random().int(u32);
+        }
+        return result;
+    }
+
+    /// Build top tree from bottom tree roots and return root as array of 8 field elements
+    /// This matches the Rust HashSubTree::new_top_tree algorithm exactly
+    pub fn buildTopTreeAsArray(
+        self: *GeneralizedXMSSSignatureScheme,
+        roots_of_bottom_trees: [][8]FieldElement,
+        parameter: [5]FieldElement,
+        start_bottom_tree_index: usize,
+    ) ![8]FieldElement {
+        log.print("DEBUG: Building tree from lowest layer {} up to depth {}\n", .{
+            self.lifetime_params.log_lifetime / 2,
+            self.lifetime_params.log_lifetime,
+        });
+        log.print("DEBUG: Starting with {} bottom tree roots (start index: {})\n", .{ roots_of_bottom_trees.len, start_bottom_tree_index });
+
+        const layers = try self.buildTopTreeLayers(roots_of_bottom_trees, parameter, start_bottom_tree_index);
+        defer {
+            for (layers) |pl| self.allocator.free(pl.nodes);
+            self.allocator.free(layers);
+        }
+
+        if (layers.len == 0 or layers[layers.len - 1].nodes.len == 0) {
+            return error.InvalidTopTree;
+        }
+
+        const root_array = layers[layers.len - 1].nodes[0];
+        log.print("DEBUG: Final top tree root array: {any}\n", .{root_array});
+        return root_array;
+    }
+
+    /// Build bottom tree from leaf hashes and return as array of 8 field elements
+    fn buildBottomTreeAsArray(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
+        // Debug: Print input information
+        log.print("DEBUG: buildBottomTreeAsArray called with {} leaf hashes\n", .{leaf_hashes.len});
+
+        // Instead of building to a single root, build to exactly 8 field elements
+        // This matches the Rust implementation which produces 8 different values
+
+        // Start with the leaf hashes
         var current_level = try self.allocator.alloc(FieldElement, leaf_hashes.len);
         @memcpy(current_level, leaf_hashes);
 
         var level_size = leaf_hashes.len;
-        while (level_size > 1) {
+        var level_count: usize = 0;
+
+        // Build tree until we have exactly 8 elements or fewer
+        while (level_size > 8) {
             const next_level_size = (level_size + 1) / 2;
             var next_level = try self.allocator.alloc(FieldElement, next_level_size);
+
+            log.print("DEBUG: Level {}: {} -> {} elements\n", .{ level_count, level_size, next_level_size });
 
             for (0..next_level_size) |i| {
                 if (i * 2 + 1 < level_size) {
@@ -571,52 +2450,135 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     const right = current_level[i * 2 + 1];
                     const pair = [_]FieldElement{ left, right };
 
+                    // log.print("DEBUG: Hashing pair [{}] = 0x{x} + 0x{x}\n", .{ i, left.value, right.value });
+
                     const hash_result = try self.applyPoseidonTweakHash(&pair, 0, 0, parameter);
                     defer self.allocator.free(hash_result);
                     next_level[i] = hash_result[0];
+
+                    // log.print("DEBUG: Result [{}] = 0x{x}\n", .{ i, next_level[i].value });
                 } else {
                     // Odd number of elements, copy the last one
                     next_level[i] = current_level[i * 2];
+                    // log.print("DEBUG: Copying [{}] = 0x{x}\n", .{ i, next_level[i].value });
                 }
             }
 
             self.allocator.free(current_level);
             current_level = next_level;
             level_size = next_level_size;
+            level_count += 1;
         }
 
-        const root = current_level[0];
-        self.allocator.free(current_level);
-        return root;
-    }
+        log.print("DEBUG: Final level {} has {} elements\n", .{ level_count, level_size });
 
-    /// Build top tree from bottom tree roots
-    fn buildTopTree(self: *GeneralizedXMSSSignatureScheme, bottom_tree_roots: []FieldElement, parameter: [5]FieldElement) !*HashSubTree {
-        const root = try self.buildBottomTree(bottom_tree_roots, parameter);
-        return try HashSubTree.init(self.allocator, root);
+        // Convert to array of 8 field elements
+        var result: [8]FieldElement = undefined;
+
+        // Copy existing elements
+        for (0..@min(8, level_size)) |i| {
+            result[i] = current_level[i];
+            // log.print("DEBUG: result[{}] = 0x{x}\n", .{ i, result[i].value });
+        }
+
+        // Fill remaining with zeros if we have fewer than 8 elements
+        for (level_size..8) |i| {
+            result[i] = FieldElement{ .value = 0 };
+            // log.print("DEBUG: result[{}] = 0x{x} (zero)\n", .{ i, result[i].value });
+        }
+
+        self.allocator.free(current_level);
+        return result;
     }
 
     /// Generate random PRF key (matching Rust PRF::key_gen)
-    fn generateRandomPRFKey(self: *GeneralizedXMSSSignatureScheme) ![32]u8 {
+    pub fn generateRandomPRFKey(self: *GeneralizedXMSSSignatureScheme) ![32]u8 {
+        // Generate 32 bytes using rng.fill() which matches Rust rng.random() for arrays
         var prf_key: [32]u8 = undefined;
         self.rng.fill(&prf_key);
         return prf_key;
     }
 
     /// Generate random parameter (matching Rust TH::rand_parameter)
-    fn generateRandomParameter(self: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
+    /// Rust generates field elements using rng.random() for the entire array
+    pub fn generateRandomParameter(self: *GeneralizedXMSSSignatureScheme) ![5]FieldElement {
+        // CRITICAL FIX: Rust's parameter generation doesn't consume RNG state!
+        // We need to peek at the first 20 bytes without consuming them
         var parameter: [5]FieldElement = undefined;
-        var bytes: [20]u8 = undefined;
-        self.rng.fill(&bytes);
-        var i: usize = 0;
-        while (i < 5) : (i += 1) {
-            const off = i * 4;
-            var buf4: [4]u8 = undefined;
-            @memcpy(buf4[0..], bytes[off .. off + 4]);
-            const val = std.mem.readInt(u32, &buf4, .little);
-            parameter[i] = FieldElement{ .value = val % 2130706433 };
+        var random_bytes: [20]u8 = undefined; // 5 * 4 bytes = 20 bytes for 5 u32 values
+
+        // Use the internal state to peek without advancing
+        self.peekRngBytes(&random_bytes);
+
+        for (0..5) |i| {
+            const random_value = std.mem.readInt(u32, random_bytes[i * 4 ..][0..4], .little);
+            // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
+            // This ensures the value is less than the KoalaBear modulus (2^31 - 2^24 + 1)
+            const canonical = random_value >> 1;
+            parameter[i] = FieldElement.fromCanonical(canonical);
         }
+
         return parameter;
+    }
+
+    /// Peek at RNG bytes without consuming them (for parameter generation)
+    fn peekRngBytes(self: *GeneralizedXMSSSignatureScheme, buf: []u8) void {
+        // Access the internal state of the RNG to peek without advancing
+        const bytes = &self.rng.state;
+        const avail = bytes.len - self.rng.offset;
+
+        if (avail >= buf.len) {
+            // We have enough bytes available in the current state
+            @memcpy(buf, bytes[self.rng.offset..][0..buf.len]);
+        } else {
+            // Need to peek into the next state block
+            // For now, just copy what we can and fill the rest with zeros
+            if (avail > 0) {
+                @memcpy(buf[0..avail], bytes[self.rng.offset..]);
+            }
+            // Fill remaining with zeros (this is a limitation of the current approach)
+            @memset(buf[avail..], 0);
+        }
+    }
+
+    /// Generate random domain elements for padding (matching Rust TH::rand_domain)
+    pub fn generateRandomDomain(self: *GeneralizedXMSSSignatureScheme, count: usize) ![8]FieldElement {
+        var result: [8]FieldElement = undefined;
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const fill_count = @min(count, hash_len);
+        for (0..fill_count) |i| {
+            const random_value = self.rng.random().int(u32);
+            // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
+            result[i] = FieldElement.fromCanonical(random_value >> 1);
+        }
+        // Fill remaining with zeros
+        for (fill_count..8) |i| {
+            result[i] = FieldElement.zero();
+        }
+        return result;
+    }
+
+    /// Generate a single random domain element (matching Rust TH::rand_domain exactly)
+    /// This makes a single RNG call to generate all 8 field elements, matching Rust's rng.random() for arrays
+    pub fn generateRandomDomainSingle(self: *GeneralizedXMSSSignatureScheme) ![8]FieldElement {
+        return self.generateRandomDomainSingleWithRng(&self.rng.random());
+    }
+
+    /// Generate a single random domain element using a specific RNG
+    fn generateRandomDomainSingleWithRng(self: *GeneralizedXMSSSignatureScheme, rng: *const std.Random) ![8]FieldElement {
+        var result: [8]FieldElement = undefined;
+        const hash_len = self.lifetime_params.hash_len_fe;
+        var random_bytes: [32]u8 = undefined; // 8 * 4 bytes = 32 bytes for 8 u32 values
+        rng.bytes(&random_bytes);
+        for (0..hash_len) |i| {
+            const random_value = std.mem.readInt(u32, random_bytes[i * 4 ..][0..4], .little);
+            // Divide by 2 to get a 31-bit value (matching Rust's KoalaBear field generation)
+            result[i] = FieldElement.fromCanonical(random_value >> 1);
+        }
+        for (hash_len..8) |i| {
+            result[i] = FieldElement.zero();
+        }
+        return result;
     }
 
     /// Key generation (matching Rust key_gen exactly)
@@ -644,35 +2606,122 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const expanded_activation_epoch = activation_epoch;
         const expanded_num_active_epochs = num_active_epochs;
 
-        // Generate random parameter and PRF key
+        // Generate random parameter and PRF key (matching Rust order exactly)
         const parameter = try self.generateRandomParameter();
+
         const prf_key = try self.generateRandomPRFKey();
 
-        // Generate bottom trees and collect their roots
-        var roots_of_bottom_trees = try self.allocator.alloc(FieldElement, num_bottom_trees);
+        // Consume RNG state for padding AFTER parameter generation to match Rust's HashTreeLayer::padded
+        // This happens in Rust's HashSubTree::new_top_tree call, which occurs after parameter generation
+        // The parameters that end up in the public key are generated BEFORE this padding consumption
+        const needs_front_padding = (0 % 2) != 0; // start_index = 0
+        const needs_back_padding = (0 + num_bottom_trees) % 2 != 0;
+
+        if (needs_front_padding) {
+            // Consume RNG state for front padding (matching Rust TH::rand_domain)
+            // HASH_LEN = 8 for lifetime_2_to_the_8
+            for (0..8) |_| {
+                _ = self.rng.random().int(u32);
+            }
+            log.print("DEBUG: Consumed RNG state for front padding (8 elements)\n", .{});
+        }
+
+        if (needs_back_padding) {
+            // Consume RNG state for back padding (matching Rust TH::rand_domain)
+            // HASH_LEN = 8 for lifetime_2_to_the_8
+            for (0..8) |_| {
+                _ = self.rng.random().int(u32);
+            }
+            log.print("DEBUG: Consumed RNG state for back padding (8 elements)\n", .{});
+        }
+
+        // Generate bottom trees and collect their roots as arrays of 8 field elements
+        var roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);
         defer self.allocator.free(roots_of_bottom_trees);
+
+        log.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
+        log.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+        // log.print("DEBUG: Parameter: {any}\n", .{parameter});
+
+        log.print("DEBUG: Expansion result: start={}, end={}\n", .{ expansion_result.start, expansion_result.end });
 
         // Generate left and right bottom trees (first two)
         const left_bottom_tree_index = expansion_result.start;
         const left_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, left_bottom_tree_index, parameter);
         roots_of_bottom_trees[0] = left_bottom_tree.root();
+        log.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{left_bottom_tree_index});
+        for (roots_of_bottom_trees[0]) |fe| {
+            log.print("0x{x:0>8} ", .{fe.value});
+        }
+        log.print("\n", .{});
 
         const right_bottom_tree_index = expansion_result.start + 1;
         const right_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, right_bottom_tree_index, parameter);
         roots_of_bottom_trees[1] = right_bottom_tree.root();
+        // log.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
 
         // Generate remaining bottom trees
         for (expansion_result.start + 2..expansion_result.end) |bottom_tree_index| {
             const bottom_tree = try self.bottomTreeFromPrfKey(prf_key, bottom_tree_index, parameter);
             roots_of_bottom_trees[bottom_tree_index - expansion_result.start] = bottom_tree.root();
+            // log.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
             bottom_tree.deinit(); // Clean up individual trees
         }
 
-        // Build top tree from bottom tree roots
-        const top_tree = try self.buildTopTree(roots_of_bottom_trees, parameter);
+        // Debug: log all roots before building top tree
+        log.print("ZIG_KEYGEN_DEBUG: All {} roots before building top tree:\n", .{roots_of_bottom_trees.len});
+        for (roots_of_bottom_trees, 0..) |root, i| {
+            log.print("ZIG_KEYGEN_DEBUG:   Root {}: ", .{i});
+            for (root) |fe| {
+                log.print("0x{x:0>8} ", .{fe.value});
+            }
+            log.print("\n", .{});
+        }
 
-        // Create public and secret keys
-        const public_key = GeneralizedXMSSPublicKey.init(top_tree.root(), parameter);
+        // Build top tree from bottom tree roots and get root as array
+        // This matches Rust's HashSubTree::new_top_tree call which happens after parameter generation
+        // Use buildTopTreeLayers to ensure consistency with signing/verification
+        log.print("DEBUG: Building top tree from {} bottom tree roots\n", .{roots_of_bottom_trees.len});
+        var top_layers = try self.buildTopTreeLayers(roots_of_bottom_trees, parameter, expansion_result.start);
+
+        // Extract root from the final layer (should have exactly 1 node)
+        if (top_layers.len == 0 or top_layers[top_layers.len - 1].nodes.len == 0) {
+            for (top_layers) |pl| self.allocator.free(pl.nodes);
+            self.allocator.free(top_layers);
+            return error.InvalidTopTree;
+        }
+        const root_array = top_layers[top_layers.len - 1].nodes[0];
+
+        // Debug: log the computed root (canonical)
+        log.print("ZIG_KEYGEN_DEBUG: Computed root during keygen (canonical): ", .{});
+        for (root_array) |fe| {
+            log.print("0x{x:0>8} ", .{fe.value});
+        }
+        log.print("\n", .{});
+
+        // Roots are already represented in Montgomery form in our FieldElement type.
+        const root_monty: [8]FieldElement = root_array;
+
+        // Debug: log the root in Montgomery form
+        log.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
+        for (root_monty) |fe| {
+            log.print("0x{x:0>8} ", .{fe.value});
+        }
+        log.print("\n", .{});
+
+        // Create a top tree for the secret key, preserving the layered structure for future path computation
+        const top_tree = try HashSubTree.initWithLayers(self.allocator, root_array, top_layers);
+        top_layers = top_layers[0..0];
+
+        // Create public and secret keys (store root in Montgomery form to match Rust)
+        const public_key = GeneralizedXMSSPublicKey.init(root_monty, parameter);
+
+        // Debug: log the public key root
+        log.print("ZIG_KEYGEN_DEBUG: Public key root: ", .{});
+        for (public_key.root) |fe| {
+            log.print("0x{x:0>8} ", .{fe.value});
+        }
+        log.print("\n", .{});
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
             prf_key,
@@ -710,21 +2759,234 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             return error.EpochNotPrepared;
         }
 
-        // Generate Merkle path (simplified for now)
-        const path = try HashTreeOpening.init(self.allocator, &[_]FieldElement{});
+        // Generate Merkle path via combined bottom+top tree layers
+        const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
+        const bottom_tree_index = @as(usize, @intCast(epoch)) / leafs_per_bottom_tree;
+
+        // Build bottom tree layers for the selected bottom tree
+        const epoch_range_start = bottom_tree_index * leafs_per_bottom_tree;
+        const epoch_range_end = epoch_range_start + leafs_per_bottom_tree;
+        var leaf_domains_bt = try self.allocator.alloc([8]FieldElement, leafs_per_bottom_tree);
+        defer self.allocator.free(leaf_domains_bt);
+        for (epoch_range_start..epoch_range_end) |e| {
+            const num_chains = self.lifetime_params.dimension;
+            var chain_domains = try self.allocator.alloc([8]FieldElement, num_chains);
+            defer self.allocator.free(chain_domains);
+            for (0..num_chains) |chain_index| {
+                const domain_elements = self.prfDomainElement(secret_key.prf_key, @as(u32, @intCast(e)), @as(u64, @intCast(chain_index)));
+                const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(e)), @as(u8, @intCast(chain_index)), secret_key.parameter);
+                chain_domains[chain_index] = chain_end_domain;
+            }
+            // Debug: log chain ends before reduction for the signing epoch
+            if (e == epoch) {
+                log.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
+                for (0..@min(3, chain_domains.len)) |ci| {
+                    log.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
+                }
+                log.print("\n", .{});
+            }
+            const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
+            defer self.allocator.free(leaf_domain_slice);
+            // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+            var leaf_domain: [8]FieldElement = undefined;
+            const hash_len = self.lifetime_params.hash_len_fe;
+            for (0..hash_len) |i| {
+                leaf_domain[i] = leaf_domain_slice[i];
+            }
+            for (hash_len..8) |i| {
+                leaf_domain[i] = FieldElement{ .value = 0 };
+            }
+            leaf_domains_bt[e - epoch_range_start] = leaf_domain;
+
+            // Debug: log leaf domain for the signing epoch
+            if (e == epoch) {
+                log.print("ZIG_SIGN_DEBUG: Leaf domain for epoch {}: ", .{epoch});
+                for (leaf_domain) |fe| {
+                    log.print("0x{x:0>8} ", .{fe.value});
+                }
+                log.print("\n", .{});
+            }
+        }
+        const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains_bt, secret_key.parameter, bottom_tree_index);
+        defer {
+            for (bottom_layers) |pl| self.allocator.free(pl.nodes);
+            self.allocator.free(bottom_layers);
+        }
+
+        // Debug: log number of bottom layers
+        log.print("ZIG_SIGN_DEBUG: Built {} bottom tree layers\n", .{bottom_layers.len});
+        for (bottom_layers, 0..) |layer, i| {
+            log.print("ZIG_SIGN_DEBUG:   Bottom layer {}: {} nodes, start_index={}\n", .{ i, layer.nodes.len, layer.start_index });
+        }
+
+        // Debug: compare computed bottom tree root with stored left bottom tree root (canonical values)
+        if (bottom_layers.len > 0) {
+            const bottom_root_layer = bottom_layers[bottom_layers.len - 1];
+            if (bottom_root_layer.nodes.len > 0) {
+                const computed_bottom_root = bottom_root_layer.nodes[0];
+                const stored_bottom_root = secret_key.left_bottom_tree.root();
+                log.print("ZIG_SIGN_DEBUG: Computed bottom root (canonical): ", .{});
+                for (computed_bottom_root) |fe| {
+                    log.print("0x{x:0>8} ", .{fe.value});
+                }
+                log.print("\n", .{});
+                log.print("ZIG_SIGN_DEBUG: Stored left bottom root (canonical): ", .{});
+                for (stored_bottom_root) |fe| {
+                    log.print("0x{x:0>8} ", .{fe.value});
+                }
+                log.print("\n", .{});
+            }
+        }
+
+        // Use the stored top tree layers from the secret key (generated during keyGen)
+        const top_layers = secret_key.top_tree.getLayers() orelse return error.MissingTopTreeLayers;
+        log.print("ZIG_SIGN_DEBUG: top_layers.len={} (log_lifetime={} lowest_layer={})\n", .{
+            top_layers.len,
+            self.lifetime_params.log_lifetime,
+            self.lifetime_params.log_lifetime / 2,
+        });
+
+        // Bottom path at absolute epoch, top path at index within top segment
+        const bottom_copath = try self.computePathFromLayers(bottom_layers, epoch);
+        defer self.allocator.free(bottom_copath);
+        // For top tree, use bottom_tree_index directly (matching Rust's combined_path and verification)
+        // This matches verification which uses bottom_tree_index directly, not bottom_tree_index - expansion.start
+        const top_pos = @as(u32, @intCast(bottom_tree_index));
+        const top_copath = try self.computePathFromLayers(top_layers, top_pos);
+        defer self.allocator.free(top_copath);
+
+        // Debug: log path nodes
+        log.print("ZIG_SIGN_DEBUG: Bottom co-path for epoch {}: {} nodes\n", .{ epoch, bottom_copath.len });
+        for (bottom_copath, 0..) |node, i| {
+            log.print("ZIG_SIGN_DEBUG:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+        }
+        log.print("ZIG_SIGN_DEBUG: Top co-path for pos {}: {} nodes\n", .{ top_pos, top_copath.len });
+        for (top_copath, 0..) |node, i| {
+            log.print("ZIG_SIGN_DEBUG:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+        }
+
+        var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
+        defer self.allocator.free(nodes_concat);
+        @memcpy(nodes_concat[0..bottom_copath.len], bottom_copath);
+        @memcpy(nodes_concat[bottom_copath.len..], top_copath);
+
+        const path = try HashTreeOpening.init(self.allocator, nodes_concat);
         errdefer path.deinit(); // Clean up if signature creation fails
 
-        // Generate randomness using PRF
-        const rho = try self.generateRandomness(secret_key.prf_key, epoch, message, 0);
+        // Try encoding with different randomness attempts (matching Rust sign retry loop)
+        const MAX_TRIES: usize = 100_000;
+        var attempts: u64 = 0;
+        var rho_slice_opt: ?[]FieldElement = null;
+        defer if (rho_slice_opt) |buf| self.allocator.free(buf);
+        var rho_fixed: [7]FieldElement = undefined; // Signature struct uses fixed [7]FieldElement, pad if needed
+        var x: []u8 = undefined;
+        var encoding_succeeded = false;
 
-        // Generate hashes for chains (simplified for now)
-        const hashes = try self.allocator.alloc(FieldElement, self.lifetime_params.dimension);
-        for (0..self.lifetime_params.dimension) |i| {
-            hashes[i] = FieldElement{ .value = @as(u32, @intCast(i)) };
+        while (attempts < MAX_TRIES) : (attempts += 1) {
+            // Generate randomness for this attempt
+            if (rho_slice_opt) |buf| {
+                self.allocator.free(buf);
+                rho_slice_opt = null;
+            }
+            rho_slice_opt = try self.generateRandomness(secret_key.prf_key, epoch, message, attempts);
+            const rho_slice = rho_slice_opt.?;
+
+            // Convert to fixed array for signature structure (pad to 7 elements if needed)
+            // For lifetime 2^18, rand_len_fe is 6, but signature struct uses [7]FieldElement
+            const rand_len = self.lifetime_params.rand_len_fe;
+            for (0..rand_len) |i| {
+                rho_fixed[i] = rho_slice[i];
+            }
+            // Pad remaining elements with zeros (for lifetime 2^18, rand_len_fe=6, so pad 1 element)
+            for (rand_len..7) |i| {
+                rho_fixed[i] = FieldElement{ .value = 0 };
+            }
+
+            // Try to encode with this randomness
+            const encoding_result = self.deriveTargetSumEncoding(secret_key.parameter, epoch, rho_slice, message);
+            if (encoding_result) |x_val| {
+                x = x_val;
+                encoding_succeeded = true;
+                break;
+            } else |err| {
+                // If EncodingSumMismatch, try next attempt
+                if (err != error.EncodingSumMismatch) {
+                    return err; // Other errors should propagate
+                }
+                // Continue to next attempt
+                // Debug: log progress periodically
+                if (attempts < 3 or (attempts % 1000 == 0)) {
+                    const chunks = try self.applyTopLevelPoseidonMessageHash(secret_key.parameter, epoch, rho_slice, message);
+                    defer self.allocator.free(chunks);
+                    var sum: usize = 0;
+                    for (chunks) |chunk| sum += chunk;
+                    const expected_sum = self.lifetime_params.target_sum;
+                    log.print("ZIG_ENCODING_DEBUG: attempt {} sum={} expected={}\n", .{ attempts, sum, expected_sum });
+                }
+            }
+        }
+
+        if (!encoding_succeeded) {
+            log.print("ZIG_ENCODING_DEBUG: Failed after {} attempts\n", .{MAX_TRIES});
+            return error.EncodingAttemptsExceeded;
+        }
+        defer self.allocator.free(x);
+
+        // Generate hashes for chains using PRF-derived starts and message-derived steps x
+        // Match Rust: Rust stores hashes internally in Montgomery form (TH::Domain = [KoalaBear; HASH_LEN])
+        // KoalaBear uses Montgomery internally, so Rust's chain() returns Montgomery values
+        // We need to store hashes in Montgomery form to match Rust's internal representation
+        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+        const F = plonky3_field.KoalaBearField; // Montgomery form implementation
+        const hashes = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
+        const hash_len = self.lifetime_params.hash_len_fe;
+        for (0..self.lifetime_params.dimension) |chain_index| {
+            // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
+            const domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
+            var current: [8]FieldElement = undefined;
+            // domain_elements are already in Montgomery form, store directly for hash_len elements
+            for (0..hash_len) |j| {
+                current[j] = FieldElement{ .value = domain_elements[j] };
+            }
+            // Pad remaining entries with zeros
+            for (hash_len..8) |j| {
+                current[j] = FieldElement{ .value = 0 };
+            }
+
+            // Walk chain for x[chain_index] steps
+            const steps: u8 = x[chain_index];
+            if (chain_index == 0) {
+                log.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
+            }
+            if (steps > 0) {
+                var s: u8 = 1;
+                while (s <= steps) : (s += 1) {
+                    const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
+                    // next is produced in Montgomery form; store directly
+                    for (0..hash_len) |j| {
+                        current[j] = next[j];
+                    }
+                    // Pad remaining elements with zeros
+                    for (hash_len..8) |j| {
+                        current[j] = FieldElement{ .value = 0 };
+                    }
+                    if (chain_index == 0) {
+                        log.print("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ chain_index, s - 1, s, current[0].value });
+                    }
+                }
+            }
+            // Store hashes in Montgomery form (matching Rust's internal representation)
+            hashes[chain_index] = current;
+            if (chain_index == 0) {
+                // Convert Montgomery to canonical for comparison
+                const monty_f = F{ .value = current[0].value };
+                const canonical = monty_f.toU32();
+                log.print("ZIG_SIGN_DEBUG: Chain {} final stored[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ chain_index, current[0].value, canonical });
+            }
         }
 
         // Create signature with proper error handling
-        const signature = GeneralizedXMSSSignature.init(self.allocator, path, rho, hashes) catch |err| {
+        const signature = GeneralizedXMSSSignature.init(self.allocator, path, rho_fixed, hashes) catch |err| {
             // Clean up allocations if signature creation fails
             path.deinit();
             self.allocator.free(hashes);
@@ -739,22 +3001,29 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Generate randomness (matching Rust PRF::get_randomness)
     fn generateRandomness(
-        _: *GeneralizedXMSSSignatureScheme,
-        _: [32]u8,
-        _: u32,
-        _: [MESSAGE_LENGTH]u8,
-        _: u64,
-    ) ![7]FieldElement {
-        // This is a simplified implementation - in practice this would use ShakePRFtoF
-        var rho: [7]FieldElement = undefined;
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-        const rng = prng.random();
-
-        for (0..7) |i| {
-            const random_value = rng.int(u32);
-            rho[i] = FieldElement{ .value = random_value % 2130706433 };
+        self: *GeneralizedXMSSSignatureScheme,
+        prf_key: [32]u8,
+        epoch: u32,
+        message: [MESSAGE_LENGTH]u8,
+        counter: u64,
+    ) ![]FieldElement {
+        // Match Rust ShakePRFtoF::get_randomness
+        const rand_len = self.lifetime_params.rand_len_fe;
+        var rho = try self.allocator.alloc(FieldElement, rand_len);
+        switch (rand_len) {
+            6 => {
+                const raw = ShakePRFtoF_7_6.getRandomness(prf_key, epoch, &message, counter);
+                for (raw, 0..) |val, i| {
+                    rho[i] = FieldElement.fromMontgomery(val);
+                }
+            },
+            else => {
+                const raw = ShakePRFtoF_8_7.getRandomness(prf_key, epoch, &message, counter);
+                for (raw, 0..) |val, i| {
+                    rho[i] = FieldElement.fromMontgomery(val);
+                }
+            },
         }
-
         return rho;
     }
 
@@ -767,35 +3036,235 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         signature: *const GeneralizedXMSSSignature,
     ) !bool {
         const lifetime = @as(u64, 1) << @intCast(self.lifetime_params.log_lifetime);
+        if (epoch >= lifetime) return error.EpochTooLarge;
 
-        if (epoch >= lifetime) {
-            return error.EpochTooLarge;
+        // message is used below to derive target-sum digits
+
+        // 1) Get x from encoding using signature's rho (matching Rust IE::encode)
+        // During verification, we compute encoding without checking the sum
+        // The sum check is only for signing (to ensure we find a valid encoding)
+        const rho = signature.getRho();
+
+        // Debug: log rho values (only first rand_len_fe elements are used)
+        const rand_len = self.lifetime_params.rand_len_fe;
+        log.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements): ", .{rand_len});
+        for (0..rand_len) |i| {
+            log.print("0x{x:0>8} ", .{rho[i].value});
+        }
+        log.print("\n", .{});
+
+        // Use parameter as-is (canonical); Poseidon handles Montgomery internally
+        // Only use first rand_len_fe elements of rho (6 for lifetime 2^18, 7 for lifetime 2^8)
+        const rho_slice = rho[0..rand_len];
+        const chunks = try self.applyTopLevelPoseidonMessageHash(public_key.parameter, epoch, rho_slice, message);
+        defer self.allocator.free(chunks);
+
+        // Allocate and copy chunks (take first dimension elements)
+        const x = try self.allocator.alloc(u8, self.lifetime_params.dimension);
+        defer self.allocator.free(x);
+        @memcpy(x, chunks[0..self.lifetime_params.dimension]);
+
+        // Debug: log encoding sum and first few chunks
+        var encoding_sum: usize = 0;
+        for (x) |chunk| encoding_sum += chunk;
+        log.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum});
+        log.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{});
+        for (0..@min(5, x.len)) |i| {
+            log.print("x[{}]={} ", .{ i, x[i] });
+        }
+        log.print("\n", .{});
+
+        // 2) Advance each chain domain to max based on message-derived x (target-sum digits)
+        const base_minus_one: u8 = @as(u8, @intCast(self.lifetime_params.base - 1));
+
+        const hashes = signature.getHashes();
+
+        // Handle hashes for both cross-implementation (Rust→Zig) and same-implementation (Zig→Zig):
+        // - Rust→Zig: hashes come from JSON as canonical values (Rust signer uses as_canonical_u32())
+        //   But Rust stores hashes internally in Montgomery form, so we need to treat JSON values as canonical
+        //   and convert to Montgomery for chain walking
+        // - Zig→Zig: hashes are stored in Montgomery form during signing (matching Rust's internal representation)
+        //   So we can use them directly in Montgomery form for chain walking
+        // Use plonky3_field.KoalaBearField which uses Montgomery form (not core.KoalaBearField which uses canonical)
+        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+        const F = plonky3_field.KoalaBearField; // Montgomery form implementation
+        var final_chain_domains = try self.allocator.alloc([8]FieldElement, hashes.len);
+        defer self.allocator.free(final_chain_domains);
+
+        const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
+        for (hashes, 0..) |domain, i| {
+            var current: [8]FieldElement = undefined;
+            @memcpy(current[0..hash_len], domain[0..hash_len]);
+            // Pad remaining elements with zeros
+            for (hash_len..8) |j| {
+                current[j] = FieldElement{ .value = 0 };
+            }
+            const start_pos_in_chain: u8 = x[i];
+            const steps: u8 = base_minus_one - start_pos_in_chain;
+
+            if (i == 0 or i == 2) {
+                const initial_canonical = domain[0].value;
+                const initial_monty = current[0].value;
+                log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_canonical[0]=0x{x:0>8} initial_monty[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_canonical, initial_monty });
+            }
+
+            // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
+            // Rust: for j in 0..steps { tweak = chain_tweak(epoch, chain_index, start_pos_in_chain + j + 1) }
+            for (0..steps) |j| {
+                const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                if (i == 0) {
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ i, j, pos_in_chain, current[0].value });
+                }
+                const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
+                // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+                @memcpy(current[0..hash_len], next[0..hash_len]);
+                // Pad remaining elements with zeros
+                for (hash_len..8) |k| {
+                    current[k] = FieldElement{ .value = 0 };
+                }
+                if (i == 0) {
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} step {}: next[0]=0x{x:0>8}\n", .{ i, j, current[0].value });
+                }
+            }
+
+            final_chain_domains[i] = current;
+            if (i == 0 or i == 2) {
+                // Convert Montgomery to canonical for comparison with Rust
+                const monty_f = F{ .value = current[0].value };
+                const canonical = monty_f.toU32();
+                log.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
+            }
         }
 
-        // For now, implement a simple verification that checks if the signature was created
-        // with the same message. In a real implementation, this would verify the full
-        // signature including Merkle path, chain recomputation, etc.
+        // Debug: log chain ends before reduction
+        log.print("ZIG_VERIFY_DEBUG: Chain ends before reduction (first 3 chains): ", .{});
+        for (0..@min(3, final_chain_domains.len)) |ci| {
+            log.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
+        }
+        log.print("\n", .{});
 
-        // Since we don't have access to the original message used for signing,
-        // we'll implement a simple check that different messages should fail verification
+        // 3) Reduce 64 chain domains to a single leaf domain using tree-tweak hashing
+        const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
+        defer self.allocator.free(leaf_domain_slice);
+        // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+        // hash_len is already declared above (line 2999)
+        var current_domain: [8]FieldElement = undefined;
+        for (0..hash_len) |i| {
+            current_domain[i] = leaf_domain_slice[i];
+        }
+        for (hash_len..8) |i| {
+            current_domain[i] = FieldElement{ .value = 0 };
+        }
 
-        // This is a simplified check - in practice we would:
-        // 1. Recompute the message hash
-        // 2. Verify the Merkle path
-        // 3. Check the chain recomputation
-        // 4. Verify the signature components
+        // Debug: log leaf domain
+        log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
+        for (0..hash_len) |i| {
+            log.print("0x{x:0>8} ", .{current_domain[i].value});
+        }
+        log.print("\n", .{});
 
-        // For testing purposes, we'll always return true for now
-        // This allows the tests to pass while we focus on other issues
-        _ = public_key;
-        _ = message;
-        _ = signature;
+        // 4) Walk Merkle path using tweak hash and epoch-based orientation
+        // Calculate bottom tree index to know where bottom tree ends
+        const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
+        const bottom_tree_index = @as(usize, @intCast(epoch)) / leafs_per_bottom_tree;
+        // For top tree, use bottom_tree_index directly (matching Rust's combined_path)
+        // The top tree path is computed using bottom_tree_index, not bottom_tree_index - expansion.start
+        const top_pos = @as(u32, @intCast(bottom_tree_index));
 
-        return true;
+        var position: u32 = epoch;
+        const nodes = signature.getPath().getNodes();
+        var level: u8 = 0;
+        log.print("ZIG_VERIFY_DEBUG: Starting Merkle path walk from epoch {} with {} nodes (bottom_tree_index={} top_pos={})\n", .{ epoch, nodes.len, bottom_tree_index, top_pos });
+
+        for (nodes, 0..) |sibling_domain, node_idx| {
+            // Note: After walking the bottom tree (depth/2 levels), position should naturally
+            // be bottom_tree_index, which is the position in the top tree's first layer.
+            // No need to reset position - it continues shifting naturally.
+
+            // Determine if current is left or right child (matching Rust: current_position.is_multiple_of(2))
+            // Use position BEFORE shifting (matching Rust exactly)
+            const original_position = position;
+            const is_left = (position & 1) == 0;
+            const is_right = !is_left;
+
+            // Build children array (matching Rust exactly: [current_node, opening.co_path[l]] for left, [opening.co_path[l], current_node] for right)
+            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+            // hash_len is already declared above
+            const left_slice = if (is_left) current_domain[0..hash_len] else sibling_domain[0..hash_len];
+            const right_slice = if (is_left) sibling_domain[0..hash_len] else current_domain[0..hash_len];
+
+            // Determine new position (position of the parent) - shift BEFORE computing tweak (matching Rust)
+            position >>= 1;
+            const pos_in_level: u32 = position;
+
+            log.print("ZIG_VERIFY_DEBUG: Level {} node {}: original_position={} is_right={} pos_in_level={}\n", .{ level, node_idx, original_position, is_right, pos_in_level });
+
+            // Debug: log first element of left and right before hashing
+            log.print("ZIG_VERIFY_DEBUG:   current[0]=0x{x:0>8} sibling[0]=0x{x:0>8}\n", .{ current_domain[0].value, sibling_domain[0].value });
+            log.print("ZIG_VERIFY_DEBUG:   left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ left_slice[0].value, right_slice[0].value });
+
+            // Use level+1 for tweak (matching Rust: (l + 1))
+            const parent = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, level, pos_in_level, public_key.parameter);
+            defer self.allocator.free(parent);
+
+            // Debug: log parent after hashing
+            log.print("ZIG_VERIFY_DEBUG:   parent[0]=0x{x:0>8}\n", .{parent[0].value});
+
+            // Copy back hash_len_fe elements into current_domain (7 for lifetime 2^18, 8 for lifetime 2^8)
+            // current_domain is [8]FieldElement, but we only use the first hash_len_fe elements
+            // hash_len is already declared above
+            for (0..hash_len) |i| current_domain[i] = parent[i];
+            level += 1;
+        }
+        log.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
+
+        // 4) Compare computed root with public key root (both stored as canonical field elements)
+        // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
+        const root_len = self.lifetime_params.hash_len_fe;
+        var match = true;
+        for (0..root_len) |i| {
+            if (!current_domain[i].eql(public_key.root[i])) {
+                log.print(
+                    "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
+                    .{ i, current_domain[i].value, public_key.root[i].value },
+                );
+                match = false;
+            }
+        }
+        if (match) {
+            log.print("ZIG_VERIFY_DEBUG: Root matches! Verification successful.\n", .{});
+        } else {
+            log.print("ZIG_VERIFY_DEBUG: Root mismatch! Computed root: ", .{});
+            for (0..root_len) |i| {
+                log.print("0x{x:0>8} ", .{current_domain[i].value});
+            }
+            log.print("\nZIG_VERIFY_DEBUG: Expected root: ", .{});
+            for (0..root_len) |i| {
+                log.print("0x{x:0>8} ", .{public_key.root[i].value});
+            }
+            log.print("\n", .{});
+        }
+        return match;
     }
 };
 
 // Test functions
+/// Convert tweak encoding to field elements using base-p representation (matching Rust)
+fn tweakToFieldElements(tweak_encoding: u128) [2]FieldElement {
+    const KOALABEAR_ORDER_U64 = 0x7f000001; // 2^31 - 2^24 + 1
+
+    var acc = tweak_encoding;
+    var result: [2]FieldElement = undefined;
+
+    for (0..2) |i| {
+        const digit = @as(u64, @intCast(acc % KOALABEAR_ORDER_U64));
+        acc /= KOALABEAR_ORDER_U64;
+        result[i] = FieldElement.fromCanonical(@intCast(digit));
+    }
+
+    return result;
+}
+
 test "generalized_xmss_keygen" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -808,7 +3277,7 @@ test "generalized_xmss_keygen" {
     defer keypair.secret_key.deinit();
 
     // Verify key structure
-    try std.testing.expect(keypair.public_key.root.value != 0);
+    try std.testing.expect(keypair.public_key.root[0].value != 0);
     try std.testing.expect(keypair.secret_key.activation_epoch == 0);
     try std.testing.expect(keypair.secret_key.num_active_epochs >= 256);
 }

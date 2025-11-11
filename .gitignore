@@ -2,6 +2,10 @@
 zig-cache/
 zig-out/
 .zig-cache/
+.cargo/
+.rustup
+.zig-global-cache/
+
 
 # Build outputs
 *.o
@@ -23,12 +27,8 @@ zig-out/
 # Test artifacts
 test_*
 *.test
-
-# Exceptions for compatibility test files
-!examples/test_shake_prf_compatibility.zig
-!examples/test_poseidon2_compatibility.zig
-!examples/test_generalized_xmss_compat.zig
-
+# Keep investigation test sources
+!investigations/test_*.zig
 # Temporary files
 tmp/
 temp/
@@ -41,9 +41,6 @@ temp/
 docs/
 site/
 
-# Investigation and analysis documents
-investigations/
-analysis/
 
 # OS-specific files
 Thumbs.db
@@ -75,3 +72,8 @@ benchmark/zig_benchmark/zig-out/
 benchmark/rust_benchmark/target/
 benchmark/rust_benchmark/.cargo_home/
 benchmark/rust_benchmark/.cargo/
+context.md
+debug_*
+benchmark/rust_hash_sig_debug
+benchmark/rust-hash-sig-source
+benchmark/rust-hash-sig-debug
