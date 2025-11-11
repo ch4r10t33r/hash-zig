@@ -6,7 +6,7 @@
 
 A pure Zig implementation of **Generalized XMSS** hash-based signatures with **100% Rust compatibility**. This library implements the complete GeneralizedXMSS signature scheme based on the framework from [this paper](https://eprint.iacr.org/2025/055.pdf), matching the [hash-sig](https://github.com/b-wagn/hash-sig) Rust implementation exactly.
 
-**🎯 Production Ready**: The implementation has been thoroughly tested and verified to match the Rust reference implementation behavior, including random parameter generation, PRF key handling, and complete signature scheme functionality.
+**⚠️ Prototype Status**: This is a prototype implementation for research and development purposes. Use at your own risk.
 
 ## 🌟 Features
 
@@ -28,7 +28,7 @@ A pure Zig implementation of **Generalized XMSS** hash-based signatures with **1
 - **Hash Chain Computation**: Full chain computation matching Rust implementation
 
 ### 🚀 **Performance & Quality**
-- **128-bit Post-Quantum Security**: Well-tested security level
+- **128-bit Classical / 64-bit Quantum Security**: Post-quantum security parameters
 - **Multiple Lifetimes**: Support for 2^8, 2^18, and 2^32 signatures per keypair
 - **Memory Safe**: Proper memory management with no leaks
 - **Pure Zig**: Minimal dependencies, fully type-safe
@@ -124,7 +124,7 @@ pub fn main() !void {
 }
 ```
 
-**💡 Performance Tip**: For production use with larger lifetimes (2^18, 2^32), build with `zig build -Doptimize=ReleaseFast` for significantly better performance.
+**💡 Performance Tip**: For testing with larger lifetimes (2^18, 2^32), build with `zig build -Doptimize=ReleaseFast` for significantly better performance. Remember this is prototype software.
 
 ## 🏗️ Architecture
 
@@ -238,10 +238,10 @@ zig build test-poseidon2-compat
 
 ### Building for Performance
 
-**⚠️ Important**: For larger lifetimes (2^18, 2^32), always use optimized builds for production:
+**⚠️ Important**: This is a prototype implementation. For larger lifetimes (2^18, 2^32), always use optimized builds, but be aware this is experimental software.
 
 ```bash
-# Optimized build (recommended for production)
+# Optimized build (for testing only - this is prototype software)
 zig build -Doptimize=ReleaseFast
 
 # Debug build (for development only)
@@ -251,7 +251,7 @@ zig build
 ### Benchmarking
 
 ```bash
-# Run performance benchmarks (optimized)
+# Run performance benchmarks (prototype software - use at your own risk)
 zig build benchmark -Doptimize=ReleaseFast
 
 # Run key generation benchmarks
@@ -269,7 +269,7 @@ zig run scripts/benchmark_keygen.zig -- -i3
 # Include lifetime 2^32 as well (can be slower due to larger trees)
 zig run scripts/benchmark_keygen.zig -- --include-2-32 -i3
 
-# Recommended for accurate results
+# Recommended for accurate results (prototype software)
 zig run scripts/benchmark_keygen.zig -- -i5 -Doptimize=ReleaseFast
 ```
 
@@ -311,7 +311,7 @@ Notes:
 
 ### Performance Characteristics
 
-**Optimized Build Performance (ReleaseFast)**:
+**⚠️ Prototype Performance (ReleaseFast)**:
 - **Key Generation (2^8)**: ~1.1 seconds (230 signatures/second) on M2 MacBook
 - **Key Generation (2^18)**: Use optimized build - significantly faster than debug
 - **Key Generation (2^32)**: Use optimized build - required for reasonable performance
@@ -319,15 +319,17 @@ Notes:
 - **Verification**: <1ms per signature (23,800,000 verifications/second)
 - **Memory Usage**: Efficient with proper cleanup
 
-**Debug Build Performance**:
+**Debug Build Performance (Prototype)**:
 - **Key Generation (2^8)**: ~14.8 seconds (17 signatures/second) - much slower
 - **Signing**: <1ms per signature (25,900 signatures/second)
 - **Verification**: <1ms per signature (5,900,000 verifications/second)
-- **Larger lifetimes**: Not recommended for production use
+- **Larger lifetimes**: Not recommended for production use (this is prototype software)
 
 ### Performance Recommendations
 
-1. **Always use `-Doptimize=ReleaseFast`** for production deployments
+**⚠️ This is prototype software - use at your own risk**
+
+1. **Always use `-Doptimize=ReleaseFast`** for testing deployments
 2. **2^8 lifetime**: Suitable for testing and small-scale applications
 3. **2^18 lifetime**: Use optimized builds, suitable for medium-term applications
 4. **2^32 lifetime**: Use optimized builds, suitable for long-term, high-volume applications
