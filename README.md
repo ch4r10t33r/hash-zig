@@ -10,7 +10,7 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
-- **Interop-first CI** – the default workflow runs same-language and cross-language checks for lifetimes `2^8` and `2^18`.
+- **Interop-first CI** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^18` with timing summaries.
 - **Pure Zig** – minimal dependencies, explicit memory management, ReleaseFast-ready.
 
 ## Contents
@@ -92,48 +92,68 @@ pub fn main() !void {
 
 ## Cross-Language Compatibility Tests
 
-CI runs four matrices (Zig→Zig, Zig→Rust, Rust→Rust, Rust→Zig) for lifetimes `2^8` and `2^18` with 256 active epochs. To reproduce locally:
+The repository ships a helper script `benchmark/benchmark.py` that exercises both implementations (Zig ↔ Rust) in ReleaseFast mode. It performs:
+
+- deterministic key generation for lifetimes `2^8` and `2^18` with 256 active epochs
+- signing with each implementation
+- verification by both implementations (self + cross)
+- timing and artifact summaries
 
 ### Prerequisites
 
 ```bash
-zig build                                      # builds Zig helpers (zig-sign-message, zig-verify-signature, ...)
-cargo build --manifest-path benchmark/rust_benchmark/Cargo.toml --bins
+python3 --version  # Python 3.8+
+zig version        # 0.14.1
+cargo --version    # Rust 1.87.0 toolchain (matches CI)
 ```
 
-### Lifetime 2^8
+### Run the suite (recommended)
 
 ```bash
-# Zig → Zig
-ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-cache \
-  MESSAGE="interop 2^8" EPOCH=0 LIFETIME="2^8" NUM_ACTIVE_EPOCHS=256 \
-  ./zig-out/bin/zig-sign-message > tmp/zig_2_8.log
-
-PUBLIC_KEY="PUBLIC_KEY:$(grep '^PUBLIC_KEY:' tmp/zig_2_8.log | cut -d: -f2-)" \
-SIGNATURE="SIGNATURE:$(grep '^SIGNATURE:' tmp/zig_2_8.log | cut -d: -f2-)" \
-MESSAGE="interop 2^8" EPOCH=0 LIFETIME="2^8" NUM_ACTIVE_EPOCHS=256 \
-./zig-out/bin/zig-verify-signature
-
-# Zig → Rust
-PUBLIC_KEY="$(grep '^PUBLIC_KEY:' tmp/zig_2_8.log | cut -d: -f2-)" \
-SIGNATURE="$(grep '^SIGNATURE:' tmp/zig_2_8.log | cut -d: -f2-)" \
-MESSAGE="interop 2^8" EPOCH=0 \
-cargo run --manifest-path benchmark/rust_benchmark/Cargo.toml --bin verify_signature
-
-# Rust → Zig
-MESSAGE="interop 2^8" EPOCH=0 \
-cargo run --manifest-path benchmark/rust_benchmark/Cargo.toml --bin sign_message \
-  > tmp/rust_2_8.log
-
-PUBLIC_KEY="PUBLIC_KEY:$(grep '^PUBLIC_KEY:' tmp/rust_2_8.log | cut -d: -f2-)" \
-SIGNATURE="SIGNATURE:$(grep '^SIGNATURE:' tmp/rust_2_8.log | cut -d: -f2-)" \
-MESSAGE="interop 2^8" EPOCH=0 LIFETIME="2^8" NUM_ACTIVE_EPOCHS=256 \
-./zig-out/bin/zig-verify-signature
+# Produces zig-out/bin/zig-remote-hash-tool (ReleaseFast) and rust_benchmark/target/release/remote_hashsig_tool
+python3 benchmark/benchmark.py
 ```
 
-For lifetime `2^18`, change `LIFETIME="2^18"` and switch the Rust binaries to `verify_signature_2_18` / `sign_message_2_18`. Each command should print `VERIFY_RESULT:true`.
+The script automatically:
 
-> **Work in progress:** Lifetime `2^32` mirrors the workflow above and will be formalised once validation completes.
+1. Builds the Zig helper with `zig build zig-remote-hash-tool -Doptimize=ReleaseFast`
+2. Builds the Rust helper in `--release`
+3. Runs Zig→Zig, Zig→Rust, Rust→Rust, Rust→Zig checks for lifetimes `2^8` and `2^18`
+4. Reports PASS/FAIL and timing information for each leg, plus the artifact paths in `/tmp`
+
+### Manual workflow (advanced)
+
+If you prefer shell commands, mirror the steps below.
+
+1. Build helpers
+   ```bash
+   zig build -Doptimize=ReleaseFast zig-remote-hash-tool
+   cargo build --manifest-path benchmark/rust_benchmark/Cargo.toml --release --bin remote_hashsig_tool
+   ```
+
+2. Generate Zig keys & signatures (lifetime `2^8`)
+   ```bash
+   ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-cache \
+     ./zig-out/bin/zig-remote-hash-tool sign "interop 2^8" /tmp/zig_public.key.json /tmp/zig_signature.bin \
+     4242424242424242424242424242424242424242424242424242424242424242 0 256 0 2^8
+   ```
+
+3. Verify using Zig
+   ```bash
+   ./zig-out/bin/zig-remote-hash-tool verify "interop 2^8" /tmp/zig_public.key.json /tmp/zig_signature.bin 0 2^8
+   ```
+
+4. Verify using Rust
+   ```bash
+   ./benchmark/rust_benchmark/target/release/remote_hashsig_tool verify \
+     "interop 2^8" /tmp/zig_public.key.json /tmp/zig_signature.bin 0 2^8
+   ```
+
+5. Repeat, swapping sign/verify roles (`sign` command) to cover Rust→Zig, and change the lifetime argument to `2^18` (or `2^32` once validated).
+
+Each verification prints `VERIFY_RESULT:true` on success.
+
+> **Note:** Lifetime `2^32` follows the same pattern; interoperability work is ongoing and will be documented once validation completes.
 
 ### CI Reference
 
