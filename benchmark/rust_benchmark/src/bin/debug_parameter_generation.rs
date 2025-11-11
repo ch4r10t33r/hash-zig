@@ -18,7 +18,7 @@ fn main() {
 
     let mut parameter = [0u32; 5];
     for i in 0..5 {
-        let val = rng.gen::<u32>();
+        let val = rng.random::<u32>();
         parameter[i] = val;
         println!("Parameter[{}] = {} (0x{:x})", i, val, val);
     }
@@ -34,7 +34,7 @@ fn main() {
     // Check RNG state after parameter and PRF key generation
     println!("\nRNG state after parameter and PRF key generation:");
     for i in 0..10 {
-        let val = rng.gen::<u32>();
+        let val = rng.random::<u32>();
         println!("  [{}] = {}", i, val);
     }
 }

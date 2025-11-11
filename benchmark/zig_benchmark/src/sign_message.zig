@@ -4,6 +4,8 @@ const hash_zig = @import("hash-zig");
 const ascii = std.ascii;
 const json = std.json;
 
+const SeedParseError = error{InvalidSeedHex};
+
 fn valueIsZero(val: json.Value) bool {
     return switch (val) {
         .string => blk: {
@@ -107,6 +109,31 @@ fn parseLifetimeTag(raw: []const u8) hash_zig.KeyLifetimeRustCompat {
     return .lifetime_2_8;
 }
 
+fn parseSeedHex(raw: []const u8) SeedParseError![32]u8 {
+    var cleaned = std.mem.trim(u8, raw, " \t\r\n");
+    if (cleaned.len >= 2 and cleaned[0] == '0' and (cleaned[1] == 'x' or cleaned[1] == 'X')) {
+        cleaned = cleaned[2..];
+    }
+    if (cleaned.len == 0) return error.InvalidSeedHex;
+
+    var seed: [32]u8 = [_]u8{0} ** 32;
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i < seed.len and pos < cleaned.len) : (i += 1) {
+        const hi = std.fmt.charToDigit(cleaned[pos], 16) catch return error.InvalidSeedHex;
+        const lo_char = if (pos + 1 < cleaned.len) cleaned[pos + 1] else '0';
+        const lo = std.fmt.charToDigit(lo_char, 16) catch return error.InvalidSeedHex;
+        const hi_u8 = @as(u8, hi);
+        const lo_u8 = @as(u8, lo);
+        seed[i] = (hi_u8 << 4) | lo_u8;
+        pos += 2;
+    }
+
+    if (pos < cleaned.len) return error.InvalidSeedHex;
+
+    return seed;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -135,8 +162,22 @@ pub fn main() !void {
         } else break :blk 256;
     };
 
-    // Initialize the scheme
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
+    const seed_env = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch null;
+
+    const scheme_ptr = try blk: {
+        if (seed_env) |seed_hex| {
+            defer allocator.free(seed_hex);
+            const seed = parseSeedHex(seed_hex) catch {
+                log.emit("Invalid SEED_HEX provided; expected at most 64 hex characters\n", .{});
+                std.process.exit(1);
+            };
+            break :blk hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, seed);
+        } else {
+            break :blk hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
+        }
+    };
+
+    var scheme = scheme_ptr;
     defer scheme.deinit();
 
     log.print("ZIG_SIGN_DEBUG: lifetime={s} num_active_epochs={d}\n", .{

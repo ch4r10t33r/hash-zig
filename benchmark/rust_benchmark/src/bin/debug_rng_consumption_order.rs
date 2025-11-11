@@ -39,13 +39,13 @@ fn main() {
 
     println!("\nRNG state after direct parameter generation:");
     for i in 0..5 {
-        let val = rng3.gen::<u32>();
+        let val = rng3.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 
     println!("\nRNG state after key generation:");
     for i in 0..5 {
-        let val = rng4.gen::<u32>();
+        let val = rng4.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 }

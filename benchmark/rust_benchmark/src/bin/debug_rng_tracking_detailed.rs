@@ -37,7 +37,7 @@ fn main() {
     // Step 3: Check RNG state after parameter + PRF key generation
     println!("\nStep 3: RNG state after parameter + PRF key generation");
     for i in 0..10 {
-        let val = rng.gen::<u32>();
+        let val = rng.random::<u32>();
         println!("  [{}] = {} (0x{:x})", i, val, val);
     }
 
