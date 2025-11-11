@@ -111,60 +111,9 @@ jobs:
           ls -la ~/.cache/zig/p/ || echo "No cache directory found"
           echo "Dependencies fetched successfully"
       
-      - name: Run Rust compatibility tests (CRITICAL)
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
-        run: zig build test-rust-compat
-        env:
-          RUST_COMPAT_REQUIRED: "true"
-      
       - name: Build library
         if: steps.check_changes.outputs.has_zig_changes == 'true'
         run: zig build
-
-      - name: Deterministic key generation benchmark (2^8)
-        shell: bash
-        run: |
-          set -euo pipefail
-          seed="4242424242424242424242424242424242424242424242424242424242424242"
-          out_dir="tmp/deterministic_keygen"
-          mkdir -p "${out_dir}"
-          echo "Deterministic seed: ${seed}"
-
-          echo "Building required Zig artifacts..."
-          zig build
-
-          zig_start=$(date +%s%N)
-          ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache" \
-            SEED_HEX="${seed}" \
-            MESSAGE="deterministic keygen benchmark" \
-            EPOCH=0 \
-            LIFETIME="2^8" \
-            NUM_ACTIVE_EPOCHS=256 \
-            ./zig-out/bin/zig-sign-message > "${out_dir}/zig.log" 2>&1
-          zig_end=$(date +%s%N)
-          zig_pk=$(grep '^PUBLIC_KEY:' "${out_dir}/zig.log" | sed 's/^PUBLIC_KEY://')
-          if [ -z "${zig_pk}" ]; then
-            echo "::error::Failed to capture Zig public key"
-            cat "${out_dir}/zig.log"
-            exit 1
-          fi
-          echo "::notice::[Deterministic Keygen] Zig key generation completed in $(((zig_end - zig_start)/1000000)) ms"
-          echo "::notice::[Deterministic Keygen] Zig public key: ${zig_pk}"
-
-          rust_start=$(date +%s%N)
-          MESSAGE="deterministic keygen benchmark" \
-            EPOCH=0 \
-            SEED_HEX="${seed}" \
-            cargo run --manifest-path benchmark/rust_benchmark/Cargo.toml --bin sign_message --quiet > "${out_dir}/rust.log" 2>&1
-          rust_end=$(date +%s%N)
-          rust_pk=$(grep '^PUBLIC_KEY:' "${out_dir}/rust.log" | sed 's/^PUBLIC_KEY://')
-          if [ -z "${rust_pk}" ]; then
-            echo "::error::Failed to capture Rust public key"
-            cat "${out_dir}/rust.log"
-            exit 1
-          fi
-          echo "::notice::[Deterministic Keygen] Rust key generation completed in $(((rust_end - rust_start)/1000000)) ms"
-          echo "::notice::[Deterministic Keygen] Rust public key: ${rust_pk}"
 
       - name: Run cross-language compatibility suite
         if: steps.check_changes.outputs.has_zig_changes == 'true'

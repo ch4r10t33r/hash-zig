@@ -1,288 +1,90 @@
-# Hash-Based Signature Benchmark Suite
+# Cross-Language Benchmark Suite
 
-A modular benchmarking framework for comparing hash-based signature implementations, specifically designed to evaluate key generation performance between [hash-sig](https://github.com/b-wagn/hash-sig/) (Rust) and [hash-zig](https://github.com/ch4r10t33r/hash-zig) (Zig) with **exact Rust compatibility**.
+This directory contains the tooling that exercises both the Zig and Rust implementations of Generalized XMSS and reports timing/compatibility results. The current flow is centered around the convenience script `benchmark.py`, which mirrors what CI runs.
 
-## Features
+## What the script does
 
-- **Rust-Compatible Architecture**: Both implementations use identical Generalized XMSS architecture with PRF-based key derivation, epoch management, and encoding randomness
-- **Recommended Parameters**: Both use Winternitz parameters (22 chains of length 256, w=8) from [hash-sig](https://github.com/b-wagn/hash-sig/) recommended configuration
-- **Automated Setup**: Automatically builds both implementations with proper dependencies
-- **Modular Architecture**: Easy to extend with additional implementations
-- **Statistical Analysis**: Comprehensive performance metrics including mean, median, min, max, and standard deviation
-- **Key Verification**: SHA3-256 public key hashing for cross-implementation verification
-- **JSON Export**: Results saved in machine-readable format for further analysis
-- **Robust Error Handling**: Timeout protection and detailed error reporting
+Running `python3 benchmark.py` will:
 
-## Requirements
+- Build the helper binaries
+  - `zig-remote-hash-tool` via `zig build zig-remote-hash-tool -Doptimize=ReleaseFast`
+  - `remote_hashsig_tool` via `cargo build --release --bin remote_hashsig_tool`
+- Generate deterministic key pairs for lifetimes `2^8` and `2^18` (256 active epochs)
+- Sign with both implementations and verify in all four directions (Zig→Zig, Zig→Rust, Rust→Rust, Rust→Zig)
+- Print a per-operation timing table and the locations of the generated artifacts under `/tmp`
 
-- Python 3.7+
-- Git
-- Rust (cargo) for hash-sig
-- Zig compiler (0.14.0+) for hash-zig
+You can run the exact same flow locally as the CI job “Run cross-language compatibility suite”.
 
-### Installing Dependencies
+## Prerequisites
 
-**Ubuntu/Debian:**
-```bash
-sudo apt update
-sudo apt install -y git python3
+- Python 3.8+
+- Rust toolchain 1.87.0 (matches CI)
+- Zig 0.14.1
 
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install Zig from https://ziglang.org/download/
-```
-
-**macOS:**
-```bash
-brew install git python3 rust zig
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S git python rust zig
-```
-
-**Windows:**
-- Install Rust from https://rustup.rs/
-- Install Zig from https://ziglang.org/download/
-- Install Git from https://git-scm.com/download/win
-- Python 3 from https://www.python.org/downloads/
-
-## Quick Start
-
-1. **Clone this repository:**
-   ```bash
-   git clone <this-repo-url>
-   cd hash-sig-benchmark
-   ```
-
-2. **Run the benchmark:**
-   ```bash
-   python3 benchmark.py
-   ```
-
-   Or specify the number of iterations:
-   ```bash
-   python3 benchmark.py 20
-   ```
-
-The script will automatically:
-- Build both Rust and Zig implementations with proper dependencies
-- Run the benchmark suite with Rust-compatible parameters
-- Display detailed results including key verification
-- Save results to `benchmark_output/benchmark_results.json`
-
-## Usage
-
-### Basic Usage
+Check with:
 
 ```bash
-# Run with default 10 iterations
-python3 benchmark.py
-
-# Run with custom iteration count
-python3 benchmark.py 50
+python3 --version
+rustc --version
+zig version
 ```
 
-### Output
+## Quick start
 
-The benchmark produces:
-- Console output with real-time progress and results
-- `benchmark_output/benchmark_results.json` - Detailed results in JSON format
-- Generated keys in `benchmark_output/hash-sig/` and `benchmark_output/hash-zig/`
+From the repository root:
 
-### Configuration
-
-Edit the `BenchmarkConfig` dataclass in `benchmark.py` to adjust:
-
-```python
-@dataclass
-class BenchmarkConfig:
-    lifetime: int = 1024  # 2^10 signatures
-    height: int = 10       # Tree height
-    iterations: int = 10   # Number of runs
-    timeout: int = 300     # Timeout per key generation (seconds)
+```bash
+python3 benchmark/benchmark.py
 ```
 
-## Architecture
-
-### Class Structure
-
-- **`HashSigImplementation`** (ABC): Base class for implementations
-  - `HashSigImplementationRust`: Wrapper for Rust implementation (hash-sig)
-  - `HashZigImplementation`: Wrapper for Zig implementation (hash-zig)
-
-- **`BenchmarkRunner`**: Orchestrates the benchmark process
-  - Setup phase: Clone and build
-  - Benchmark phase: Run key generation
-  - Analysis phase: Calculate statistics
-  - Export phase: Save results
-
-- **`KeyGenResult`**: Data class for individual run results
-- **`BenchmarkConfig`**: Configuration parameters
-
-### Adding New Implementations
-
-To add a new hash-based signature implementation:
-
-```python
-class MyNewImplementation(HashSigImplementation):
-    def __init__(self, output_dir: Path):
-        super().__init__(
-            'my-impl',
-            'https://github.com/user/my-impl.git',
-            output_dir / 'my-impl'
-        )
-    
-    def clone(self) -> bool:
-        # Implementation
-        pass
-    
-    def build(self) -> bool:
-        # Implementation
-        pass
-    
-    def generate_key(self, iteration: int, config: BenchmarkConfig) -> KeyGenResult:
-        # Implementation
-        pass
-```
-
-Then add it to the runner in `main()`:
-
-```python
-runner.add_implementation(MyNewImplementation(output_dir))
-```
-
-## Benchmark Parameters
-
-The benchmark is configured for **exact parameter matching**:
-
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| **Lifetime** | 2^10 = 1,024 signatures | Standard test configuration |
-| **Tree Height** | 10 | Derived from lifetime |
-| **Winternitz w** | 8 | Recommended by hash-sig |
-| **Number of Chains** | 22 | Recommended by hash-sig |
-| **Chain Length** | 256 (2^8) | Derived from w=8 |
-| **Hash Function** | Poseidon2 | Width=16, KoalaBear field |
-| **Encoding** | Binary | Incomparable encoding with randomness |
-| **Security Level** | 128-bit | Post-quantum secure |
-
-**Reference**: Parameters match the recommended Winternitz configuration from [hash-sig instantiations](https://github.com/b-wagn/hash-sig/blob/main/src/signature/generalized_xmss/instantiations_poseidon_top_level.rs)
-
-## Results Interpretation
-
-### Key Metrics
-
-- **Mean Time**: Average key generation time across all successful runs
-- **Median Time**: Middle value, less affected by outliers
-- **Standard Deviation**: Measures consistency of performance
-- **Key Sizes**: Size of private and public keys in bytes
-- **Speedup Factor**: Relative performance between implementations
-
-### Example Output
+Example output (abridged):
 
 ```
-RESULTS
-======================================================================
-
-HASH-SIG
-----------------------------------------------------------------------
-  Successful runs: 10/10
-
-  Key Generation Time:
-    Mean:   1.234s
-    Median: 1.230s
-    Min:    1.150s
-    Max:    1.350s
-    Stdev:  0.045s
-
-  Key Sizes:
-    Private key: 4,096 bytes
-    Public key:  60 bytes
-
-HASH-ZIG
-----------------------------------------------------------------------
-  Successful runs: 10/10
-
-  Key Generation Time:
-    Mean:   0.987s
-    Median: 0.985s
-    Min:    0.920s
-    Max:    1.050s
-    Stdev:  0.032s
-
-  Key Sizes:
-    Private key: 4,096 bytes
-    Public key:  60 bytes
-
-COMPARISON
-======================================================================
-hash-zig is 1.25x faster than hash-sig
-
-Mean generation time:
-  hash-sig: 1.234s
-  hash-zig: 0.987s
-
-Difference: 0.247s
+=== Scenario: Lifetime 2^18 ===
+  Rust sign (keygen)             PASS  (0.028s)
+  Rust sign → Zig verify         PASS  (0.037s)
+  Zig sign (keygen)              PASS  (6.847s)
+  Zig sign → Rust verify         PASS  (0.007s)
+  Rust public key: /tmp/rust_public_2pow18.key.json
+  Zig public key : /tmp/zig_public_2pow18.key.json
 ```
+
+The script stores the public keys and signatures for each scenario under `/tmp` so you can inspect them or reuse them with the helper binaries.
+
+## Manual helper usage
+
+If you want to drive the helpers yourself:
+
+```bash
+# Build everything once
+zig build zig-remote-hash-tool -Doptimize=ReleaseFast
+cargo build --manifest-path benchmark/rust_benchmark/Cargo.toml --release --bin remote_hashsig_tool
+
+# Rust: sign (writes JSON public key + bincode signature)
+benchmark/rust_benchmark/target/release/remote_hashsig_tool \
+  sign "message" /tmp/rust_public.key.json /tmp/rust_signature.bin \
+  4242…4242 0 256 0 2^18
+
+# Zig: verify the Rust artefacts
+zig-out/bin/zig-remote-hash-tool verify "message" \
+  /tmp/rust_public.key.json /tmp/rust_signature.bin 0 2^18
+```
+
+Swap the commands to sign with Zig and verify with Rust. The helpers accept the lifetime (`2^8` or `2^18`), the seed (`SEED_HEX` argument), the starting epoch, and the active window so they line up with the benchmark script.
+
+## Updating or extending benchmarks
+
+- Adjust the lifetimes or scenarios by editing the `SCENARIOS` list in `benchmark.py`.
+- The helper binaries already support custom seeds, start epochs, and active epochs; expose more scenarios by wiring them into the script.
+- If you need raw timing without verification, call the helpers directly or wrap them in your own driver script.
 
 ## Troubleshooting
 
-### Build Failures
+- **Missing toolchains**: make sure `rustup` installed 1.87.0 and `zig` 0.14.1 is on PATH.
+- **Failed build**: inspect the cargo/zig output printed by the script; it bubbles up errors before running the checks.
+- **Different results from CI**: ensure you are running the script from a clean worktree and that you have not modified the helper binaries locally.
 
-If a build fails:
+## Related documents
 
-1. **Check dependencies are installed** (Rust via rustup, Zig)
-2. **Manually build the implementation:**
-   ```bash
-   cd hash-sig && cargo build --release
-   cd ../hash-zig && zig build -Doptimize=ReleaseFast
-   ```
-3. **Check for compilation errors** in the output
-
-### Executable Not Found
-
-The benchmark tries to find executables in common locations. If it fails:
-
-1. Check the build output directory
-2. Update the `keygen_candidates` or `exe_candidates` lists in the implementation class
-3. Ensure the build was successful
-
-### Permission Errors
-
-```bash
-chmod +x benchmark.py
-```
-
-## Performance Considerations
-
-- First run may be slower due to cold caches
-- Run with higher iteration counts (20-50) for more stable results
-- Ensure system is not under heavy load during benchmarking
-- Consider running multiple times and comparing results
-
-## Contributing
-
-To contribute improvements or add new implementations:
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement changes following the existing architecture
-4. Test thoroughly
-5. Submit a pull request
-
-## License
-
-This benchmark suite is provided as-is for research and comparison purposes.
-Individual implementations retain their original licenses:
-- hash-sig: Check repository for license
-- hash-zig: Check repository for license
-
-## References
-
-- [hash-sig repository](https://github.com/b-wagn/hash-sig/)
-- [hash-zig repository](https://github.com/ch4r10t33r/hash-zig)
-- [LMS RFC 8554](https://datatracker.ietf.org/doc/html/rfc8554)
-- [XMSS RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391)
+- `COMPATIBILITY_TEST.md` – summary of interoperability expectations and how we measure them.
+- `PERFORMANCE_TESTING.md` – guidance for capturing timing breakdowns beyond the default script.
