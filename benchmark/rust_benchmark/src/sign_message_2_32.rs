@@ -58,4 +58,3 @@ fn main() {
     println!("SIGNATURE:{}", sig_value.to_string());
     println!("PUBLIC_KEY:{}", pk_value.to_string());
 }
-
