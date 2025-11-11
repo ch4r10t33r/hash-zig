@@ -27,6 +27,8 @@ zig-out/
 # Test artifacts
 test_*
 *.test
+# Keep investigation test sources
+!investigations/test_*.zig
 # Temporary files
 tmp/
 temp/
