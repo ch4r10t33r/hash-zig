@@ -143,6 +143,8 @@ jobs:
             mkdir -p "${out_dir}"
 
             echo ">>> [${lifetime_env}] Zig signing"
+            local zig_sign_start_ns
+            zig_sign_start_ns=$(date +%s%N)
             local zig_sign_log="${out_dir}/zig_sign.log"
             ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache" \
               MESSAGE="$msg" \
@@ -150,6 +152,8 @@ jobs:
               LIFETIME="$lifetime_env" \
               NUM_ACTIVE_EPOCHS=256 \
               ./zig-out/bin/zig-sign-message > "${zig_sign_log}" 2>&1
+            local zig_sign_end_ns
+            zig_sign_end_ns=$(date +%s%N)
             local zig_sig
             zig_sig=$(grep '^SIGNATURE:' "${zig_sign_log}" | sed 's/^SIGNATURE://')
             local zig_pk
@@ -159,9 +163,13 @@ jobs:
               cat "${zig_sign_log}"
               exit 1
             fi
+            local zig_sign_ms=$(( (zig_sign_end_ns - zig_sign_start_ns) / 1000000 ))
+            echo "::notice::[${lifetime_env}] Zig key generation + sign completed in ${zig_sign_ms} ms"
 
             echo ">>> [${lifetime_env}] Zig -> Zig verification"
             local zig_verify_log="${out_dir}/zig_verify.log"
+            local zig_verify_start_ns
+            zig_verify_start_ns=$(date +%s%N)
             PUBLIC_KEY="PUBLIC_KEY:${zig_pk}" \
               SIGNATURE="SIGNATURE:${zig_sig}" \
               MESSAGE="$msg" \
@@ -169,30 +177,44 @@ jobs:
               LIFETIME="$lifetime_env" \
               NUM_ACTIVE_EPOCHS=256 \
               ./zig-out/bin/zig-verify-signature > "${zig_verify_log}" 2>&1
+            local zig_verify_end_ns
+            zig_verify_end_ns=$(date +%s%N)
             if ! grep -q 'VERIFY_RESULT:true' "${zig_verify_log}"; then
               echo "::error::Zig self verification failed for lifetime ${lifetime_env}"
               cat "${zig_verify_log}"
               exit 1
             fi
+            local zig_verify_ms=$(( (zig_verify_end_ns - zig_verify_start_ns) / 1000000 ))
+            echo "::notice::[${lifetime_env}] Zig verify completed in ${zig_verify_ms} ms"
 
             echo ">>> [${lifetime_env}] Zig -> Rust verification"
             local zig_to_rust_log="${out_dir}/zig_to_rust.log"
+            local zig_to_rust_start_ns
+            zig_to_rust_start_ns=$(date +%s%N)
             PUBLIC_KEY="${zig_pk}" \
               SIGNATURE="${zig_sig}" \
               MESSAGE="$msg" \
               EPOCH=0 \
               cargo run --manifest-path benchmark/rust_benchmark/Cargo.toml --bin "${verify_bin}" --quiet > "${zig_to_rust_log}" 2>&1
+            local zig_to_rust_end_ns
+            zig_to_rust_end_ns=$(date +%s%N)
             if ! grep -q 'VERIFY_RESULT:true' "${zig_to_rust_log}"; then
               echo "::error::Rust verification of Zig signature failed for lifetime ${lifetime_env}"
               cat "${zig_to_rust_log}"
               exit 1
             fi
+            local zig_to_rust_ms=$(( (zig_to_rust_end_ns - zig_to_rust_start_ns) / 1000000 ))
+            echo "::notice::[${lifetime_env}] Zig -> Rust verify completed in ${zig_to_rust_ms} ms"
 
             echo ">>> [${lifetime_env}] Rust signing"
             local rust_sign_log="${out_dir}/rust_sign.log"
+            local rust_sign_start_ns
+            rust_sign_start_ns=$(date +%s%N)
             MESSAGE="$msg" \
               EPOCH=0 \
               cargo run --manifest-path benchmark/rust_benchmark/Cargo.toml --bin "${sign_bin}" --quiet > "${rust_sign_log}" 2>&1
+            local rust_sign_end_ns
+            rust_sign_end_ns=$(date +%s%N)
             local rust_sig
             rust_sig=$(grep '^SIGNATURE:' "${rust_sign_log}" | sed 's/^SIGNATURE://')
             local rust_pk
@@ -202,22 +224,32 @@ jobs:
               cat "${rust_sign_log}"
               exit 1
             fi
+            local rust_sign_ms=$(( (rust_sign_end_ns - rust_sign_start_ns) / 1000000 ))
+            echo "::notice::[${lifetime_env}] Rust key generation + sign completed in ${rust_sign_ms} ms"
 
             echo ">>> [${lifetime_env}] Rust -> Rust verification"
             local rust_verify_log="${out_dir}/rust_verify.log"
+            local rust_verify_start_ns
+            rust_verify_start_ns=$(date +%s%N)
             PUBLIC_KEY="${rust_pk}" \
               SIGNATURE="${rust_sig}" \
               MESSAGE="$msg" \
               EPOCH=0 \
               cargo run --manifest-path benchmark/rust_benchmark/Cargo.toml --bin "${verify_bin}" --quiet > "${rust_verify_log}" 2>&1
+            local rust_verify_end_ns
+            rust_verify_end_ns=$(date +%s%N)
             if ! grep -q 'VERIFY_RESULT:true' "${rust_verify_log}"; then
               echo "::error::Rust self verification failed for lifetime ${lifetime_env}"
               cat "${rust_verify_log}"
               exit 1
             fi
+            local rust_verify_ms=$(( (rust_verify_end_ns - rust_verify_start_ns) / 1000000 ))
+            echo "::notice::[${lifetime_env}] Rust verify completed in ${rust_verify_ms} ms"
 
             echo ">>> [${lifetime_env}] Rust -> Zig verification"
             local rust_to_zig_log="${out_dir}/rust_to_zig.log"
+            local rust_to_zig_start_ns
+            rust_to_zig_start_ns=$(date +%s%N)
             PUBLIC_KEY="PUBLIC_KEY:${rust_pk}" \
               SIGNATURE="SIGNATURE:${rust_sig}" \
               MESSAGE="$msg" \
@@ -225,11 +257,15 @@ jobs:
               LIFETIME="$lifetime_env" \
               NUM_ACTIVE_EPOCHS=256 \
               ./zig-out/bin/zig-verify-signature > "${rust_to_zig_log}" 2>&1
+            local rust_to_zig_end_ns
+            rust_to_zig_end_ns=$(date +%s%N)
             if ! grep -q 'VERIFY_RESULT:true' "${rust_to_zig_log}"; then
               echo "::error::Zig verification of Rust signature failed for lifetime ${lifetime_env}"
               cat "${rust_to_zig_log}"
               exit 1
             fi
+            local rust_to_zig_ms=$(( (rust_to_zig_end_ns - rust_to_zig_start_ns) / 1000000 ))
+            echo "::notice::[${lifetime_env}] Rust -> Zig verify completed in ${rust_to_zig_ms} ms"
 
             echo ">>> [${lifetime_env}] Compatibility checks passed"
           }
