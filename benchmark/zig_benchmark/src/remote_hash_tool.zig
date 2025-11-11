@@ -8,7 +8,7 @@ const Command = enum {
 };
 
 const UsageError = error{InvalidArguments};
-const BincodeError = error{ LengthOverflow, InvalidRandLength };
+const BincodeError = error{ LengthOverflow, InvalidRandLength, InvalidPathLength, InvalidHashesLength };
 const LifetimeError = error{UnsupportedLifetime};
 
 const FieldElement = hash_zig.FieldElement;
@@ -138,13 +138,14 @@ fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.Generalize
     }
 }
 
-fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len: usize) !*hash_zig.GeneralizedXMSSSignature {
+fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len: usize, expected_path_len: usize, expected_hashes_len: usize) !*hash_zig.GeneralizedXMSSSignature {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
     const reader = file.reader();
 
     const path_len = try readLength(reader);
+    if (path_len != expected_path_len) return error.InvalidPathLength;
     var path_nodes = try allocator.alloc([8]FieldElement, path_len);
     errdefer allocator.free(path_nodes);
     for (0..path_len) |i| {
@@ -159,7 +160,7 @@ fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len
 
     if (rand_len > 7) {
         path_ptr.deinit();
-        return BincodeError.InvalidRandLength;
+        return error.InvalidRandLength;
     }
     var rho = [_]FieldElement{FieldElement.zero()} ** 7;
     for (0..rand_len) |i| {
@@ -167,6 +168,10 @@ fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len
     }
 
     const hashes_len = try readLength(reader);
+    if (hashes_len != expected_hashes_len) {
+        path_ptr.deinit();
+        return error.InvalidHashesLength;
+    }
     var hashes_tmp = try allocator.alloc([8]FieldElement, hashes_len);
     errdefer allocator.free(hashes_tmp);
     for (0..hashes_len) |i| {
@@ -249,7 +254,13 @@ fn verifyCommand(
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(arena_allocator, lifetime);
     defer scheme.deinit();
 
-    var signature_ptr = try readSignatureBincode(sig_path, arena_allocator, scheme.lifetime_params.rand_len_fe);
+    var signature_ptr = try readSignatureBincode(
+        sig_path,
+        arena_allocator,
+        scheme.lifetime_params.rand_len_fe,
+        scheme.lifetime_params.final_layer,
+        scheme.lifetime_params.hash_len_fe,
+    );
     defer signature_ptr.deinit();
 
     const msg_bytes = messageToBytes(message);
