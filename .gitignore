@@ -77,3 +77,7 @@ debug_*
 benchmark/rust_hash_sig_debug
 benchmark/rust-hash-sig-source
 benchmark/rust-hash-sig-debug
+
+# Repo-local temporary artifacts
+/tmp/
+zig-verify-signature.o
