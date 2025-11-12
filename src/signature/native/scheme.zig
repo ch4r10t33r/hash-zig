@@ -379,7 +379,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     layer_cache: std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
     layer_cache_mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: Allocator, lifetime: @import("../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
+    pub fn init(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
 
         // Select the correct lifetime parameters
@@ -405,7 +405,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return self;
     }
 
-    pub fn initWithSeed(allocator: Allocator, lifetime: @import("../core/params_rust_compat.zig").KeyLifetime, seed: [32]u8) !*GeneralizedXMSSSignatureScheme {
+    pub fn initWithSeed(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime, seed: [32]u8) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
         const lifetime_params = switch (lifetime) {
             .lifetime_2_8 => LIFETIME_2_8_PARAMS,
@@ -1179,7 +1179,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Compute base-p decomposition to 24 elements (matching Rust)
         // Rust uses F::from_u64(digit) which converts to Montgomery, so we need to do the same
         // (using p already declared above for tweak computation)
-        const Poseidon24 = @import("../poseidon2/poseidon2.zig").Poseidon2KoalaBear24Plonky3;
+        const Poseidon24 = @import("../../poseidon2/poseidon2.zig").Poseidon2KoalaBear24Plonky3;
         const F = Poseidon24.Field;
         var input_24_monty: [24]F = undefined;
         var remaining = acc;
@@ -1701,7 +1701,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Encode message as field elements (matching Rust encode_message)
     /// Uses base-p decomposition: interprets message as little-endian big integer
     /// Uses multi-precision arithmetic to handle 32-byte (256-bit) message
-    fn encodeMessage(self: *GeneralizedXMSSSignatureScheme, MSG_LEN_FE: usize, message: [MESSAGE_LENGTH]u8) ![]FieldElement {
+    pub fn encodeMessage(self: *GeneralizedXMSSSignatureScheme, MSG_LEN_FE: usize, message: [MESSAGE_LENGTH]u8) ![]FieldElement {
         const p: u256 = 2130706433; // KoalaBear field modulus
         var result = try self.allocator.alloc(FieldElement, MSG_LEN_FE);
         errdefer self.allocator.free(result);
@@ -1724,7 +1724,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Encode epoch as field elements (matching Rust encode_epoch)
-    fn encodeEpoch(self: *GeneralizedXMSSSignatureScheme, TWEAK_LEN_FE: usize, epoch: u32) ![]FieldElement {
+    pub fn encodeEpoch(self: *GeneralizedXMSSSignatureScheme, TWEAK_LEN_FE: usize, epoch: u32) ![]FieldElement {
         const p: u64 = 2130706433; // KoalaBear field modulus
         const TWEAK_SEPARATOR_FOR_MESSAGE_HASH: u8 = 0x02; // From Rust
         var result = try self.allocator.alloc(FieldElement, TWEAK_LEN_FE);
@@ -1870,7 +1870,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return poseidon_top_level.mapIntoHypercubePart(self, DIMENSION, BASE, final_layer, field_elements);
     }
 
-    fn applyTopLevelPoseidonMessageHash(
+    pub fn applyTopLevelPoseidonMessageHash(
         self: *GeneralizedXMSSSignatureScheme,
         parameter: [5]FieldElement,
         epoch: u32,
@@ -2443,7 +2443,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Match Rust: Rust stores hashes internally in Montgomery form (TH::Domain = [KoalaBear; HASH_LEN])
         // KoalaBear uses Montgomery internally, so Rust's chain() returns Montgomery values
         // We need to store hashes in Montgomery form to match Rust's internal representation
-        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+        const plonky3_field = @import("../../poseidon2/plonky3_field.zig");
         const F = plonky3_field.KoalaBearField; // Montgomery form implementation
         const hashes = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
         const hash_len = self.lifetime_params.hash_len_fe;
@@ -2576,7 +2576,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // - Zig→Zig: hashes are stored in Montgomery form during signing (matching Rust's internal representation)
         //   So we can use them directly in Montgomery form for chain walking
         // Use plonky3_field.KoalaBearField which uses Montgomery form (not core.KoalaBearField which uses canonical)
-        const plonky3_field = @import("../poseidon2/plonky3_field.zig");
+        const plonky3_field = @import("../../poseidon2/plonky3_field.zig");
         const F = plonky3_field.KoalaBearField; // Montgomery form implementation
         var final_chain_domains = try self.allocator.alloc([8]FieldElement, hashes.len);
         defer self.allocator.free(final_chain_domains);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = @import("../../utils/log.zig");
 const FieldElement = @import("../../core/field.zig").FieldElement;
+const poseidon_top_level = @import("poseidon_top_level.zig");
 
 const MESSAGE_LENGTH: usize = 32;
 
@@ -14,7 +15,7 @@ pub fn deriveTargetSumEncoding(
     const dimension: usize = self.lifetime_params.dimension;
     const expected_sum: usize = self.lifetime_params.target_sum;
 
-    const chunks = try self.applyTopLevelPoseidonMessageHash(parameter, epoch, randomness, message);
+    const chunks = try poseidon_top_level.applyTopLevelPoseidonMessageHash(self, parameter, epoch, randomness, message);
     defer self.allocator.free(chunks);
 
     var sum: usize = 0;

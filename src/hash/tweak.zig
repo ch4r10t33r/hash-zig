@@ -6,7 +6,7 @@
 //! - ChainTweak: For Winternitz hash chains
 
 const std = @import("std");
-const field = @import("field.zig");
+const field = @import("../core/field.zig");
 const FieldElement = field.FieldElement;
 
 /// Tweak type for Poseidon hash functions

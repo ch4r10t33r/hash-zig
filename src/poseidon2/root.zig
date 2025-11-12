@@ -1,3 +1,4 @@
+const FieldElement = @import("../core/field.zig").FieldElement;
 // Poseidon2 implementation compatible with Plonky3
 // This module provides a Zig implementation of the Poseidon2 hash function
 // that is fully compatible with Plonky3's KoalaBear field implementation.
