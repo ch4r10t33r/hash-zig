@@ -126,6 +126,12 @@ def run_command(
     return result
 
 
+def zig_sign_timeout(cfg: ScenarioConfig) -> int:
+    if cfg.lifetime == "2^32":
+        return int(os.environ.get("BENCHMARK_TIMEOUT_2_32", "2400"))
+    return 180
+
+
 def ensure_rust_binary() -> None:
     if RUST_BIN.exists():
         return
@@ -212,6 +218,7 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResult
             cfg.lifetime,
         ],
         cwd=REPO_ROOT,
+        timeout=zig_sign_timeout(cfg),
     )
     duration = command_duration(start)
     success = result.returncode == 0

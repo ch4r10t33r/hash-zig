@@ -22,6 +22,9 @@ fn parseLifetimeTag(tag: []const u8) LifetimeError!hash_zig.KeyLifetimeRustCompa
     if (std.mem.eql(u8, cleaned, "2^18") or std.mem.eql(u8, cleaned, "262144") or std.ascii.eqlIgnoreCase(cleaned, "lifetime_2_18")) {
         return hash_zig.KeyLifetimeRustCompat.lifetime_2_18;
     }
+    if (std.mem.eql(u8, cleaned, "2^32") or std.mem.eql(u8, cleaned, "4294967296") or std.ascii.eqlIgnoreCase(cleaned, "lifetime_2_32")) {
+        return hash_zig.KeyLifetimeRustCompat.lifetime_2_32;
+    }
     return LifetimeError.UnsupportedLifetime;
 }
 
@@ -199,7 +202,7 @@ fn signCommand(
     lifetime_tag: []const u8,
 ) !void {
     const lifetime = parseLifetimeTag(lifetime_tag) catch {
-        log.emit("Unsupported lifetime tag. Expected 2^8 or 2^18\n", .{});
+        log.emit("Unsupported lifetime tag. Expected 2^8, 2^18, or 2^32\n", .{});
         std.process.exit(1);
     };
 
@@ -245,7 +248,7 @@ fn verifyCommand(
     const arena_allocator = arena.allocator();
 
     const lifetime = parseLifetimeTag(lifetime_tag) catch {
-        log.emit("Unsupported lifetime tag. Expected 2^8 or 2^18\n", .{});
+        log.emit("Unsupported lifetime tag. Expected 2^8, 2^18, or 2^32\n", .{});
         std.process.exit(1);
     };
 

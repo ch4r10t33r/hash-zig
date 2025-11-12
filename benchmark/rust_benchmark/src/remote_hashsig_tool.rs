@@ -10,6 +10,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
+use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
 use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
 use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
 
@@ -17,6 +18,7 @@ use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
 enum LifetimeTag {
     Pow8,
     Pow18,
+    Pow32,
 }
 
 impl LifetimeTag {
@@ -26,6 +28,7 @@ impl LifetimeTag {
         match cleaned.as_str() {
             "2^8" | "256" | "lifetime_2_8" => Ok(Self::Pow8),
             "2^18" | "262144" | "lifetime_2_18" => Ok(Self::Pow18),
+            "2^32" | "4294967296" | "lifetime_2_32" => Ok(Self::Pow32),
             other => Err(format!("unsupported lifetime '{other}'").into()),
         }
     }
@@ -47,6 +50,10 @@ impl LifetimeTag {
             LifetimeTag::Pow18 => LifetimeMetadata {
                 rand_len: 6,
                 hash_len: 7,
+            },
+            LifetimeTag::Pow32 => LifetimeMetadata {
+                rand_len: 7,
+                hash_len: 8,
             },
         }
     }
@@ -518,6 +525,16 @@ fn sign_command(
             num_active_epochs,
             meta,
         ),
+        LifetimeTag::Pow32 => sign_for_scheme::<SIGTopLevelTargetSumLifetime32Dim64Base8>(
+            message,
+            pk_json_out,
+            sig_bin_out,
+            seed,
+            epoch,
+            start_epoch,
+            num_active_epochs,
+            meta,
+        ),
     }
 }
 
@@ -538,6 +555,13 @@ fn verify_command(
             meta,
         )?,
         LifetimeTag::Pow18 => verify_for_scheme::<SIGTopLevelTargetSumLifetime18Dim64Base8>(
+            message,
+            pk_json_path,
+            sig_bin_path,
+            epoch,
+            meta,
+        )?,
+        LifetimeTag::Pow32 => verify_for_scheme::<SIGTopLevelTargetSumLifetime32Dim64Base8>(
             message,
             pk_json_path,
             sig_bin_path,
