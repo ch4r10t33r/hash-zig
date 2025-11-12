@@ -11,7 +11,7 @@ const UsageError = error{InvalidArguments};
 const BincodeError = error{ LengthOverflow, InvalidRandLength, InvalidPathLength, InvalidHashesLength };
 const LifetimeError = error{UnsupportedLifetime};
 
-const FieldElement = hash_zig.FieldElement;
+const FieldElement = hash_zig.core.FieldElement;
 const HashTreeOpening = hash_zig.signature.HashTreeOpening;
 
 fn parseLifetimeTag(tag: []const u8) LifetimeError!hash_zig.KeyLifetimeRustCompat {

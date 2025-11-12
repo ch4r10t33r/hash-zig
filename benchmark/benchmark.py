@@ -72,7 +72,7 @@ SCENARIOS = [
 ]
 
 if INCLUDE_LIFETIME_2_32:
-    SCENARIOS = [
+    SCENARIOS.append(
         ScenarioConfig(
             lifetime="2^32",
             label="Lifetime 2^32",
@@ -82,7 +82,7 @@ if INCLUDE_LIFETIME_2_32:
             num_active_epochs=256,
             seed_hex=DEFAULT_SEED,
         )
-    ]
+    )
 
 SUMMARY_ORDER = [
     "rust_sign",
