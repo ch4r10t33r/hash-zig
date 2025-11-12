@@ -1,6 +1,6 @@
 # hash-zig
 
-[![CI](https://github.com/ch4r10t33r/hash-zig/actions/workflows/ci.yml/badge.svg)](https://github.com/ch4r10t33r/hash-zig/actions/workflows/ci.yml)
+[![CI](https://github.com/blockblaz/hash-zig/actions/workflows/ci.yml/badge.svg)](https://github.com/blockblaz/hash-zig/actions/workflows/ci.yml)
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
