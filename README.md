@@ -110,10 +110,12 @@ cargo --version    # Rust 1.87.0 toolchain (matches CI)
 ### Run the suite (recommended)
 
 ```bash
-# Produces zig-out/bin/zig-remote-hash-tool (ReleaseFast) and rust_benchmark/target/release/remote_hashsig_tool
+# Produce zig-out/bin/zig-remote-hash-tool (ReleaseFast) and rust_benchmark/target/release/remote_hashsig_tool
 python3 benchmark/benchmark.py                             # runs lifetimes 2^8 and 2^18
 python3 benchmark/benchmark.py --lifetime 2^32             # runs lifetime 2^32 only
 python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32"   # runs all lifetimes sequentially
+# Enable verbose cross-implementation debug logs
+BENCHMARK_DEBUG_LOGS=1 python3 benchmark/benchmark.py --lifetime 2^8
 ```
 
 The script automatically:
@@ -171,6 +173,9 @@ python3 benchmark/benchmark.py
 
 # lifetime 2^32 (longer run)
 python3 benchmark/benchmark.py --lifetime 2^32
+
+# include verbose Rust/Zig debug traces
+BENCHMARK_DEBUG_LOGS=1 python3 benchmark/benchmark.py --lifetime 2^8
 ```
 
 The script prints a PASS/FAIL matrix, timings, and the artifact locations under `/tmp`. Delete the files between runs if you want a clean slate: `rm /tmp/*_public_* /tmp/*_signature_*`.

@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
+import os
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUST_PROJECT = REPO_ROOT / "benchmark" / "rust_benchmark"
@@ -26,6 +27,20 @@ TMP_DIR = Path("/tmp")
 DEFAULT_SEED = "4242424242424242424242424242424242424242424242424242424242424242"
 DEFAULT_LIFETIMES = ("2^8", "2^18")
 SUPPORTED_LIFETIMES = {"2^8", "2^18", "2^32"}
+
+DEBUG_LOG_ENV = os.environ.get("BENCHMARK_DEBUG_LOGS", "").lower()
+VERBOSE_LOGS = DEBUG_LOG_ENV in {"1", "true", "yes", "on"}
+DEBUG_MARKERS = (
+    "HASH_SIG_DEBUG:",
+    "RUST_TREE_DEBUG:",
+    "RUST_POSEIDON_CHAIN_DEBUG:",
+    "ZIG_SIGN_DEBUG:",
+    "ZIG_ENCODING_DEBUG:",
+    "ZIG_HYPERCUBE_DEBUG:",
+    "ZIG_POS_IN:",
+    "ZIG_POS_OUT:",
+    "ZIG_POS_CONTEXT",
+)
 
 
 @dataclass
@@ -128,6 +143,17 @@ SUMMARY_LABELS = {
 }
 
 
+def sanitize_output(blob: str) -> str:
+    if not blob:
+        return ""
+    if VERBOSE_LOGS:
+        return blob.strip()
+    filtered_lines = [
+        line for line in blob.splitlines() if not any(marker in line for marker in DEBUG_MARKERS)
+    ]
+    return "\n".join(filtered_lines).strip()
+
+
 def run_command(
     cmd: list[str],
     *,
@@ -144,10 +170,12 @@ def run_command(
         text=True,
         timeout=timeout,
     )
-    if result.stdout:
-        print(result.stdout.strip())
-    if result.stderr:
-        print(result.stderr.strip())
+    stdout = sanitize_output(result.stdout)
+    stderr = sanitize_output(result.stderr)
+    if stdout:
+        print(stdout)
+    if stderr:
+        print(stderr)
     return result
 
 
