@@ -31,7 +31,7 @@ impl LifetimeTag {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct LifetimeMetadata {
     rand_len: usize,
     hash_len: usize,
@@ -164,12 +164,17 @@ fn message_to_bytes(message: &str) -> [u8; 32] {
     bytes
 }
 
-fn serialize_public_key_to_file<P, K>(pk: &K, path: P) -> Result<(), Box<dyn Error>>
+fn serialize_public_key_to_file<P, K>(
+    pk: &K,
+    path: P,
+    meta: LifetimeMetadata,
+) -> Result<(), Box<dyn Error>>
 where
     P: AsRef<Path>,
     K: Serialize,
 {
-    let pk_value = serde_json::to_value(pk)?;
+    let mut pk_value = serde_json::to_value(pk)?;
+    trim_public_key_value(&mut pk_value, meta);
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer_pretty(&mut writer, &pk_value)?;
@@ -177,23 +182,38 @@ where
     Ok(())
 }
 
-fn deserialize_public_key_from_file<P, K>(path: P) -> Result<K, Box<dyn Error>>
+fn deserialize_public_key_from_file<P, PK>(
+    path: P,
+    meta: LifetimeMetadata,
+) -> Result<PK, Box<dyn Error>>
 where
     P: AsRef<Path>,
-    K: for<'de> DeserializeOwned,
+    PK: for<'de> DeserializeOwned,
 {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let pk_value: serde_json::Value = serde_json::from_reader(reader)?;
+    let mut pk_value: serde_json::Value = serde_json::from_reader(reader)?;
+    trim_public_key_value(&mut pk_value, meta);
     let pk = serde_json::from_value(pk_value)?;
     Ok(pk)
 }
 
-fn signature_to_json<S>(signature: &S) -> Result<Value, Box<dyn Error>>
+fn trim_public_key_value(value: &mut Value, meta: LifetimeMetadata) {
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(Value::Array(root)) = obj.get_mut("root") {
+            if root.len() > meta.hash_len {
+                root.truncate(meta.hash_len);
+            }
+        }
+    }
+}
+
+fn signature_to_json<S>(signature: &S, meta: LifetimeMetadata) -> Result<Value, Box<dyn Error>>
 where
     S: Serialize,
 {
     let mut value = serde_json::to_value(signature)?;
+    trim_signature_value(&mut value, meta);
     if let Some(obj) = value.as_object_mut() {
         if let Some(path_val) = obj.get_mut("path") {
             if let Some(path_obj) = path_val.as_object_mut() {
@@ -206,10 +226,11 @@ where
     Ok(value)
 }
 
-fn signature_from_json<S>(mut value: Value) -> Result<S, Box<dyn Error>>
+fn signature_from_json<S>(mut value: Value, meta: LifetimeMetadata) -> Result<S, Box<dyn Error>>
 where
     S: for<'de> DeserializeOwned,
 {
+    trim_signature_value(&mut value, meta);
     if let Some(obj) = value.as_object_mut() {
         if let Some(path_val) = obj.get_mut("path") {
             if let Some(path_obj) = path_val.as_object_mut() {
@@ -220,6 +241,38 @@ where
         }
     }
     Ok(serde_json::from_value(value)?)
+}
+
+fn trim_signature_value(value: &mut Value, meta: LifetimeMetadata) {
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(path_val) = obj.get_mut("path") {
+            if let Some(path_obj) = path_val.as_object_mut() {
+                if let Some(Value::Array(nodes)) = path_obj.get_mut("nodes") {
+                    for node in nodes.iter_mut() {
+                        if let Value::Array(ref mut node_arr) = node {
+                            if node_arr.len() > meta.hash_len {
+                                node_arr.truncate(meta.hash_len);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(Value::Array(hashes)) = obj.get_mut("hashes") {
+            for domain in hashes.iter_mut() {
+                if let Value::Array(ref mut arr) = domain {
+                    if arr.len() > meta.hash_len {
+                        arr.truncate(meta.hash_len);
+                    }
+                }
+            }
+        }
+        if let Some(Value::Array(rho)) = obj.get_mut("rho") {
+            if rho.len() > meta.rand_len {
+                rho.truncate(meta.rand_len);
+            }
+        }
+    }
 }
 
 fn write_u64<W: Write>(writer: &mut W, value: u64) -> Result<(), Box<dyn Error>> {
@@ -404,8 +457,8 @@ where
     let signature = S::sign(&sk, epoch, &msg_bytes)
         .map_err(|e| format!("failed to sign message at epoch {epoch}: {e:?}"))?;
 
-    serialize_public_key_to_file(&pk, pk_json_out)?;
-    let sig_json = signature_to_json(&signature)?;
+    serialize_public_key_to_file(&pk, pk_json_out, meta)?;
+    let sig_json = signature_to_json(&signature, meta)?;
     write_signature_binary(&sig_json, sig_bin_out, meta)?;
 
     Ok(())
@@ -424,9 +477,9 @@ where
     S::SecretKey: SignatureSchemeSecretKey + Serialize + for<'de> DeserializeOwned,
     S::Signature: Serialize + for<'de> DeserializeOwned,
 {
-    let pk: S::PublicKey = deserialize_public_key_from_file(pk_json_path)?;
+    let pk: S::PublicKey = deserialize_public_key_from_file(pk_json_path, meta)?;
     let sig_json = read_signature_binary(sig_bin_path, meta)?;
-    let signature: S::Signature = signature_from_json(sig_json)?;
+    let signature: S::Signature = signature_from_json(sig_json, meta)?;
     let msg_bytes = message_to_bytes(&message);
     let ok = S::verify(&pk, epoch, &msg_bytes, &signature);
     Ok(ok)
