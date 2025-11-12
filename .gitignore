@@ -85,3 +85,4 @@ zig-verify-signature.o
 # Add investigations and analysis directories
 investigations/
 analysis/
+

@@ -9,13 +9,14 @@ includes a formatted summary of every operation.
 
 from __future__ import annotations
 
-import os
+import argparse
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
+import os
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUST_PROJECT = REPO_ROOT / "benchmark" / "rust_benchmark"
@@ -24,7 +25,22 @@ ZIG_BIN = REPO_ROOT / "zig-out" / "bin" / "zig-remote-hash-tool"
 
 TMP_DIR = Path("/tmp")
 DEFAULT_SEED = "4242424242424242424242424242424242424242424242424242424242424242"
-INCLUDE_LIFETIME_2_32 = os.environ.get("BENCHMARK_INCLUDE_2_32", "").lower() in {"1", "true", "yes", "on"}
+DEFAULT_LIFETIMES = ("2^8", "2^18")
+SUPPORTED_LIFETIMES = {"2^8", "2^18", "2^32"}
+
+DEBUG_LOG_ENV = os.environ.get("BENCHMARK_DEBUG_LOGS", "").lower()
+VERBOSE_LOGS = DEBUG_LOG_ENV in {"1", "true", "yes", "on"}
+DEBUG_MARKERS = (
+    "HASH_SIG_DEBUG:",
+    "RUST_TREE_DEBUG:",
+    "RUST_POSEIDON_CHAIN_DEBUG:",
+    "ZIG_SIGN_DEBUG:",
+    "ZIG_ENCODING_DEBUG:",
+    "ZIG_HYPERCUBE_DEBUG:",
+    "ZIG_POS_IN:",
+    "ZIG_POS_OUT:",
+    "ZIG_POS_CONTEXT",
+)
 
 
 @dataclass
@@ -50,39 +66,63 @@ class ScenarioConfig:
         return self.lifetime.replace("^", "pow")
 
 
-SCENARIOS = [
-    ScenarioConfig(
-        lifetime="2^8",
-        label="Lifetime 2^8",
-        message="Cross-language benchmark message",
-        epoch=0,
-        start_epoch=0,
-        num_active_epochs=256,
-        seed_hex=DEFAULT_SEED,
-    ),
-    ScenarioConfig(
-        lifetime="2^18",
-        label="Lifetime 2^18",
-        message="Cross-language benchmark message",
-        epoch=0,
-        start_epoch=0,
-        num_active_epochs=256,
-        seed_hex=DEFAULT_SEED,
-    ),
-]
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run cross-language XMSS compatibility scenarios.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "-l",
+        "--lifetime",
+        dest="lifetimes",
+        help="Comma-separated list of lifetimes to benchmark (choices: 2^8, 2^18, 2^32).",
+    )
+    parser.add_argument(
+        "--seed-hex",
+        default=DEFAULT_SEED,
+        help="Deterministic seed (64 hex chars) used for both Zig and Rust key generation.",
+    )
+    parser.add_argument(
+        "--timeout-2-32",
+        type=int,
+        default=2400,
+        help="Timeout (seconds) for Zig signing when exercising lifetime 2^32.",
+    )
+    args = parser.parse_args()
 
-if INCLUDE_LIFETIME_2_32:
-    SCENARIOS = [
-        ScenarioConfig(
-            lifetime="2^32",
-            label="Lifetime 2^32",
-            message="Cross-language benchmark message",
-            epoch=0,
-            start_epoch=0,
-            num_active_epochs=256,
-            seed_hex=DEFAULT_SEED,
+    if args.lifetimes is None:
+        lifetimes = list(DEFAULT_LIFETIMES)
+    else:
+        lifetimes = [part.strip() for part in args.lifetimes.split(",") if part.strip()]
+        if not lifetimes:
+            parser.error("At least one lifetime must be specified.")
+
+    for lifetime in lifetimes:
+        if lifetime not in SUPPORTED_LIFETIMES:
+            supported = ", ".join(sorted(SUPPORTED_LIFETIMES))
+            parser.error(f"Unsupported lifetime '{lifetime}'. Choose from: {supported}.")
+
+    # Deduplicate while preserving order.
+    args.lifetime_values = list(dict.fromkeys(lifetimes))
+    return args
+
+
+def build_scenarios(lifetimes: list[str], seed_hex: str) -> list[ScenarioConfig]:
+    scenarios: list[ScenarioConfig] = []
+    for lifetime in lifetimes:
+        scenarios.append(
+            ScenarioConfig(
+                lifetime=lifetime,
+                label=f"Lifetime {lifetime}",
+                message="Cross-language benchmark message",
+                epoch=0,
+                start_epoch=0,
+                num_active_epochs=256,
+                seed_hex=seed_hex,
+            )
         )
-    ]
+    return scenarios
+
 
 SUMMARY_ORDER = [
     "rust_sign",
@@ -103,6 +143,17 @@ SUMMARY_LABELS = {
 }
 
 
+def sanitize_output(blob: str) -> str:
+    if not blob:
+        return ""
+    if VERBOSE_LOGS:
+        return blob.strip()
+    filtered_lines = [
+        line for line in blob.splitlines() if not any(marker in line for marker in DEBUG_MARKERS)
+    ]
+    return "\n".join(filtered_lines).strip()
+
+
 def run_command(
     cmd: list[str],
     *,
@@ -119,17 +170,17 @@ def run_command(
         text=True,
         timeout=timeout,
     )
-    if result.stdout:
-        print(result.stdout.strip())
-    if result.stderr:
-        print(result.stderr.strip())
+    stdout = sanitize_output(result.stdout)
+    stderr = sanitize_output(result.stderr)
+    if stdout:
+        print(stdout)
+    if stderr:
+        print(stderr)
     return result
 
 
-def zig_sign_timeout(cfg: ScenarioConfig) -> int:
-    if cfg.lifetime == "2^32":
-        return int(os.environ.get("BENCHMARK_TIMEOUT_2_32", "2400"))
-    return 180
+def zig_sign_timeout(cfg: ScenarioConfig, timeout_2_32: int) -> int:
+    return timeout_2_32 if cfg.lifetime == "2^32" else 180
 
 
 def ensure_rust_binary() -> None:
@@ -201,7 +252,7 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResul
     return OperationResult(success, duration, result.stdout, result.stderr)
 
 
-def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResult:
+def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int) -> OperationResult:
     print(f"\n-- Zig key generation & signing ({cfg.lifetime}) --")
     start = time.perf_counter()
     result = run_command(
@@ -218,7 +269,7 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResult
             cfg.lifetime,
         ],
         cwd=REPO_ROOT,
-        timeout=zig_sign_timeout(cfg),
+        timeout=zig_sign_timeout(cfg, timeout_2_32),
     )
     duration = command_duration(start)
     success = result.returncode == 0
@@ -283,7 +334,7 @@ def run_rust_verify(
     return OperationResult(success, duration, result.stdout, result.stderr)
 
 
-def run_scenario(cfg: ScenarioConfig) -> tuple[Dict[str, OperationResult], Dict[str, Path]]:
+def run_scenario(cfg: ScenarioConfig, timeout_2_32: int) -> tuple[Dict[str, OperationResult], Dict[str, Path]]:
     print(f"\n=== Scenario: {cfg.label} ===")
     paths = scenario_paths(cfg)
     prepare_tmp_files(paths)
@@ -293,17 +344,20 @@ def run_scenario(cfg: ScenarioConfig) -> tuple[Dict[str, OperationResult], Dict[
     results["rust_self"] = run_rust_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Rust verify")
     results["rust_to_zig"] = run_zig_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Zig verify")
 
-    results["zig_sign"] = run_zig_sign(cfg, paths)
+    results["zig_sign"] = run_zig_sign(cfg, paths, timeout_2_32)
     results["zig_self"] = run_zig_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Zig verify")
     results["zig_to_rust"] = run_rust_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Rust verify")
 
     return results, paths
 
 
-def print_summary(all_results: Dict[str, tuple[Dict[str, OperationResult], Dict[str, Path]]]) -> bool:
+def print_summary(
+    scenarios: list[ScenarioConfig],
+    all_results: Dict[str, tuple[Dict[str, OperationResult], Dict[str, Path]]],
+) -> bool:
     print("\n=== Summary ===")
     overall_success = True
-    for cfg in SCENARIOS:
+    for cfg in scenarios:
         results, paths = all_results[cfg.lifetime]
         print(f"\n{cfg.label} (lifetime {cfg.lifetime}):")
         for key in SUMMARY_ORDER:
@@ -317,6 +371,9 @@ def print_summary(all_results: Dict[str, tuple[Dict[str, OperationResult], Dict[
 
 
 def main() -> int:
+    args = parse_args()
+    scenarios = build_scenarios(args.lifetime_values, args.seed_hex)
+
     try:
         ensure_rust_binary()
         ensure_zig_binary()
@@ -326,16 +383,16 @@ def main() -> int:
 
     scenario_results: Dict[str, tuple[Dict[str, OperationResult], Dict[str, Path]]] = {}
     overall_success = True
-    for cfg in SCENARIOS:
+    for cfg in scenarios:
         try:
-            results, paths = run_scenario(cfg)
+            results, paths = run_scenario(cfg, args.timeout_2_32)
         except Exception as exc:
             print(f"\n❌ Scenario {cfg.lifetime} failed: {exc}")
             return 1
         scenario_results[cfg.lifetime] = (results, paths)
         overall_success &= all(op.success for op in results.values())
 
-    overall_success &= print_summary(scenario_results)
+    overall_success &= print_summary(scenarios, scenario_results)
 
     if overall_success:
         print("\n✅ Cross-language signing and verification complete.")
