@@ -1,3 +1,4 @@
+const FieldElement = @import("../core/field.zig").FieldElement;
 // Poseidon2 implementation compatible with Plonky3
 // This module provides a Zig implementation of the Poseidon2 hash function
 // that is fully compatible with Plonky3's KoalaBear field implementation.
@@ -7,8 +8,6 @@ pub const Poseidon2KoalaBear16 = @import("poseidon2.zig").Poseidon2KoalaBear16Pl
 pub const Poseidon2KoalaBear16Plonky3 = @import("poseidon2.zig").Poseidon2KoalaBear16Plonky3;
 pub const Poseidon2KoalaBear24 = @import("poseidon2.zig").Poseidon2KoalaBear24Plonky3;
 pub const Poseidon2KoalaBear24Plonky3 = @import("poseidon2.zig").Poseidon2KoalaBear24Plonky3;
-
-const FieldElement = @import("../core/field.zig").FieldElement;
 
 // Re-export commonly used functions
 pub const poseidon2_16 = @import("poseidon2.zig").poseidon2_16_plonky3;

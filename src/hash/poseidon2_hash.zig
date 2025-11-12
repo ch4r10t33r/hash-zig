@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const field_types = @import("field.zig");
+const field_types = @import("../core/field.zig");
 const FieldElement = field_types.FieldElement;
 const poseidon2 = @import("../poseidon2/root.zig");
 

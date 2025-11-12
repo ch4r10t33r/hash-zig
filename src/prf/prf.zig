@@ -6,7 +6,7 @@ const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
 
 // Import field types
-const field_types = @import("field.zig");
+const field_types = @import("../core/field.zig");
 const FieldElement = field_types.FieldElement;
 
 // Domain separators (matching Rust implementation)
