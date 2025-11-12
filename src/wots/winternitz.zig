@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const params = @import("params.zig");
-const tweakable_hash = @import("tweakable_hash.zig");
+const tweakable_hash = @import("../hash/tweakable_hash.zig");
 const encoding = @import("encoding.zig");
 const Parameters = params.Parameters;
 const TweakableHash = tweakable_hash.TweakableHash;

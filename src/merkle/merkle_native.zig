@@ -11,9 +11,9 @@
 
 const std = @import("std");
 const params = @import("params.zig");
-const tweakable_hash = @import("tweakable_hash.zig");
+const tweakable_hash = @import("../hash/tweakable_hash.zig");
+const tweak_types = @import("../hash/tweak.zig");
 const field_types = @import("../core/field.zig");
-const tweak_types = @import("tweak.zig");
 const Parameters = params.Parameters;
 const TweakableHash = tweakable_hash.TweakableHash;
 const FieldElement = field_types.FieldElement;
