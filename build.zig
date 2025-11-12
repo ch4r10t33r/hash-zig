@@ -182,6 +182,20 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(zig_verify_2_8_exe);
 
+    // Remote hash tool
+    const zig_remote_hash_module = b.createModule(.{
+        .root_source_file = b.path("benchmark/zig_benchmark/src/remote_hash_tool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_remote_hash_module.addImport("hash-zig", hash_zig_module);
+
+    const zig_remote_hash_exe = b.addExecutable(.{
+        .name = "zig-remote-hash-tool",
+        .root_module = zig_remote_hash_module,
+    });
+    b.installArtifact(zig_remote_hash_exe);
+
     // Rust compatibility test step (for CI)
     const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests");
     rust_test_step.dependOn(&run_rust_compat_tests.step);

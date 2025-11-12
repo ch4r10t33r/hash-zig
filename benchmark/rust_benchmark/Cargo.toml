@@ -51,3 +51,6 @@ path = "src/verify_signature_2_32.rs"
 name = "sign_message_2_32"
 path = "src/sign_message_2_32.rs"
 
+[[bin]]
+name = "remote_hashsig_tool"
+path = "src/remote_hashsig_tool.rs"
