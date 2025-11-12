@@ -81,3 +81,4 @@ benchmark/rust-hash-sig-debug
 # Repo-local temporary artifacts
 /tmp/
 zig-verify-signature.o
+analysis/
