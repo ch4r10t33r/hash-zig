@@ -10,7 +10,7 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
-- **Interop-first CI** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^18` with timing summaries. Set `BENCHMARK_INCLUDE_2_32=true` to exercise the extended `2^32` flow locally.
+- **Interop-first CI** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^18` with timing summaries. Use `python3 benchmark/benchmark.py --lifetime 2^32` to exercise the extended `2^32` flow locally.
 - **Pure Zig** – minimal dependencies, explicit memory management, ReleaseFast-ready.
 
 ## Contents
@@ -111,8 +111,9 @@ cargo --version    # Rust 1.87.0 toolchain (matches CI)
 
 ```bash
 # Produces zig-out/bin/zig-remote-hash-tool (ReleaseFast) and rust_benchmark/target/release/remote_hashsig_tool
-python3 benchmark/benchmark.py          # runs lifetimes 2^8 and 2^18
-BENCHMARK_INCLUDE_2_32=true python3 benchmark/benchmark.py  # runs lifetime 2^32 only
+python3 benchmark/benchmark.py                             # runs lifetimes 2^8 and 2^18
+python3 benchmark/benchmark.py --lifetime 2^32             # runs lifetime 2^32 only
+python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32"   # runs all lifetimes sequentially
 ```
 
 The script automatically:
@@ -152,11 +153,11 @@ If you prefer shell commands, mirror the steps below.
      "interop 2^8" /tmp/zig_public_2pow8.key.json /tmp/zig_signature_2pow8.bin 0 2^8
    ```
 
-5. Repeat, swapping sign/verify roles (`sign` command) to cover Rust→Zig, and change the lifetime argument to `2^18` (or run `BENCHMARK_INCLUDE_2_32=true` for the `2^32` scenario).
+5. Repeat, swapping sign/verify roles (`sign` command) to cover Rust→Zig, and change the lifetime argument to `2^18` (or run `python3 benchmark/benchmark.py --lifetime 2^32` for the `2^32` scenario).
 
 Each verification prints `VERIFY_RESULT:true` on success.
 
-> **Note:** Lifetime `2^32` follows the same pattern and is available via `BENCHMARK_INCLUDE_2_32=true python3 benchmark/benchmark.py`; allow several extra seconds for the larger parameter set.
+> **Note:** Lifetime `2^32` follows the same pattern and is available via `python3 benchmark/benchmark.py --lifetime 2^32`; allow several extra seconds for the larger parameter set.
 
 ### CI Reference
 
@@ -169,7 +170,7 @@ The compatibility logic lives in `.github/workflows/ci.yml` (“Run compatibilit
 python3 benchmark/benchmark.py
 
 # lifetime 2^32 (longer run)
-BENCHMARK_INCLUDE_2_32=true python3 benchmark/benchmark.py
+python3 benchmark/benchmark.py --lifetime 2^32
 ```
 
 The script prints a PASS/FAIL matrix, timings, and the artifact locations under `/tmp`. Delete the files between runs if you want a clean slate: `rm /tmp/*_public_* /tmp/*_signature_*`.
