@@ -4,7 +4,7 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible behavior against the Rust reference implementation ([hash-sig](https://github.com/b-wagn/hash-sig)). Keys, signatures, and Merkle paths interchange freely between the two ecosystems for lifetimes `2^8`, `2^18`, and (experimental) `2^32`.
+Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible behavior against the Rust reference implementation ([leanSig](https://github.com/leanEthereum/leanSig)). Keys, signatures, and Merkle paths interchange freely between the two ecosystems for lifetimes `2^8`, `2^18`, and (experimental) `2^32`.
 
 **⚠️ Prototype Status**: This is a prototype implementation for research and development purposes. Use at your own risk.
 
@@ -174,7 +174,7 @@ Licensed under the Apache License 2.0 – see [LICENSE](LICENSE).
 
 ### Acknowledgments
 
-- [hash-sig](https://github.com/b-wagn/hash-sig) — original Rust implementation and reference tests
+- [leanSig](https://github.com/leanEthereum/leanSig) — original Rust implementation and reference tests
 - [zig-poseidon](https://github.com/blockblaz/zig-poseidon) — Poseidon2 over the KoalaBear field
 - [Generalized XMSS (ePrint 2025/055)](https://eprint.iacr.org/2025/055.pdf) — scheme specification
 - [Rust ↔ Zig compatibility investigation](analysis/rust_zig_compatibility_investigation.md)

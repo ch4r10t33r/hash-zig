@@ -1,5 +1,5 @@
 //! Comprehensive Rust compatibility tests matching the hash-sig repository
-//! Based on https://github.com/b-wagn/hash-sig test suite
+//! Based on https://github.com/leanEthereum/leanSig test suite
 
 const std = @import("std");
 const log = @import("hash-zig").utils.log;
@@ -208,7 +208,7 @@ test "comprehensive rust compatibility test suite" {
 
     log.print("\n" ++ "=" ** 80 ++ "\n", .{});
     log.print("🧪 COMPREHENSIVE RUST COMPATIBILITY TEST SUITE\n", .{});
-    log.print("Based on https://github.com/b-wagn/hash-sig test coverage\n", .{});
+    log.print("Based on https://github.com/leanEthereum/leanSig test coverage\n", .{});
     log.print("=" ** 80 ++ "\n\n", .{});
 
     // Run all test categories

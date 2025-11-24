@@ -1,5 +1,5 @@
 //! Performance benchmark tests matching Rust hash-sig criterion benchmarks
-//! Based on https://github.com/b-wagn/hash-sig benchmark suite
+//! Based on https://github.com/leanEthereum/leanSig benchmark suite
 
 const std = @import("std");
 const log = @import("hash-zig").utils.log;

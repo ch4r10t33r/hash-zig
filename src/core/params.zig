@@ -1,5 +1,5 @@
 //! Parameters and type definitions for hash-zig
-//! Parameters matching hash-sig Rust implementation: https://github.com/b-wagn/hash-sig
+//! Parameters matching leanSig Rust implementation: https://github.com/leanEthereum/leanSig
 
 pub const SecurityLevel = enum {
     level_128, // Only 128-bit security supported
