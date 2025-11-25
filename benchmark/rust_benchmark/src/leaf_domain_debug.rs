@@ -1,9 +1,9 @@
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
-use hashsig::signature::SignatureScheme;
-use hashsig::symmetric::prf::shake_to_field::ShakePRFtoF;
-use hashsig::symmetric::prf::Pseudorandom;
-use hashsig::symmetric::tweak_hash::poseidon::PoseidonTweakHash;
-use hashsig::symmetric::tweak_hash::TweakableHash;
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+use leansig::signature::SignatureScheme;
+use leansig::symmetric::prf::shake_to_field::ShakePRFtoF;
+use leansig::symmetric::prf::Pseudorandom;
+use leansig::symmetric::tweak_hash::poseidon::PoseidonTweakHash;
+use leansig::symmetric::tweak_hash::TweakableHash;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::PrimeField64;
 

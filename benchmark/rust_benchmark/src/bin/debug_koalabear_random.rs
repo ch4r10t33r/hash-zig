@@ -1,5 +1,5 @@
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
-use hashsig::signature::SignatureScheme;
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+use leansig::signature::SignatureScheme;
 use p3_field::PrimeField32;
 use rand::rngs::StdRng;
 use rand::Rng;

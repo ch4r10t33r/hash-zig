@@ -1,5 +1,6 @@
 const std = @import("std");
 const plonky3_field = @import("plonky3_field.zig");
+const log = @import("../utils/log.zig");
 
 // Plonky3-exact Poseidon2 implementation for KoalaBear field
 // This implements the exact same MDS matrix and internal layer operations as Plonky3
@@ -462,22 +463,64 @@ fn mds_light_permutation_24(state: []F) void {
 
 // Main permutation function for 24-width
 pub fn poseidon2_24_plonky3(state: []F) void {
+    const log = @import("../utils/log.zig");
+    
+    // Debug: log initial state (first 3 elements)
+    log.print("ZIG_PERM_DEBUG: Initial state[0..3]: ", .{});
+    for (0..3) |i| {
+        log.print("0x{x:0>8} ", .{state[i].value});
+    }
+    log.print("\n", .{});
+    
     // Try pre-apply MDS light (if Plonky3 variant requires it)
     mds_light_permutation_24(state);
+    
+    // Debug: log state after MDS light (first 3 elements)
+    log.print("ZIG_PERM_DEBUG: After MDS light[0..3]: ", .{});
+    for (0..3) |i| {
+        log.print("0x{x:0>8} ", .{state[i].value});
+    }
+    log.print("\n", .{});
+    
     // Initial external rounds
     for (0..4) |i| {
         apply_external_layer_24(state, PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL[i]);
+        
+        // Debug: log state after each initial external round (first 3 elements)
+        if (i == 0) {
+            log.print("ZIG_PERM_DEBUG: After initial external[0][0..3]: ", .{});
+            for (0..3) |j| {
+                log.print("0x{x:0>8} ", .{state[j].value});
+            }
+            log.print("\n", .{});
+        }
     }
 
     // Internal rounds
     for (0..23) |i| {
         apply_internal_layer_24(state, PLONKY3_KOALABEAR_RC24_INTERNAL[i]);
+        
+        // Debug: log state after first internal round (first 3 elements)
+        if (i == 0) {
+            log.print("ZIG_PERM_DEBUG: After internal[0][0..3]: ", .{});
+            for (0..3) |j| {
+                log.print("0x{x:0>8} ", .{state[j].value});
+            }
+            log.print("\n", .{});
+        }
     }
 
     // Final external rounds
     for (0..4) |i| {
         apply_external_layer_24(state, PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL[i]);
     }
+    
+    // Debug: log final state before returning (first 3 elements)
+    log.print("ZIG_PERM_DEBUG: Final perm state[0..3]: ", .{});
+    for (0..3) |i| {
+        log.print("0x{x:0>8} ", .{state[i].value});
+    }
+    log.print("\n", .{});
 }
 
 // Wrapper structs for compatibility

@@ -340,12 +340,18 @@ def run_scenario(cfg: ScenarioConfig, timeout_2_32: int) -> tuple[Dict[str, Oper
     prepare_tmp_files(paths)
 
     results: Dict[str, OperationResult] = {}
+    # Rust generates keypair and signs
     results["rust_sign"] = run_rust_sign(cfg, paths)
     results["rust_self"] = run_rust_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Rust verify")
+    
+    # Zig verifies using Rust's public key (no key generation needed)
     results["rust_to_zig"] = run_zig_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Zig verify")
 
+    # Zig generates keypair and signs (for reverse direction test)
     results["zig_sign"] = run_zig_sign(cfg, paths, timeout_2_32)
     results["zig_self"] = run_zig_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Zig verify")
+    
+    # Rust verifies using Zig's public key
     results["zig_to_rust"] = run_rust_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Rust verify")
 
     return results, paths

@@ -1,4 +1,4 @@
-use hashsig::signature::{
+use leansig::signature::{
     generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8,
     SignatureScheme,
 };

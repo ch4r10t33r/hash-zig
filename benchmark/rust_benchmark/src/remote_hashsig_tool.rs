@@ -1,5 +1,4 @@
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use rand::{SeedableRng, rngs::StdRng};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{self, Value};
 use std::convert::TryFrom;
@@ -9,10 +8,10 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
-use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+use leansig::signature::{SignatureScheme, SignatureSchemeSecretKey};
 
 // KoalaBear field parameters for Montgomery conversion
 const KOALABEAR_PRIME: u64 = 0x7f000001; // 2^31 - 2^24 + 1
@@ -31,22 +30,33 @@ fn montgomery_to_canonical(montgomery: u32) -> u32 {
     monty_reduce(montgomery as u64)
 }
 
-// Montgomery reduction
+// Montgomery reduction - converts Montgomery form to canonical
+// Algorithm: montgomery_reduce(x) = ((x - ((x * MU) & MASK) * P) >> 32) mod P
 fn monty_reduce(x: u64) -> u32 {
-    const MONTY_MU: u64 = 0x81000001;
+    const MONTY_MU: u64 = 0x81000001; // Modular inverse of PRIME mod 2^32
     const MONTY_MASK: u64 = 0xffffffff;
     
-    // t = x * MONTY_MU mod MONTY
+    // t = (x * MU) mod 2^32
     let t = (x.wrapping_mul(MONTY_MU)) & MONTY_MASK;
     
     // u = t * P
-    let u = t * KOALABEAR_PRIME;
+    let u = t.wrapping_mul(KOALABEAR_PRIME);
     
-    // x - u = x mod P
+    // result = (x - u) >> 32, handling underflow
     let (x_sub_u, overflow) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> KOALABEAR_MONTY_BITS) as u32;
-    let corr = if overflow { KOALABEAR_PRIME as u32 } else { 0 };
-    x_sub_u_hi.wrapping_add(corr)
+    let mut result = (x_sub_u >> KOALABEAR_MONTY_BITS) as u32;
+    
+    // If underflow occurred, add PRIME back
+    if overflow {
+        result = result.wrapping_add(KOALABEAR_PRIME as u32);
+    }
+    
+    // Ensure result is in range [0, PRIME)
+    if result >= KOALABEAR_PRIME as u32 {
+        result -= KOALABEAR_PRIME as u32;
+    }
+    
+    result
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -505,6 +515,7 @@ where
         for _ in 0..meta.hash_len {
             let montgomery = read_u32(&mut reader)?;
             // Convert Montgomery (from binary) to canonical (for serde deserialization)
+            // Rust's signature struct deserializes canonical values and converts to Montgomery internally
             let canonical = montgomery_to_canonical(montgomery);
             node.push(Value::from(canonical));
         }
@@ -559,7 +570,7 @@ where
     S::SecretKey: SignatureSchemeSecretKey + Serialize + for<'de> DeserializeOwned,
     S::Signature: Serialize + for<'de> DeserializeOwned,
 {
-    let mut rng = ChaCha20Rng::from_seed(seed);
+    let mut rng = StdRng::from_seed(seed);
     let (pk, mut sk) = S::key_gen(&mut rng, start_epoch, num_active_epochs);
 
     let msg_bytes = message_to_bytes(&message);
@@ -629,6 +640,69 @@ where
     };
     let msg_bytes = message_to_bytes(&message);
     eprintln!("RUST_VERIFY_DEBUG: Calling S::verify with message={:?}", &msg_bytes[..8]);
+    
+    // Debug: Extract and print Poseidon outputs before verification
+    // This matches what Zig does in applyTopLevelPoseidonMessageHash
+    use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::message_hash::TopLevelPoseidonMessageHash;
+    use leansig::symmetric::message_hash::poseidon::{encode_epoch, encode_message};
+    use p3_field::PrimeField32;
+    use p3_koala_bear::KoalaBear;
+    use p3_symmetric::poseidon2::{poseidon_compress, Poseidon2};
+    
+    // Get parameter and randomness from signature
+    if let Some(rho_array) = sig_json.get("rho").and_then(|r| r.as_array()) {
+        if let Some(param_array) = pk_json.get("parameter").and_then(|p| p.as_array()) {
+            if rho_array.len() >= 7 && param_array.len() >= 5 {
+                let mut randomness: Vec<KoalaBear> = Vec::new();
+                for val in rho_array.iter().take(7) {
+                    if let Some(u) = val.as_u64() {
+                        if u <= u32::MAX as u64 {
+                            randomness.push(KoalaBear::from_canonical_u32(u as u32));
+                        }
+                    }
+                }
+                let mut parameter: Vec<KoalaBear> = Vec::new();
+                for val in param_array.iter().take(5) {
+                    if let Some(u) = val.as_u64() {
+                        if u <= u32::MAX as u64 {
+                            parameter.push(KoalaBear::from_canonical_u32(u as u32));
+                        }
+                    }
+                }
+                
+                if randomness.len() == 7 && parameter.len() == 5 {
+                    let parameter_arr: [KoalaBear; 5] = [parameter[0], parameter[1], parameter[2], parameter[3], parameter[4]];
+                    let randomness_arr: [KoalaBear; 7] = [randomness[0], randomness[1], randomness[2], randomness[3], randomness[4], randomness[5], randomness[6]];
+                    
+                    let perm = Poseidon2::new();
+                    let message_fe = encode_message::<9>(&msg_bytes);
+                    let epoch_fe = encode_epoch::<2>(epoch);
+                    let iteration_index = [KoalaBear::ZERO];
+                    let combined_input: Vec<KoalaBear> = randomness_arr
+                        .iter()
+                        .chain(parameter_arr.iter())
+                        .chain(epoch_fe.iter())
+                        .chain(message_fe.iter())
+                        .chain(iteration_index.iter())
+                        .copied()
+                        .collect();
+                    
+                    let pos_outputs = poseidon_compress::<KoalaBear, _, 24, 15>(&perm, &combined_input);
+                    
+                    eprint!("RUST_POSEIDON_OUTPUT (canonical): ");
+                    for (i, fe) in pos_outputs.iter().enumerate() {
+                        eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(fe));
+                        if (i + 1) % 8 == 0 {
+                            eprintln!();
+                            eprint!("RUST_POSEIDON_OUTPUT (canonical): ");
+                        }
+                    }
+                    eprintln!();
+                }
+            }
+        }
+    }
+    
     let ok = S::verify(&pk, epoch, &msg_bytes, &signature);
     if !ok {
         eprintln!("RUST_VERIFY_DEBUG: Verification returned false - encoding or chain verification failed");

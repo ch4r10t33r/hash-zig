@@ -1,8 +1,8 @@
-use hashsig::signature::{
+use leansig::signature::{
     generalized_xmss::instantiations_poseidon::lifetime_2_to_the_18::winternitz::SIGWinternitzLifetime18W8,
     SignatureScheme,
 };
-use hashsig::MESSAGE_LENGTH;
+use leansig::MESSAGE_LENGTH;
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::json;
 use sha3::Digest;

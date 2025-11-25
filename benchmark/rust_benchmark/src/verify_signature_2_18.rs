@@ -1,5 +1,5 @@
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
-use hashsig::signature::SignatureScheme;
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
+use leansig::signature::SignatureScheme;
 use serde_json::{self, Map, Value};
 use std::env;
 

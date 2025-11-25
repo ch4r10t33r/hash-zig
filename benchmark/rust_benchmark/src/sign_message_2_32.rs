@@ -1,5 +1,5 @@
-use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
-use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
+use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
+use leansig::signature::{SignatureScheme, SignatureSchemeSecretKey};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde_json;

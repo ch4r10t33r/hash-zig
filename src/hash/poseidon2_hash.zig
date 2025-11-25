@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const field_types = @import("../core/field.zig");
 const FieldElement = field_types.FieldElement;
 const poseidon2 = @import("../poseidon2/root.zig");
+const log = @import("../utils/log.zig");
 
 // Import Plonky3-compatible Poseidon2 instances (matching Rust hash-sig exactly)
 const Poseidon2KoalaBear24 = poseidon2.Poseidon2KoalaBear24; // Use Plonky3-compatible 24 for message hashing
@@ -164,22 +165,60 @@ pub const Poseidon2RustCompat = struct {
     }
 
     /// Compress function matching Rust's compress behavior (using Poseidon2-24)
+    /// Rust's poseidon_compress expects Montgomery form directly, so we work with Montgomery throughout
     pub fn compress(self: *Poseidon2RustCompat, input: [WIDTH_24]FieldElement, comptime output_len: usize) ![output_len]FieldElement {
         _ = self;
 
-        // Convert to canonical u32 array
-        var input_u32: [WIDTH_24]u32 = undefined;
+        // Rust's poseidon_compress works directly with Montgomery form (KoalaBear)
+        // Convert FieldElement (Montgomery) directly to F (Montgomery) without canonical conversion
+        const F = Poseidon2KoalaBear24.Field;
+        var state: [WIDTH_24]F = undefined;
+        var padded_input: [WIDTH_24]F = undefined;
+
+        // Copy input directly (both are Montgomery form)
         for (0..WIDTH_24) |i| {
-            input_u32[i] = input[i].toCanonical();
+            state[i] = F{ .value = input[i].value };
+            padded_input[i] = F{ .value = input[i].value };
         }
 
-        // Apply Poseidon2-24 compress (returns full 24 elements, we slice to output_len)
-        const output_u32_full = Poseidon2KoalaBear24.compress(output_len, &input_u32);
+        // Debug: log state before permutation (first 3 elements)
+        log.print("ZIG_COMPRESS_DEBUG: State before perm[0..3]: ", .{});
+        for (0..3) |i| {
+            log.print("0x{x:0>8} ", .{state[i].value});
+        }
+        log.print("\n", .{});
 
-        // Convert back to FieldElement array (slice to output_len)
+        // Apply permutation (matching Rust's perm.permute_mut(&mut state))
+        Poseidon2KoalaBear24.permutation(state[0..]);
+
+        // Debug: log state after permutation (first 3 elements)
+        log.print("ZIG_COMPRESS_DEBUG: State after perm[0..3]: ", .{});
+        for (0..3) |i| {
+            log.print("0x{x:0>8} ", .{state[i].value});
+        }
+        log.print("\n", .{});
+
+        // Feed-forward: Add the input back into the state element-wise (matching Rust's poseidon_compress)
+        for (0..WIDTH_24) |i| {
+            const before = state[i].value;
+            state[i] = state[i].add(padded_input[i]);
+            // Debug: log first 3 feed-forward operations
+            if (i < 3) {
+                log.print("ZIG_COMPRESS_DEBUG: Feed-forward[{}]: before=0x{x:0>8} + input=0x{x:0>8} = after=0x{x:0>8}\n", .{ i, before, padded_input[i].value, state[i].value });
+            }
+        }
+
+        // Debug: log final state (first 3 elements)
+        log.print("ZIG_COMPRESS_DEBUG: Final state[0..3]: ", .{});
+        for (0..3) |i| {
+            log.print("0x{x:0>8} ", .{state[i].value});
+        }
+        log.print("\n", .{});
+
+        // Return first output_len elements as FieldElement (Montgomery form)
         var output: [output_len]FieldElement = undefined;
         for (0..output_len) |i| {
-            output[i] = FieldElement.fromCanonical(output_u32_full[i]);
+            output[i] = FieldElement.fromMontgomery(state[i].value);
         }
 
         return output;
