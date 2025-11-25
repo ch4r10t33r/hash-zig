@@ -402,6 +402,26 @@ pub fn build(b: *std.Build) void {
     debug_poseidon2_component_analysis_exe.root_module.addImport("hash-zig", hash_zig_module);
     b.installArtifact(debug_poseidon2_component_analysis_exe);
 
+    // Add debug_poseidon_mds_light_test binary
+    const debug_poseidon_mds_light_test_exe = b.addExecutable(.{
+        .name = "debug_poseidon_mds_light_test",
+        .root_source_file = b.path("src/debug_poseidon_mds_light_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    debug_poseidon_mds_light_test_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(debug_poseidon_mds_light_test_exe);
+
+    // Add test_encoding_sum_verification binary
+    const test_encoding_sum_verification_exe = b.addExecutable(.{
+        .name = "test_encoding_sum_verification",
+        .root_source_file = b.path("src/test_encoding_sum_verification.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_encoding_sum_verification_exe.root_module.addImport("hash-zig", hash_zig_module);
+    b.installArtifact(test_encoding_sum_verification_exe);
+
     // Add debug_poseidon2_direct_permutation_test binary
     const debug_poseidon2_direct_permutation_test_exe = b.addExecutable(.{
         .name = "debug_poseidon2_direct_permutation_test",

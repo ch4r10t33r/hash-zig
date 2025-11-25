@@ -602,7 +602,8 @@ where
     S::Signature: Serialize + for<'de> DeserializeOwned,
 {
     eprintln!("RUST_VERIFY_DEBUG: Entering verify function, epoch={}", epoch);
-    let pk: S::PublicKey = deserialize_public_key_from_file(pk_json_path, meta)?;
+    eprintln!("RUST_VERIFY_DEBUG: sig_bin_path={:?}, pk_json_path={:?}", sig_bin_path, pk_json_path);
+    let pk: S::PublicKey = deserialize_public_key_from_file(&pk_json_path, meta)?;
     eprintln!("RUST_VERIFY_DEBUG: Public key deserialized");
     let sig_json = read_signature_binary(sig_bin_path, meta)?;
     
@@ -628,7 +629,7 @@ where
         }
     }
     
-    let signature: S::Signature = match signature_from_json(sig_json, meta) {
+    let signature: S::Signature = match signature_from_json(sig_json.clone(), meta) {
         Ok(sig) => {
             eprintln!("RUST_VERIFY_DEBUG: Signature deserialized successfully");
             sig
@@ -643,42 +644,94 @@ where
     
     // Debug: Extract and print Poseidon outputs before verification
     // This matches what Zig does in applyTopLevelPoseidonMessageHash
-    use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::message_hash::TopLevelPoseidonMessageHash;
-    use leansig::symmetric::message_hash::poseidon::{encode_epoch, encode_message};
-    use p3_field::PrimeField32;
+    // Note: Avoiding leansig imports here to prevent triggering const generics compilation issues
+    use p3_field::{PrimeField32, PrimeCharacteristicRing};
     use p3_koala_bear::KoalaBear;
-    use p3_symmetric::poseidon2::{poseidon_compress, Poseidon2};
+    // NOTE: hashsig import removed - using manual permutation + feed-forward instead
+    // This avoids const generics issues and dependency problems
     
-    // Get parameter and randomness from signature
-    if let Some(rho_array) = sig_json.get("rho").and_then(|r| r.as_array()) {
+    // Get parameter and randomness from signature - ALWAYS run for comparison
+    // Extract and print Poseidon outputs for comparison with Zig
+    // Read public key JSON to get parameter
+    let pk_json_str = std::fs::read_to_string(pk_json_path)?;
+    let pk_json: serde_json::Value = serde_json::from_str(&pk_json_str)?;
+    
+    // Clone sig_json to avoid borrow checker issues
+    let sig_json_clone = sig_json.clone();
+    if let Some(rho_array) = sig_json_clone.get("rho").and_then(|r| r.as_array()) {
         if let Some(param_array) = pk_json.get("parameter").and_then(|p| p.as_array()) {
-            if rho_array.len() >= 7 && param_array.len() >= 5 {
+            // Build randomness vector - handle conversion failures gracefully
                 let mut randomness: Vec<KoalaBear> = Vec::new();
                 for val in rho_array.iter().take(7) {
                     if let Some(u) = val.as_u64() {
                         if u <= u32::MAX as u64 {
-                            randomness.push(KoalaBear::from_canonical_u32(u as u32));
+                        randomness.push(KoalaBear::from_u32(u as u32));
                         }
+                } else if let Some(i) = val.as_i64() {
+                    // Try i64 if u64 fails
+                    if i >= 0 && i <= u32::MAX as i64 {
+                        randomness.push(KoalaBear::from_u32(i as u32));
                     }
                 }
+            }
+            
+            // Build parameter vector
                 let mut parameter: Vec<KoalaBear> = Vec::new();
                 for val in param_array.iter().take(5) {
                     if let Some(u) = val.as_u64() {
                         if u <= u32::MAX as u64 {
-                            parameter.push(KoalaBear::from_canonical_u32(u as u32));
+                        parameter.push(KoalaBear::from_u32(u as u32));
+                    }
+                } else if let Some(i) = val.as_i64() {
+                    if i >= 0 && i <= u32::MAX as i64 {
+                        parameter.push(KoalaBear::from_u32(i as u32));
                         }
                     }
                 }
                 
-                if randomness.len() == 7 && parameter.len() == 5 {
-                    let parameter_arr: [KoalaBear; 5] = [parameter[0], parameter[1], parameter[2], parameter[3], parameter[4]];
-                    let randomness_arr: [KoalaBear; 7] = [randomness[0], randomness[1], randomness[2], randomness[3], randomness[4], randomness[5], randomness[6]];
-                    
-                    let perm = Poseidon2::new();
-                    let message_fe = encode_message::<9>(&msg_bytes);
-                    let epoch_fe = encode_epoch::<2>(epoch);
+            // Always print debug info
+            eprintln!("RUST_DEBUG: randomness.len()={}, parameter.len()={}", randomness.len(), parameter.len());
+            
+            // Run poseidon_compress if we have enough values
+            if randomness.len() >= 7 && parameter.len() >= 5 {
+                eprintln!("RUST_DEBUG: Running poseidon_compress...");
+                // Use first 7 randomness and first 5 parameter values
+                let parameter_arr: [KoalaBear; 5] = [
+                    parameter[0], parameter[1], parameter[2], parameter[3], parameter[4]
+                ];
+                let randomness_arr: [KoalaBear; 7] = [
+                    randomness[0], randomness[1], randomness[2], randomness[3],
+                    randomness[4], randomness[5], randomness[6]
+                ];
+                
+                eprintln!("RUST_DEBUG: Built arrays, creating permutation...");
+                // Use default_koalabear_poseidon2_24() to get the correct permutation type
+                use p3_koala_bear::default_koalabear_poseidon2_24;
+                let perm = default_koalabear_poseidon2_24();
+                
+                eprintln!("RUST_DEBUG: Encoding message and epoch...");
+                // Use the actual leansig encode_message and encode_epoch functions
+                use leansig::symmetric::message_hash::poseidon::{encode_message, encode_epoch};
+                use leansig::TWEAK_SEPARATOR_FOR_MESSAGE_HASH;
+                
+                // encode_message: Convert 32-byte message to 9 field elements using base-p decomposition
+                let msg_bytes_array: [u8; 32] = msg_bytes.try_into().unwrap_or_else(|_| {
+                    let mut arr = [0u8; 32];
+                    let len = msg_bytes.len().min(32);
+                    arr[..len].copy_from_slice(&msg_bytes[..len]);
+                    arr
+                });
+                let message_fe_array: [KoalaBear; 9] = encode_message::<9>(&msg_bytes_array);
+                let message_fe: Vec<KoalaBear> = message_fe_array.to_vec();
+                
+                // encode_epoch: Encode epoch as 2 field elements
+                let epoch_fe_array: [KoalaBear; 2] = encode_epoch::<2>(epoch);
+                let epoch_fe: Vec<KoalaBear> = epoch_fe_array.to_vec();
+                
                     let iteration_index = [KoalaBear::ZERO];
-                    let combined_input: Vec<KoalaBear> = randomness_arr
+                
+                eprintln!("RUST_DEBUG: Building combined input...");
+                let mut combined_input: Vec<KoalaBear> = randomness_arr
                         .iter()
                         .chain(parameter_arr.iter())
                         .chain(epoch_fe.iter())
@@ -687,20 +740,144 @@ where
                         .copied()
                         .collect();
                     
-                    let pos_outputs = poseidon_compress::<KoalaBear, _, 24, 15>(&perm, &combined_input);
+                // Pad to 24 elements
+                while combined_input.len() < 24 {
+                    combined_input.push(KoalaBear::ZERO);
+                }
+                combined_input.truncate(24);
+                
+                eprintln!("RUST_DEBUG: combined_input.len()={}", combined_input.len());
+                eprint!("RUST_POS_INPUT_CANONICAL: ");
+                for (i, fe) in combined_input.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(fe));
+                    if (i + 1) % 8 == 0 && i < 23 {
+                        eprintln!();
+                        eprint!("RUST_POS_INPUT_CANONICAL: ");
+                    }
+                }
+                eprintln!();
+                eprintln!("RUST_DEBUG: Calling poseidon_compress with explicit types...");
+                
+                // Use poseidon_compress from local leansig fork
+                use leansig::symmetric::tweak_hash::poseidon::poseidon_compress;
+                use leansig::poseidon2_24;
+                use p3_symmetric::CryptographicPermutation;
+                
+                // Get the permutation instance
+                let perm = poseidon2_24();
+                
+                // Convert combined_input to array
+                let mut input_array: [KoalaBear; 24] = [KoalaBear::ZERO; 24];
+                for (i, &val) in combined_input.iter().take(24).enumerate() {
+                    input_array[i] = val;
+                }
+                
+                // DEBUG: Print initial state (for comparison with Zig)
+                eprint!("RUST_POSEIDON_STATE: INITIAL: ");
+                for (i, &val) in input_array.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(&val));
+                    if (i + 1) % 8 == 0 && i < 23 {
+                        eprintln!();
+                        eprint!("RUST_POSEIDON_STATE: INITIAL: ");
+                    }
+                }
+                eprintln!();
+                
+                // Manually trace the permutation step-by-step to match Zig's debug output
+                let mut state = input_array;
+                
+                // Access the internal layers to manually step through the permutation
+                use p3_poseidon2::{ExternalLayer, InternalLayer};
+                
+                // Step 1: Apply initial external layer (which includes initial MDS light)
+                // This matches Zig's: MDS light, then 4 external rounds
+                perm.external_layer.permute_state_initial(&mut state);
+                
+                // Print state after initial external rounds (matches Zig's EXT_INIT[3])
+                // Note: permute_state_initial does MDS light + all 4 initial rounds
+                eprint!("RUST_POSEIDON_STATE: EXT_INIT[3]: ");
+                for (i, &val) in state.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(&val));
+                    if (i + 1) % 8 == 0 && i < 23 {
+                        eprintln!();
+                        eprint!("RUST_POSEIDON_STATE: EXT_INIT[3]: ");
+                    }
+                }
+                eprintln!();
+                
+                // Step 2: Apply internal layer (23 rounds)
+                perm.internal_layer.permute_state(&mut state);
+                
+                // Print state after internal rounds (matches Zig's INT[2])
+                eprint!("RUST_POSEIDON_STATE: INT[2]: ");
+                for (i, &val) in state.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(&val));
+                    if (i + 1) % 8 == 0 && i < 23 {
+                        eprintln!();
+                        eprint!("RUST_POSEIDON_STATE: INT[2]: ");
+                    }
+                }
+                eprintln!();
+                
+                // Step 3: Apply terminal external layer (4 rounds)
+                perm.external_layer.permute_state_terminal(&mut state);
+                
+                // Print state after terminal external rounds (matches Zig's EXT_FINAL[3])
+                eprint!("RUST_POSEIDON_STATE: EXT_FINAL[3]: ");
+                for (i, &val) in state.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(&val));
+                    if (i + 1) % 8 == 0 && i < 23 {
+                        eprintln!();
+                        eprint!("RUST_POSEIDON_STATE: EXT_FINAL[3]: ");
+                    }
+                }
+                eprintln!();
+                
+                // Print final state (after permutation, before feed-forward)
+                eprint!("RUST_POSEIDON_STATE: FINAL: ");
+                for (i, &val) in state.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(&val));
+                    if (i + 1) % 8 == 0 && i < 23 {
+                        eprintln!();
+                        eprint!("RUST_POSEIDON_STATE: FINAL: ");
+                    }
+                }
+                eprintln!();
+                
+                // Call poseidon_compress to get the output (includes feed-forward)
+                let pos_outputs = poseidon_compress::<KoalaBear, _, 24, 15>(&perm, &input_array);
+                
+                // DEBUG: Print final state (after permutation, before feed-forward)
+                // Note: We can't easily get the intermediate state from poseidon_compress
+                // So we'll print the output which is after permutation + feed-forward
+                eprint!("RUST_POSEIDON_STATE: FINAL (after compress): ");
+                for (i, &val) in pos_outputs.iter().enumerate() {
+                    eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(&val));
+                    if (i + 1) % 8 == 0 && i < 14 {
+                        eprintln!();
+                        eprint!("RUST_POSEIDON_STATE: FINAL (after compress): ");
+                    }
+                }
+                eprintln!();
                     
+                eprintln!("RUST_DEBUG: poseidon_compress completed, output.len()={}", pos_outputs.len());
                     eprint!("RUST_POSEIDON_OUTPUT (canonical): ");
                     for (i, fe) in pos_outputs.iter().enumerate() {
                         eprint!("0x{:08x} ", <KoalaBear as PrimeField32>::as_canonical_u32(fe));
-                        if (i + 1) % 8 == 0 {
+                    if (i + 1) % 8 == 0 && i < 14 {
                             eprintln!();
                             eprint!("RUST_POSEIDON_OUTPUT (canonical): ");
                         }
                     }
                     eprintln!();
+            } else {
+                eprintln!("RUST_DEBUG: Skipping poseidon_compress - randomness.len()={}, parameter.len()={}", randomness.len(), parameter.len());
                 }
+        } else {
+            eprintln!("RUST_DEBUG: No parameter array found in pk_json");
             }
-        }
+    } else {
+        eprintln!("RUST_DEBUG: No rho array found in sig_json");
     }
     
     let ok = S::verify(&pk, epoch, &msg_bytes, &signature);

@@ -213,6 +213,48 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(zig_remote_hash_exe);
 
+    // Cross-language compatibility tool
+    const cross_lang_zig_tool_module = b.createModule(.{
+        .root_source_file = b.path("benchmark/zig_benchmark/src/cross_lang_zig_tool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cross_lang_zig_tool_module.addImport("hash-zig", hash_zig_module);
+
+    const cross_lang_zig_tool_exe = b.addExecutable(.{
+        .name = "cross-lang-zig-tool",
+        .root_module = cross_lang_zig_tool_module,
+    });
+    b.installArtifact(cross_lang_zig_tool_exe);
+    
+    // Direct Poseidon test
+    const test_poseidon_direct_module = b.createModule(.{
+        .root_source_file = b.path("benchmark/zig_benchmark/src/test_poseidon_direct.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_poseidon_direct_module.addImport("hash-zig", hash_zig_module);
+    
+    const test_poseidon_direct_exe = b.addExecutable(.{
+        .name = "test-poseidon-direct",
+        .root_module = test_poseidon_direct_module,
+    });
+    b.installArtifact(test_poseidon_direct_exe);
+
+    // Compare Poseidon direct tool
+    const compare_poseidon_module = b.createModule(.{
+        .root_source_file = b.path("scripts/compare_poseidon_direct.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    compare_poseidon_module.addImport("hash-zig", hash_zig_module);
+
+    const compare_poseidon_exe = b.addExecutable(.{
+        .name = "compare-poseidon-direct",
+        .root_module = compare_poseidon_module,
+    });
+    b.installArtifact(compare_poseidon_exe);
+
     // Rust compatibility test step (for CI)
     const rust_test_step = b.step("test-rust-compat", "Run ONLY Rust compatibility tests");
     rust_test_step.dependOn(&run_rust_compat_tests.step);

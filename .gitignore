@@ -5,6 +5,7 @@ zig-out/
 .cargo/
 .rustup
 .zig-global-cache/
+zig-remote-hash-tool/
 
 
 # Build outputs

@@ -9,8 +9,8 @@ const Allocator = std.mem.Allocator;
 const plonky3_field = @import("../poseidon2/plonky3_field.zig");
 
 pub const KOALABEAR_PRIME: u64 = 0x7f000001;
-pub const TWEAK_SEPARATOR_FOR_TREE_HASH: u8 = 0x00;
-pub const TWEAK_SEPARATOR_FOR_CHAIN_HASH: u8 = 0x01;
+pub const TWEAK_SEPARATOR_FOR_TREE_HASH: u8 = 0x01;
+pub const TWEAK_SEPARATOR_FOR_CHAIN_HASH: u8 = 0x00;
 
 const MontyField = plonky3_field.KoalaBearField;
 

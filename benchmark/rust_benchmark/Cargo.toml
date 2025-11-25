@@ -8,13 +8,15 @@ default = []
 debug-tools = []
 
 [dependencies]
-leansig = { git = "https://github.com/leanEthereum/leanSig", branch = "main" }
+leansig = { path = "../leansig-local" }
 p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
-p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-poseidon2 = { path = "../p3-poseidon2-local" }
 p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+
 rand = { version = "0.9", features = ["std_rng"] }
 rand_chacha = "0.9"
+getrandom = "0.2"
 sha3 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -22,6 +24,9 @@ hex = "0.4"
 bincode = "1.3"
 num-bigint = "0.4"
 num-traits = "0.2"
+
+[patch."https://github.com/Plonky3/Plonky3.git"]
+p3-poseidon2 = { path = "../p3-poseidon2-local" }
 
 [[bin]]
 name = "keygen_bench"
@@ -222,3 +227,22 @@ required-features = ["debug-tools"]
 [[bin]]
 name = "poseidon_debug"
 path = "src/poseidon_debug.rs"
+
+[[bin]]
+name = "debug_poseidon_step_by_step"
+path = "src/bin/debug_poseidon_step_by_step.rs"
+required-features = ["debug-tools"]
+
+[[bin]]
+name = "compare_poseidon_direct"
+path = "src/bin/compare_poseidon_direct.rs"
+required-features = ["debug-tools"]
+
+[[bin]]
+name = "cross_lang_rust_tool"
+path = "src/bin/cross_lang_rust_tool.rs"
+
+[[bin]]
+name = "test_poseidon_direct"
+path = "src/bin/test_poseidon_direct.rs"
+required-features = ["debug-tools"]

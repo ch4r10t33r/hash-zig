@@ -12,6 +12,7 @@ pub const Poseidon2KoalaBear24Plonky3 = @import("poseidon2.zig").Poseidon2KoalaB
 // Re-export commonly used functions
 pub const poseidon2_16 = @import("poseidon2.zig").poseidon2_16_plonky3;
 pub const poseidon2_24 = @import("poseidon2.zig").poseidon2_24_plonky3;
+pub const poseidon2_24_with_mds_light = @import("poseidon2.zig").poseidon2_24_plonky3_with_mds_light;
 pub const sbox = @import("poseidon2.zig").sbox;
 pub const apply_mat4 = @import("poseidon2.zig").apply_mat4;
 pub const mds_light_permutation_16 = @import("poseidon2.zig").mds_light_permutation_16;

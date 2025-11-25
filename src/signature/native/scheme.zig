@@ -884,9 +884,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         parameter: [5]FieldElement,
     ) ![]FieldElement {
         // Convert epoch and chain_index to field elements for tweak using Rust's encoding
-        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | 0x00
+        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | TWEAK_SEPARATOR_FOR_CHAIN_HASH
+        const field = @import("../../core/field.zig");
         const pos_in_chain = 0; // For chain computation, pos_in_chain is always 0
-        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | 0x00;
+        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | field.TWEAK_SEPARATOR_FOR_CHAIN_HASH;
 
         // Convert to field elements using base-p representation
         const tweak = tweakToFieldElements(tweak_encoding);
@@ -939,8 +940,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         parameter: [5]FieldElement,
     ) ![8]FieldElement {
         // Convert epoch, chain_index, and pos_in_chain to field elements for tweak using Rust's encoding
-        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | 0x00
-        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | 0x00;
+        // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | TWEAK_SEPARATOR_FOR_CHAIN_HASH
+        const field = @import("../../core/field.zig");
+        const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | field.TWEAK_SEPARATOR_FOR_CHAIN_HASH;
 
         // Convert to field elements using base-p representation (canonical form)
         const tweak = tweakToFieldElements(tweak_encoding);
@@ -1218,10 +1220,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         parameter: [5]FieldElement,
     ) ![]FieldElement {
         // Inputs are expected canonical; Poseidon layer handles Montgomery internally.
-        // Compute tree tweak: ((level + 1 as u128) << 40) | ((pos_in_level as u128) << 8) | 0x01
+        // Compute tree tweak: ((level + 1 as u128) << 40) | ((pos_in_level as u128) << 8) | TWEAK_SEPARATOR_FOR_TREE_HASH
         // Match Rust: let tweak_level = (level as u8) + 1;
+        const field = @import("../../core/field.zig");
         const tweak_level = level + 1;
-        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
+        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | field.TWEAK_SEPARATOR_FOR_TREE_HASH;
 
         // Create a unique identifier for this hash call based on inputs (for matching across build/verify)
         // Use first element of left, right, and param[0] as a simple identifier
@@ -1520,8 +1523,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Create tree tweak: level=0, pos_in_level=epoch (matching Rust: TH::tree_tweak(0, epoch))
+        const field = @import("../../core/field.zig");
         const tweak_level: u8 = 0;
-        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, epoch) << 8) | 0x01;
+        const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, epoch) << 8) | field.TWEAK_SEPARATOR_FOR_TREE_HASH;
 
         // Convert tweak to 2 field elements using base-p representation
         const p: u128 = 2130706433; // KoalaBear field modulus
@@ -1575,6 +1579,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log capacity_value (in Montgomery form, print as canonical for comparison)
+        // Always print to stderr for comparison
+        const stderr_capacity = std.io.getStdErr().writer();
+        stderr_capacity.print("ZIG_SPONGE_DEBUG: Capacity value ({} elements, canonical): ", .{CAPACITY}) catch {};
+        for (capacity_value_monty) |fe| {
+            stderr_capacity.print("0x{x:0>8} ", .{fe.toU32()}) catch {};
+        }
+        stderr_capacity.print("\n", .{}) catch {};
         log.print("DEBUG: Sponge capacity_value ({} elements, Montgomery->canonical): ", .{CAPACITY});
         for (capacity_value_monty, 0..) |fe, i| {
             log.print("{}:0x{x}", .{ i, fe.toU32() });
@@ -1587,6 +1598,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Chain ends are already in Montgomery form (from Poseidon2-16 compress)
         // Parameter and tweak need to be converted to Montgomery
         const combined_input_len = self.lifetime_params.parameter_len + self.lifetime_params.tweak_len_fe + flattened_len;
+        
+        // Debug: print lengths
+        const stderr_len = std.io.getStdErr().writer();
+        stderr_len.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len }) catch {};
+        
         var combined_input_monty = try self.allocator.alloc(F, combined_input_len);
         defer self.allocator.free(combined_input_monty);
 
@@ -1612,6 +1628,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print first RATE elements of combined input (in canonical form for comparison)
+        // Always print to stderr for comparison
+        const stderr_combined = std.io.getStdErr().writer();
+        stderr_combined.print("ZIG_SPONGE_DEBUG: Combined input (first {} elements, canonical): ", .{@min(15, combined_input_monty.len)}) catch {};
+        for (0..@min(15, combined_input_monty.len)) |i| {
+            stderr_combined.print("0x{x:0>8} ", .{combined_input_monty[i].toU32()}) catch {};
+        }
+        stderr_combined.print("\n", .{}) catch {};
         log.print("DEBUG: Sponge combined_input head RATE ({}): ", .{15});
         for (0..@min(15, combined_input_monty.len)) |i| {
             log.print("{}:0x{x}", .{ i, combined_input_monty[i].toU32() });
@@ -1641,14 +1664,32 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var state: [WIDTH]F = undefined;
 
         // Initialize rate part with zeros, capacity part with capacity_value (both in Montgomery)
+        // Rust: state[rate..].copy_from_slice(capacity_value) means state[15..24] = capacity_value[0..9]
         for (0..RATE) |i| {
             state[i] = F.zero; // Zero in Montgomery is still zero
         }
+        // CRITICAL: state[RATE + i] = capacity_value_monty[i] means:
+        //   state[15 + 0] = capacity_value[0] -> state[15] = capacity_value[0] ✓
+        //   state[15 + 1] = capacity_value[1] -> state[16] = capacity_value[1] ✓
+        //   ...
+        //   state[15 + 8] = capacity_value[8] -> state[23] = capacity_value[8] ✓
         for (0..CAPACITY) |i| {
             state[RATE + i] = capacity_value_monty[i]; // Already in Montgomery form
         }
+        
+        // Debug: verify capacity placement immediately after initialization
+        const stderr_verify = std.io.getStdErr().writer();
+        stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() }) catch {};
+        stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[23] = capacity[8]: state[23]=0x{x:0>8} capacity[8]=0x{x:0>8}\n", .{ state[23].toU32(), capacity_value_monty[8].toU32() }) catch {};
 
         // Debug: print initial state (after initialization, before absorption)
+        // Always print to stderr for comparison
+        const stderr_init = std.io.getStdErr().writer();
+        stderr_init.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{}) catch {};
+        for (0..WIDTH) |i| {
+            stderr_init.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+        }
+        stderr_init.print("\n", .{}) catch {};
         log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
         for (0..WIDTH) |i| {
             log.print("{}:0x{x}", .{ i, state[i].toU32() });
@@ -1661,45 +1702,54 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.print("DEBUG: Sponge padded_input_len={} rate={}\n", .{ padded_input.len, RATE });
         var chunk_start: usize = 0;
         var chunk_num: usize = 0;
+        const total_chunks = (padded_input.len + RATE - 1) / RATE;
+        const stderr_abs = std.io.getStdErr().writer();
+        stderr_abs.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks}) catch {};
+        
         while (chunk_start < padded_input.len) {
-            const chunk_end = chunk_start + RATE;
-            // Debug: print input values for first few chunks (in canonical form for comparison)
-            if (chunk_num < 3) {
-                log.print("ZIG_SPONGE_DEBUG: Input chunk {} (canonical): ", .{chunk_num});
-                for (0..RATE) |i| {
-                    log.print("{}:0x{x}", .{ chunk_start + i, padded_input[chunk_start + i].toU32() });
-                    if (i < RATE - 1) log.print(", ", .{});
+            const chunk_end = @min(chunk_start + RATE, padded_input.len);
+            const actual_chunk_len = chunk_end - chunk_start;
+            
+            // Debug: print input values for first few and last few chunks (in canonical form for comparison)
+            if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
+                stderr_abs.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) }) catch {};
+                for (0..@min(8, actual_chunk_len)) |i| {
+                    stderr_abs.print("0x{x:0>8} ", .{padded_input[chunk_start + i].toU32()}) catch {};
                 }
-                log.print("\n", .{});
+                stderr_abs.print("\n", .{}) catch {};
             }
+            
             // Add chunk to rate part of state (state[0..RATE])
             // Input is already in Montgomery form, so add directly (matching Rust's state[i] += chunk[i])
-            for (0..RATE) |i| {
+            for (0..actual_chunk_len) |i| {
                 state[i] = state[i].add(padded_input[chunk_start + i]);
             }
 
-            // Debug: print state after adding chunk (before permutation) for first few chunks
-            if (chunk_num < 3) {
-                log.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm): ", .{chunk_num});
-                for (0..WIDTH) |i| {
-                    log.print("{}:0x{x}", .{ i, state[i].toU32() });
-                    if (i < WIDTH - 1) log.print(", ", .{});
+            // Debug: print state after adding chunk (before permutation) for first few and last few chunks
+            // Always print to stderr for comparison
+            if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
+                stderr_abs.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm, first 8): ", .{chunk_num}) catch {};
+                for (0..@min(8, WIDTH)) |i| {
+                    stderr_abs.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
                 }
-                log.print("\n", .{});
+                stderr_abs.print("\n", .{}) catch {};
             }
 
             // Permute state (matching Rust's perm.permute_mut(&mut state))
-            // This works directly with Montgomery values
-            Poseidon24.permutation(&state);
+            // Rust's permute_mut calls: external_layer.permute_state_initial (includes MDS light + 4 rounds)
+            //                           internal_layer.permute_state (23 rounds)
+            //                           external_layer.permute_state_terminal (4 rounds)
+            // So we should use the full permutation WITH MDS light (matching Rust)
+            Poseidon24.permutation(state[0..]);
 
-            // Debug: print state after permutation for first few chunks
-            if (chunk_num < 3) {
-                log.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (canonical): ", .{chunk_num});
-                for (0..WIDTH) |i| {
-                    log.print("{}:0x{x}", .{ i, state[i].toU32() });
-                    if (i < WIDTH - 1) log.print(", ", .{});
+            // Debug: print state after permutation for first few and last few chunks
+            // Always print to stderr for comparison
+            if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
+                stderr_abs.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (first 8): ", .{chunk_num}) catch {};
+                for (0..@min(8, WIDTH)) |i| {
+                    stderr_abs.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
                 }
-                log.print("\n", .{});
+                stderr_abs.print("\n", .{}) catch {};
             }
 
             chunk_start = chunk_end;
@@ -1707,12 +1757,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print state after all absorptions (before squeeze)
-        log.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{});
+        // Always print to stderr for comparison
+        const stderr_final = std.io.getStdErr().writer();
+        stderr_final.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{}) catch {};
         for (0..WIDTH) |i| {
-            log.print("{}:0x{x}", .{ i, state[i].toU32() });
-            if (i < WIDTH - 1) log.print(", ", .{});
+            stderr_final.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
         }
-        log.print("\n", .{});
+        stderr_final.print("\n", .{}) catch {};
 
         // Squeeze: extract OUTPUT_LEN elements from rate part (matching Rust's squeeze exactly)
         // Rust's squeeze: while out.len() < OUT_LEN { out.extend_from_slice(&state[..rate]); perm.permute_mut(&mut state); }
@@ -1731,7 +1782,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
             log.print("\n", .{});
             // Permute state (matching Rust's perm.permute_mut(&mut state))
-            Poseidon24.permutation(&state);
+            // Rust's permute_mut includes MDS light (in permute_state_initial)
+            Poseidon24.permutation(state[0..]);
             // Debug: print state after squeeze permutation
             log.print("ZIG_SPONGE_DEBUG: State after squeeze perm (canonical): ", .{});
             for (0..WIDTH) |i| {
@@ -2909,12 +2961,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Debug: log encoding sum and first few chunks
         var encoding_sum: usize = 0;
         for (x) |chunk| encoding_sum += chunk;
-        log.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum});
-        log.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{});
+        // Always print to stderr for verification testing (bypasses build_options)
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum}) catch {};
+        stderr.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{}) catch {};
         for (0..@min(5, x.len)) |i| {
-            log.print("x[{}]={} ", .{ i, x[i] });
+            stderr.print("x[{}]={} ", .{ i, x[i] }) catch {};
         }
-        log.print("\n", .{});
+        stderr.print("\n", .{}) catch {};
 
         // 2) Advance each chain domain to max based on message-derived x (target-sum digits)
         const base_minus_one: u8 = @as(u8, @intCast(self.lifetime_params.base - 1));
@@ -2929,6 +2983,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const F = plonky3_field.KoalaBearField; // Montgomery form implementation
         var final_chain_domains = try self.allocator.alloc([8]FieldElement, hashes.len);
         defer self.allocator.free(final_chain_domains);
+
+        // Debug: print that we're starting chain computation
+        const stderr_start = std.io.getStdErr().writer();
+        stderr_start.print("ZIG_VERIFY_DEBUG: Starting chain computation, hashes.len={}\n", .{hashes.len}) catch {};
 
         const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
         for (hashes, 0..) |domain, i| {
@@ -2967,6 +3025,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             final_chain_domains[i] = current;
+            // Always print first chain final value to stderr for comparison
+            if (i == 0) {
+                const stderr_writer = std.io.getStdErr().writer();
+                stderr_writer.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i}) catch {};
+                for (0..hash_len) |j| {
+                    stderr_writer.print("0x{x:0>8} ", .{current[j].toCanonical()}) catch {};
+                }
+                stderr_writer.print("\n", .{}) catch {};
+            }
             if (i == 0 or i == 2) {
                 // Convert Montgomery to canonical for comparison with Rust
                 const monty_f = F{ .value = current[0].value };
@@ -3000,7 +3067,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             current_domain[i] = FieldElement{ .value = 0 };
         }
 
-        // Debug: log leaf domain
+        // Debug: log leaf domain (always print to stderr for comparison)
+        const stderr_writer = std.io.getStdErr().writer();
+        stderr_writer.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction (canonical): ", .{}) catch {};
+        for (0..hash_len) |i| {
+            stderr_writer.print("0x{x:0>8} ", .{current_domain[i].toCanonical()}) catch {};
+        }
+        stderr_writer.print("\n", .{}) catch {};
         if (epoch == 16) {
             log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
             for (0..hash_len) |i| {
@@ -3153,14 +3226,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
         const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
+        // Always print root comparison to stderr (bypasses build_options)
+        stderr.print("ZIG_VERIFY_DEBUG: Comparing roots (length={}):\n", .{root_len}) catch {};
         for (0..root_len) |i| {
+            const computed_val = current_domain[i].toCanonical();
+            const expected_val = public_key.root[i].toCanonical();
             if (!current_domain[i].eql(public_key.root[i])) {
+                stderr.print("ZIG_VERIFY_ERROR: Root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ i, computed_val, expected_val }) catch {};
                 log.print("ZIG_VERIFY_ERROR: Epoch {} - root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ epoch, i, current_domain[i].value, public_key.root[i].value });
                 log.print(
                     "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
                     .{ i, current_domain[i].value, public_key.root[i].value },
                 );
                 match = false;
+            } else {
+                stderr.print("ZIG_VERIFY_DEBUG: Root[{}] matches: 0x{x:0>8}\n", .{ i, computed_val }) catch {};
             }
         }
         if (match) {

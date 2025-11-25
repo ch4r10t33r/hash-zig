@@ -208,17 +208,34 @@ pub fn mapToVertexBig(
     var d_curr = layer;
 
     for (1..DIMENSION) |i| {
-        var ji: usize = BASE;
+        // CRITICAL FIX: Initialize ji to a sentinel value matching Rust's usize::MAX
+        // Rust: let mut ji = usize::MAX;
+        var ji: usize = std.math.maxInt(usize);
         const sub_dim = DIMENSION - i;
-        const range_start = if (d_curr > (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
+        // CRITICAL FIX: Use saturating_sub to match Rust's behavior exactly
+        // Rust: range_start = d_curr.saturating_sub((w - 1) * (v - i))
+        const range_start = if (d_curr >= (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
         const sub_info = layer_data.get(sub_dim);
 
-        var j: usize = range_start;
+        // CRITICAL FIX: Match Rust's loop exactly: for j in range_start..=min(w - 1, d_curr)
+        // Rust uses inclusive range: range_start..=min(w - 1, d_curr)
         const limit = @min(BASE - 1, d_curr);
+        var j: usize = range_start;
+        // CRITICAL: Loop must be inclusive on both ends (j <= limit), matching Rust's ..= operator
         while (j <= limit) : (j += 1) {
             const sub_layer = d_curr - j;
-            if (sub_layer >= sub_info.sizes.len) continue;
+            // CRITICAL FIX: In Rust, accessing out-of-bounds would panic, but for valid inputs
+            // this should never happen. However, we need to handle it gracefully.
+            // If sub_layer is out of bounds, it means our calculation is wrong or input is invalid.
+            // For now, we'll skip this iteration (similar to continue) but this might indicate a bug.
+            if (sub_layer >= sub_info.sizes.len) {
+                // This shouldn't happen for valid inputs, but if it does, we can't find ji
+                // In Rust, this would panic. We'll continue to next j to see if we can find a valid one.
+                // However, if we reach the end without finding ji, we'll return an error below.
+                continue;
+            }
             const count = &sub_info.sizes[sub_layer];
+            // CRITICAL FIX: Match Rust's comparison exactly: if x_curr >= *count
             const cmp = x_curr.order(count.*);
             if (cmp == .gt or cmp == .eq) {
                 try BigInt.sub(&x_curr, &x_curr, count);
@@ -228,6 +245,8 @@ pub fn mapToVertexBig(
             }
         }
 
+        // CRITICAL FIX: Match Rust's assertion: assert!(ji < w)
+        // If ji is still the sentinel value, it means we never found a valid j
         if (ji >= BASE) return error.InvalidHypercubeMapping;
 
         const ai = BASE - 1 - ji;
@@ -260,8 +279,11 @@ pub fn mapIntoHypercubePart(
     defer self.allocator.free(mod_str);
     log.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
 
-    var value = try BigInt.initSet(self.allocator, 0);
-    defer value.deinit();
+    // CRITICAL FIX: Match Rust's algorithm exactly
+    // Rust: acc = 0; for fe in field_elements: acc = acc * ORDER + fe; acc %= dom_size
+    // We must build the full big integer first, then apply modulo (not during combination)
+    var acc = try BigInt.initSet(self.allocator, 0);
+    defer acc.deinit();
 
     var multiplier = try BigInt.initSet(self.allocator, KOALABEAR_PRIME);
     defer multiplier.deinit();
@@ -269,27 +291,43 @@ pub fn mapIntoHypercubePart(
     var tmp = try BigInt.init(self.allocator);
     defer tmp.deinit();
 
-    var quotient = try BigInt.init(self.allocator);
-    defer quotient.deinit();
-
-    var remainder = try BigInt.init(self.allocator);
-    defer remainder.deinit();
-
     log.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
+    var fe_bigint = try BigInt.init(self.allocator);
+    defer fe_bigint.deinit();
     for (field_elements, 0..) |fe, i| {
         if (i < 5) {
             log.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
         }
-        try BigInt.mul(&tmp, &value, &multiplier);
-        try BigInt.addScalar(&tmp, &tmp, fe.toCanonical());
-        try BigInt.divFloor(&quotient, &remainder, &tmp, &modulus);
-        try BigInt.addScalar(&value, &remainder, 0);
+        // Build big integer: acc = acc * ORDER + fe (matching Rust exactly)
+        // CRITICAL FIX: Use BigInt.add with temporary BigInt for field element to match Rust's BigUint addition
+        try BigInt.mul(&tmp, &acc, &multiplier);
+        // Create BigInt from field element (matching Rust's fe.as_canonical_biguint())
+        // CRITICAL: Ensure we use the canonical value as u64 to match Rust's BigUint::from behavior
+        const fe_canonical = fe.toCanonical();
+        try fe_bigint.set(@as(u64, fe_canonical));
+        try BigInt.add(&acc, &tmp, &fe_bigint);
     }
     log.print("\n", .{});
 
+    // Apply modulo AFTER building the full big integer (matching Rust: acc %= dom_size)
+    // Use divFloor to get remainder, then replace acc with remainder
+    var quotient_mod = try BigInt.init(self.allocator);
+    defer quotient_mod.deinit();
+    var remainder_mod = try BigInt.init(self.allocator);
+    defer remainder_mod.deinit();
+    try BigInt.divFloor(&quotient_mod, &remainder_mod, &acc, &modulus);
+    // Replace acc with remainder (matching Rust: acc %= dom_size)
+    // Swap acc and remainder_mod, then clear the old acc (now in remainder_mod)
+    // This effectively sets acc = remainder_mod
+    const temp_swap = acc;
+    acc = remainder_mod;
+    remainder_mod = temp_swap;
+    remainder_mod.deinit(); // Free the old acc value
+    remainder_mod = try BigInt.init(self.allocator); // Reinitialize for defer
+
     var offset = try BigInt.init(self.allocator);
     defer offset.deinit();
-    const layer = try hypercubeFindLayerBig(self, BASE, DIMENSION, final_layer, &value, &offset);
+    const layer = try hypercubeFindLayerBig(self, BASE, DIMENSION, final_layer, &acc, &offset);
 
     log.print("ZIG_HYPERCUBE_DEBUG: layer={} offset_bitlen={}\n", .{ layer, offset.toConst().bitCountAbs() });
 
@@ -332,7 +370,8 @@ pub fn applyTopLevelPoseidonMessageHash(
     var pos_outputs: [POS_OUTPUT_LEN_FE]FieldElement = undefined;
 
     for (0..POS_INVOCATIONS) |i| {
-        const iteration_index = [_]FieldElement{FieldElement.fromCanonical(@intCast(i))};
+        // Match Rust's behavior: use loop variable i as iteration index
+        // Rust: let iteration_index = [F::from_u8(i as u8)];
         const ITER_INPUT_LEN = RAND_LEN + PARAMETER_LEN + TWEAK_LEN_FE + MSG_LEN_FE + 1;
         var combined_input = try self.allocator.alloc(FieldElement, ITER_INPUT_LEN);
         defer self.allocator.free(combined_input);
@@ -354,13 +393,15 @@ pub fn applyTopLevelPoseidonMessageHash(
             combined_input[input_idx] = message_fe[j];
             input_idx += 1;
         }
-        combined_input[input_idx] = iteration_index[0];
+        // Use loop variable i as iteration index (matching Rust: F::from_u8(i as u8))
+        combined_input[input_idx] = FieldElement.fromU32(@intCast(i));
         input_idx += 1;
 
         var padded_input: [24]FieldElement = undefined;
         for (0..ITER_INPUT_LEN) |j| {
             padded_input[j] = combined_input[j];
         }
+        // Pad remaining elements with zeros (should be none since ITER_INPUT_LEN = 24)
         for (ITER_INPUT_LEN..24) |j| {
             padded_input[j] = FieldElement.zero();
         }
@@ -389,23 +430,45 @@ pub fn applyTopLevelPoseidonMessageHash(
         }
         log.print("\n", .{});
 
-        log.print("ZIG_POS_CONTEXT rand:", .{});
+        // Always print to stderr for debugging (bypasses build_options)
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("ZIG_POS_CONTEXT rand:", .{}) catch {};
         for (randomness[0..RAND_LEN]) |r| {
-            log.print(" 0x{x:0>8}", .{r.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{r.toCanonical()}) catch {};
         }
-        log.print(" param:", .{});
+        stderr.print(" param:", .{}) catch {};
         for (parameter) |p| {
-            log.print(" 0x{x:0>8}", .{p.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{p.toCanonical()}) catch {};
         }
-        log.print(" epoch:", .{});
+        stderr.print(" epoch:", .{}) catch {};
         for (epoch_fe) |e| {
-            log.print(" 0x{x:0>8}", .{e.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{e.toCanonical()}) catch {};
         }
-        log.print(" msg:", .{});
+        stderr.print(" msg:", .{}) catch {};
         for (message_fe) |m| {
-            log.print(" 0x{x:0>8}", .{m.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{m.toCanonical()}) catch {};
         }
-        log.print("\n", .{});
+        stderr.print(" iter_idx: 0x{x:0>8} (i={})\n", .{ combined_input[ITER_INPUT_LEN - 1].toCanonical(), i }) catch {};
+        
+        // Also print the combined input in canonical form
+        stderr.print("ZIG_POS_INPUT_CANONICAL (24 values):", .{}) catch {};
+        for (0..24) |j| {
+            stderr.print(" 0x{x:0>8}", .{padded_input[j].toCanonical()}) catch {};
+            if ((j + 1) % 8 == 0) {
+                stderr.print("\nZIG_POS_INPUT_CANONICAL:", .{}) catch {};
+            }
+        }
+        stderr.print("\n", .{}) catch {};
+        
+        // Print output in canonical form
+        stderr.print("ZIG_POS_OUTPUT_CANONICAL (15 values):", .{}) catch {};
+        for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {
+            stderr.print(" 0x{x:0>8}", .{iteration_pos_output[j].toCanonical()}) catch {};
+            if ((j + 1) % 8 == 0 and j < POS_OUTPUT_LEN_PER_INV_FE - 1) {
+                stderr.print("\nZIG_POS_OUTPUT_CANONICAL:", .{}) catch {};
+            }
+        }
+        stderr.print("\n", .{}) catch {};
     }
 
     const chunks = try mapIntoHypercubePart(self, DIMENSION, BASE, FINAL_LAYER, &pos_outputs);

@@ -20,8 +20,8 @@ import os
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUST_PROJECT = REPO_ROOT / "benchmark" / "rust_benchmark"
-RUST_BIN = RUST_PROJECT / "target" / "release" / "remote_hashsig_tool"
-ZIG_BIN = REPO_ROOT / "zig-out" / "bin" / "zig-remote-hash-tool"
+RUST_BIN = RUST_PROJECT / "target" / "release" / "cross_lang_rust_tool"
+ZIG_BIN = REPO_ROOT / "zig-out" / "bin" / "cross-lang-zig-tool"
 
 TMP_DIR = Path("/tmp")
 DEFAULT_SEED = "4242424242424242424242424242424242424242424242424242424242424242"
@@ -186,23 +186,23 @@ def zig_sign_timeout(cfg: ScenarioConfig, timeout_2_32: int) -> int:
 def ensure_rust_binary() -> None:
     if RUST_BIN.exists():
         return
-    print("Building remote_hashsig_tool (Rust)...")
+    print("Building cross-lang-rust-tool (Rust)...")
     result = run_command(
-        ["cargo", "build", "--release", "--bin", "remote_hashsig_tool"],
+        ["cargo", "build", "--release", "--bin", "cross_lang_rust_tool"],
         cwd=RUST_PROJECT,
         timeout=600,
     )
     if result.returncode != 0 or not RUST_BIN.exists():
-        raise RuntimeError("Failed to build remote_hashsig_tool")
+        raise RuntimeError("Failed to build cross-lang-rust-tool")
 
 
 def ensure_zig_binary() -> None:
     if ZIG_BIN.exists():
         return
-    print("Building zig-remote-hash-tool (Zig)...")
-    result = run_command(["zig", "build", "zig-remote-hash-tool", "-Doptimize=ReleaseFast"], cwd=REPO_ROOT, timeout=600)
+    print("Building cross-lang-zig-tool (Zig)...")
+    result = run_command(["zig", "build", "install", "-Doptimize=ReleaseFast"], cwd=REPO_ROOT, timeout=600)
     if result.returncode != 0 or not ZIG_BIN.exists():
-        raise RuntimeError("Failed to build zig-remote-hash-tool")
+        raise RuntimeError("Failed to build cross-lang-zig-tool")
 
 
 def scenario_paths(cfg: ScenarioConfig) -> Dict[str, Path]:
@@ -228,60 +228,92 @@ def command_duration(start: float) -> float:
 
 def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResult:
     print(f"\n-- Rust key generation & signing ({cfg.lifetime}) --")
+    # Note: cross-lang-rust-tool is hardcoded to lifetime 2^8, so skip if not 2^8
+    if cfg.lifetime != "2^8":
+        print(f"  Skipping: cross-lang-rust-tool only supports lifetime 2^8")
+        return OperationResult(False, 0.0, "", "Unsupported lifetime")
+    
+    # Setup tmp directory in project root
+    tmp_dir = RUST_PROJECT / "tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    
+    # Generate keypair first
     start = time.perf_counter()
-    result = run_command(
-        [
-            str(RUST_BIN),
-            "sign",
-            cfg.message,
-            str(paths["rust_pk"]),
-            str(paths["rust_sig"]),
-            cfg.seed_hex,
-            str(cfg.epoch),
-            str(cfg.num_active_epochs),
-            str(cfg.start_epoch),
-            cfg.lifetime,
-        ],
+    keygen_result = run_command(
+        [str(RUST_BIN), "keygen", cfg.seed_hex],
+        cwd=RUST_PROJECT,
+    )
+    if keygen_result.returncode != 0:
+        return OperationResult(False, command_duration(start), keygen_result.stdout, keygen_result.stderr)
+    
+    # Sign message
+    sign_result = run_command(
+        [str(RUST_BIN), "sign", cfg.message, str(cfg.epoch)],
         cwd=RUST_PROJECT,
     )
     duration = command_duration(start)
-    success = result.returncode == 0
+    success = sign_result.returncode == 0
+    
+    # Copy files to /tmp with expected names
     if success:
+        import shutil
+        if (tmp_dir / "rust_pk.json").exists():
+            shutil.copy2(tmp_dir / "rust_pk.json", paths["rust_pk"])
+        if (tmp_dir / "rust_sig.bin").exists():
+            shutil.copy2(tmp_dir / "rust_sig.bin", paths["rust_sig"])
         print(f"Rust public key saved to: {paths['rust_pk']}")
         print(f"Rust signature saved to : {paths['rust_sig']}")
-    return OperationResult(success, duration, result.stdout, result.stderr)
+    
+    return OperationResult(success, duration, sign_result.stdout, sign_result.stderr)
 
 
 def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int) -> OperationResult:
     print(f"\n-- Zig key generation & signing ({cfg.lifetime}) --")
+    # Note: cross-lang-zig-tool is hardcoded to lifetime 2^8, so skip if not 2^8
+    if cfg.lifetime != "2^8":
+        print(f"  Skipping: cross-lang-zig-tool only supports lifetime 2^8")
+        return OperationResult(False, 0.0, "", "Unsupported lifetime")
+    
+    # Setup tmp directory in project root
+    tmp_dir = REPO_ROOT / "tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    
+    # Generate keypair first
     start = time.perf_counter()
-    result = run_command(
-        [
-            str(ZIG_BIN),
-            "sign",
-            cfg.message,
-            str(paths["zig_pk"]),
-            str(paths["zig_sig"]),
-            cfg.seed_hex,
-            str(cfg.epoch),
-            str(cfg.num_active_epochs),
-            str(cfg.start_epoch),
-            cfg.lifetime,
-        ],
+    keygen_result = run_command(
+        [str(ZIG_BIN), "keygen", cfg.seed_hex],
+        cwd=REPO_ROOT,
+        timeout=zig_sign_timeout(cfg, timeout_2_32),
+    )
+    if keygen_result.returncode != 0:
+        return OperationResult(False, command_duration(start), keygen_result.stdout, keygen_result.stderr)
+    
+    # Sign message
+    sign_result = run_command(
+        [str(ZIG_BIN), "sign", cfg.message, str(cfg.epoch)],
         cwd=REPO_ROOT,
         timeout=zig_sign_timeout(cfg, timeout_2_32),
     )
     duration = command_duration(start)
-    success = result.returncode == 0
+    success = sign_result.returncode == 0
+    
+    # Copy files to /tmp with expected names
     if success:
+        import shutil
+        if (tmp_dir / "zig_pk.json").exists():
+            shutil.copy2(tmp_dir / "zig_pk.json", paths["zig_pk"])
+        if (tmp_dir / "zig_sig.bin").exists():
+            shutil.copy2(tmp_dir / "zig_sig.bin", paths["zig_sig"])
         print(f"Zig public key saved to: {paths['zig_pk']}")
         print(f"Zig signature saved to : {paths['zig_sig']}")
-    return OperationResult(success, duration, result.stdout, result.stderr)
+    
+    return OperationResult(success, duration, sign_result.stdout, sign_result.stderr)
 
 
 def verify_success(result: subprocess.CompletedProcess) -> bool:
     blob = (result.stdout or "") + (result.stderr or "")
-    return result.returncode == 0 and "VERIFY_RESULT:true" in blob
+    # Support both old format (VERIFY_RESULT:true) and new format (✅)
+    return result.returncode == 0 and ("VERIFY_RESULT:true" in blob or "✅" in blob)
 
 
 def run_zig_verify(
@@ -291,21 +323,26 @@ def run_zig_verify(
     label: str,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
+    # Note: cross-lang-zig-tool is hardcoded to lifetime 2^8
+    if cfg.lifetime != "2^8":
+        print(f"  Skipping: cross-lang-zig-tool only supports lifetime 2^8")
+        return OperationResult(False, 0.0, "", "Unsupported lifetime")
+    
     start = time.perf_counter()
     result = run_command(
         [
             str(ZIG_BIN),
             "verify",
-            cfg.message,
-            str(pk_path),
             str(sig_path),
+            str(pk_path),
+            cfg.message,
             str(cfg.epoch),
-            cfg.lifetime,
         ],
         cwd=REPO_ROOT,
     )
     duration = command_duration(start)
-    success = verify_success(result)
+    # Check for success message in output
+    success = result.returncode == 0 and "✅" in (result.stdout + result.stderr)
     return OperationResult(success, duration, result.stdout, result.stderr)
 
 
@@ -316,21 +353,26 @@ def run_rust_verify(
     label: str,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
+    # Note: cross-lang-rust-tool is hardcoded to lifetime 2^8
+    if cfg.lifetime != "2^8":
+        print(f"  Skipping: cross-lang-rust-tool only supports lifetime 2^8")
+        return OperationResult(False, 0.0, "", "Unsupported lifetime")
+    
     start = time.perf_counter()
     result = run_command(
         [
             str(RUST_BIN),
             "verify",
-            cfg.message,
-            str(pk_path),
             str(sig_path),
+            str(pk_path),
+            cfg.message,
             str(cfg.epoch),
-            cfg.lifetime,
         ],
         cwd=RUST_PROJECT,
     )
     duration = command_duration(start)
-    success = verify_success(result)
+    # Check for success message in output
+    success = result.returncode == 0 and "✅" in (result.stdout + result.stderr)
     return OperationResult(success, duration, result.stdout, result.stderr)
 
 

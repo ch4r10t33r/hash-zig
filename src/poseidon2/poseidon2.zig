@@ -58,31 +58,41 @@ pub fn sbox(x: F) F {
 }
 
 // Apply MDS matrix to 4 elements (exact Plonky3 logic from apply_mat4)
-// This is the optimized implementation from Plonky3's external.rs
+// CRITICAL FIX: Rust uses .clone() to preserve original values, so we must store them first
+// Matrix: [ 2 3 1 1 ]
+//         [ 1 2 3 1 ]
+//         [ 1 1 2 3 ]
+//         [ 3 1 1 2 ]
 pub fn apply_mat4(state: []F, start_idx: usize) void {
     const x = state[start_idx .. start_idx + 4];
 
-    // t01 = x[0] + x[1]
-    const t01 = x[0].add(x[1]);
+    // Store original values (matching Rust's .clone() behavior)
+    const x0 = x[0];
+    const x1 = x[1];
+    const x2 = x[2];
+    const x3 = x[3];
 
-    // t23 = x[2] + x[3]
-    const t23 = x[2].add(x[3]);
+    // t01 = x[0] + x[1] (using original values)
+    const t01 = x0.add(x1);
+
+    // t23 = x[2] + x[3] (using original values)
+    const t23 = x2.add(x3);
 
     // t0123 = t01 + t23
     const t0123 = t01.add(t23);
 
-    // t01123 = t0123 + x[1]
-    const t01123 = t0123.add(x[1]);
+    // t01123 = t0123 + x[1] (using original x1)
+    const t01123 = t0123.add(x1);
 
-    // t01233 = t0123 + x[3]
-    const t01233 = t0123.add(x[3]);
+    // t01233 = t0123 + x[3] (using original x3)
+    const t01233 = t0123.add(x3);
 
     // The order here is important. Need to overwrite x[0] and x[2] after x[1] and x[3].
-    // x[3] = t01233 + x[0].double() // 3*x[0] + x[1] + x[2] + 2*x[3]
-    x[3] = t01233.add(x[0].double());
+    // x[3] = t01233 + x[0].double() // 3*x[0] + x[1] + x[2] + 2*x[3] (using original x0)
+    x[3] = t01233.add(x0.double());
 
-    // x[1] = t01123 + x[2].double() // x[0] + 2*x[1] + 3*x[2] + x[3]
-    x[1] = t01123.add(x[2].double());
+    // x[1] = t01123 + x[2].double() // x[0] + 2*x[1] + 3*x[2] + x[3] (using original x2)
+    x[1] = t01123.add(x2.double());
 
     // x[0] = t01123 + t01 // 2*x[0] + 3*x[1] + x[2] + x[3]
     x[0] = t01123.add(t01);
@@ -438,7 +448,7 @@ pub fn poseidon2_16_plonky3(state: []F) void {
 }
 
 // MDS light permutation for 24-width (exact from Plonky3)
-fn mds_light_permutation_24(state: []F) void {
+pub fn mds_light_permutation_24(state: []F) void {
     // First, apply M_4 to each consecutive four elements of the state
     for (0..6) |i| { // 24 / 4 = 6 blocks
         apply_mat4(state, i * 4);
@@ -462,65 +472,63 @@ fn mds_light_permutation_24(state: []F) void {
 }
 
 // Main permutation function for 24-width
+// FIX: Rust applies MDS light BEFORE the first external round for 24-width!
+// This matches Rust's external_initial_permute_state which calls mds_light_permutation first.
+// We must apply MDS light first to match Rust's behavior.
 pub fn poseidon2_24_plonky3(state: []F) void {
-    const log = @import("../utils/log.zig");
-    
-    // Debug: log initial state (first 3 elements)
-    log.print("ZIG_PERM_DEBUG: Initial state[0..3]: ", .{});
-    for (0..3) |i| {
-        log.print("0x{x:0>8} ", .{state[i].value});
+    poseidon2_24_plonky3_with_mds_light(state, true); // Apply MDS light first (matching Rust)
+}
+
+// Main permutation function for 24-width with option to skip MDS light (for testing)
+// FIX: Rust applies MDS light BEFORE the first external round for 24-width!
+// This matches Rust's external_initial_permute_state which calls mds_light_permutation first.
+pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) void {
+    // CRITICAL FIX: Rust applies MDS light BEFORE the first external round for 24-width!
+    // This matches Rust's external_initial_permute_state behavior.
+    // For 24-width, we should ALWAYS apply MDS light first (matching Rust).
+    // The apply_mds_light parameter is kept for backward compatibility but should be true for 24-width.
+    if (apply_mds_light) {
+        mds_light_permutation_24(state);
     }
-    log.print("\n", .{});
     
-    // Try pre-apply MDS light (if Plonky3 variant requires it)
-    mds_light_permutation_24(state);
-    
-    // Debug: log state after MDS light (first 3 elements)
-    log.print("ZIG_PERM_DEBUG: After MDS light[0..3]: ", .{});
-    for (0..3) |i| {
-        log.print("0x{x:0>8} ", .{state[i].value});
-    }
-    log.print("\n", .{});
-    
-    // Initial external rounds
+    // Initial external rounds (4 rounds)
+    // CRITICAL: Rust's external_terminal_permute_state applies MDS light INSIDE each round
+    // So each external round does: add_rc_and_sbox, then mds_light_permutation
+    // NOT: add_rc_and_sbox, then full MDS matrix
     for (0..4) |i| {
-        apply_external_layer_24(state, PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL[i]);
-        
-        // Debug: log state after each initial external round (first 3 elements)
-        if (i == 0) {
-            log.print("ZIG_PERM_DEBUG: After initial external[0][0..3]: ", .{});
-            for (0..3) |j| {
-                log.print("0x{x:0>8} ", .{state[j].value});
-            }
-            log.print("\n", .{});
+        // Add round constants
+        for (0..24) |j| {
+            state[j] = state[j].add(F.fromU32(PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL[i][j]));
         }
+        // Apply S-box to all elements
+        for (state) |*elem| {
+            elem.* = sbox(elem.*);
+        }
+        // CRITICAL FIX: Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
+        mds_light_permutation_24(state);
     }
 
-    // Internal rounds
+    // Internal rounds (23 rounds)
     for (0..23) |i| {
         apply_internal_layer_24(state, PLONKY3_KOALABEAR_RC24_INTERNAL[i]);
-        
-        // Debug: log state after first internal round (first 3 elements)
-        if (i == 0) {
-            log.print("ZIG_PERM_DEBUG: After internal[0][0..3]: ", .{});
-            for (0..3) |j| {
-                log.print("0x{x:0>8} ", .{state[j].value});
-            }
-            log.print("\n", .{});
-        }
     }
 
-    // Final external rounds
+    // Final external rounds (4 rounds)
+    // CRITICAL: Rust's external_terminal_permute_state applies MDS light INSIDE each round
+    // So each external round does: add_rc_and_sbox, then mds_light_permutation
+    // NOT: add_rc_and_sbox, then full MDS matrix
     for (0..4) |i| {
-        apply_external_layer_24(state, PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL[i]);
+        // Add round constants
+        for (0..24) |j| {
+            state[j] = state[j].add(F.fromU32(PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL[i][j]));
+        }
+        // Apply S-box to all elements
+        for (state) |*elem| {
+            elem.* = sbox(elem.*);
+        }
+        // CRITICAL FIX: Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
+        mds_light_permutation_24(state);
     }
-    
-    // Debug: log final state before returning (first 3 elements)
-    log.print("ZIG_PERM_DEBUG: Final perm state[0..3]: ", .{});
-    for (0..3) |i| {
-        log.print("0x{x:0>8} ", .{state[i].value});
-    }
-    log.print("\n", .{});
 }
 
 // Wrapper structs for compatibility
