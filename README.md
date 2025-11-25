@@ -18,6 +18,7 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Cross-Language Compatibility Tests](#cross-language-compatibility-tests)
+- [Debug Logging](#debug-logging)
 - [Development](#development)
 - [License](#license)
 
@@ -145,6 +146,108 @@ BENCHMARK_DEBUG_LOGS=1 python3 benchmark/benchmark.py --lifetime 2^8
 ```
 
 The script prints a PASS/FAIL matrix, timings, and the artifact locations under `/tmp`. Delete the files between runs if you want a clean slate: `rm /tmp/*_public_* /tmp/*_signature_*`.
+
+## Debug Logging
+
+The hash-zig library includes extensive debug logging that can impact performance. All debug logging is controlled by a build-time feature flag `enable_debug_logs` that defaults to `false`.
+
+### Default Behavior (Debug Logs Disabled)
+
+By default, debug logs are **disabled** for optimal performance:
+
+```bash
+# Debug logs disabled (default)
+zig build test-lifetimes
+zig build test-lifetimes -OReleaseFast
+```
+
+### Enable Debug Logs
+
+To enable debug logs for debugging purposes:
+
+```bash
+# Enable debug logs
+zig build test-lifetimes -Ddebug-logs=true
+zig build test-lifetimes -OReleaseFast -Ddebug-logs=true
+```
+
+### Performance Impact
+
+When debug logs are disabled (default):
+- **Zero overhead**: The `log.print()` function returns immediately
+- **Compiler optimization**: In ReleaseFast builds, the check is optimized away
+- **Clean output**: No debug noise in benchmark results
+
+When debug logs are enabled:
+- **Full logging**: All debug statements are printed
+- **Performance impact**: String formatting and I/O operations add overhead
+- **Useful for debugging**: Helps trace execution flow and identify issues
+
+### Benchmarking Best Practices
+
+**For Performance Benchmarks:**
+
+Always run benchmarks **without** debug logs:
+
+```bash
+# Recommended for benchmarking
+zig build test-lifetimes -OReleaseFast
+
+# Or explicitly disable (though it's default)
+zig build test-lifetimes -OReleaseFast -Ddebug-logs=false
+```
+
+**For Debugging:**
+
+Enable debug logs when investigating issues:
+
+```bash
+# Enable debug logs for debugging
+zig build test-lifetimes -Ddebug-logs=true
+
+# Or with ReleaseFast for performance debugging
+zig build test-lifetimes -OReleaseFast -Ddebug-logs=true
+```
+
+### Debug Log Categories
+
+The following debug log prefixes are used:
+
+- `ZIG_SIGN_DEBUG`: Signing operation debug logs
+- `ZIG_VERIFY_DEBUG`: Verification operation debug logs
+- `ZIG_HASH_CALL`: Hash function call logs
+- `ZIG_HASH_RESULT`: Hash function result logs
+- `ZIG_BUILDTREE`: Tree building debug logs
+- `ZIG_BOTTOM_ROOT`: Bottom tree root computation logs
+- `DEBUG:`: General debug messages
+
+### Example
+
+```bash
+# Run benchmark without debug logs (fast, clean output)
+$ zig build test-lifetimes -OReleaseFast
+Testing Lifetime: 2^8
+⏱️  Key Generation Time: 1.671 seconds
+   ✅ Epoch 0: Sign=279.105ms, Verify=1.099ms
+   ✅ Epoch 1: Sign=4.586ms, Verify=1.086ms
+...
+
+# Run with debug logs (verbose, slower)
+$ zig build test-lifetimes -OReleaseFast -Ddebug-logs=true
+Testing Lifetime: 2^8
+ZIG_SIGN_DEBUG: Reusing 4 bottom tree layers from stored tree...
+ZIG_HASH_CALL: level=0 pos=8 tweak=0x...
+DEBUG: Tree tweak level=1 pos=8 -> 0x...
+⏱️  Key Generation Time: 1.671 seconds
+...
+```
+
+### Summary
+
+- ✅ **Default**: Debug logs are **disabled** for optimal performance
+- ✅ **Benchmarking**: Use default (no debug logs) for accurate performance measurements
+- ✅ **Debugging**: Use `-Ddebug-logs=true` when investigating issues
+- ✅ **Zero overhead**: When disabled, logging has no performance impact
 
 ## Development
 

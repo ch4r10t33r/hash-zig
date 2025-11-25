@@ -766,7 +766,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Debug: check root layer structure
         const root_layer = bottom_layers[bottom_layers.len - 1];
         if (bottom_tree_index == 1) {
-            std.debug.print("ZIG_BOTTOM_ROOT: bottom_tree_index={}, root_layer.nodes.len={}, root_layer.start_index={}\n", .{ bottom_tree_index, root_layer.nodes.len, root_layer.start_index });
+            log.print("ZIG_BOTTOM_ROOT: bottom_tree_index={}, root_layer.nodes.len={}, root_layer.start_index={}\n", .{ bottom_tree_index, root_layer.nodes.len, root_layer.start_index });
         }
 
         // Rust extracts from layers[depth / 2].nodes[bottom_tree_index % 2]
@@ -779,7 +779,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         @memcpy(&bottom_root, &root_layer.nodes[root_node_index]);
 
         if (bottom_tree_index == 1) {
-            std.debug.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
+            log.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
         }
 
         // Store layers in HashSubTree so they can be reused during signing (major optimization!)
@@ -1229,11 +1229,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: log hash call for level 0, pos 8 (epoch 16 bottom tree)
         if (level == 0 and pos_in_level == 8 and left.len > 0 and right.len > 0) {
-            std.debug.print("ZIG_HASH_CALL: level={} pos={} tweak=0x{x} param[0]=0x{x:0>8} left[0]=0x{x:0>8} right[0]=0x{x:0>8} left.len={} right.len={} call_id=0x{x:0>8} left_all=", .{ level, pos_in_level, tweak_bigint, parameter[0].value, left[0].value, right[0].value, left.len, right.len, call_id });
-            for (left) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
-            std.debug.print("right_all=", .{});
-            for (right) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
-            std.debug.print("\n", .{});
+            log.print("ZIG_HASH_CALL: level={} pos={} tweak=0x{x} param[0]=0x{x:0>8} left[0]=0x{x:0>8} right[0]=0x{x:0>8} left.len={} right.len={} call_id=0x{x:0>8} left_all=", .{ level, pos_in_level, tweak_bigint, parameter[0].value, left[0].value, right[0].value, left.len, right.len, call_id });
+            for (left) |fe| log.print("0x{x:0>8} ", .{fe.value});
+            log.print("right_all=", .{});
+            for (right) |fe| log.print("0x{x:0>8} ", .{fe.value});
+            log.print("\n", .{});
         }
 
         log.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
@@ -1301,7 +1301,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: log hash result for level 0, pos 8 (epoch 16 bottom tree)
         if (level == 0 and pos_in_level == 8 and left.len > 0 and right.len > 0) {
-            std.debug.print("ZIG_HASH_RESULT: level={} pos={} result[0]=0x{x:0>8} call_id=0x{x:0>8}\n", .{ level, pos_in_level, full_out[0].value, call_id });
+            log.print("ZIG_HASH_RESULT: level={} pos={} result[0]=0x{x:0>8} call_id=0x{x:0>8}\n", .{ level, pos_in_level, full_out[0].value, call_id });
         }
 
         // DETAILED HASH LOGGING
@@ -1919,7 +1919,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (position_initial == 16 and layers.len == 4 and l == 0) {
                 const current_node_index = current_position - @as(u32, @intCast(layer.start_index));
                 const current_node_val = if (current_node_index < layer.nodes.len) layer.nodes[@as(usize, @intCast(current_node_index))][0].value else 0;
-                std.debug.print("ZIG_SIGN: computePathFromLayers epoch {} layer {}: current_position={}, sibling_position={}, layer.start_index={}, sibling_index={}, layer.nodes.len={}, current_node[0]=0x{x:0>8}, sibling_node[0]=0x{x:0>8}\n", .{ position_initial, l, current_position, sibling_position, layer.start_index, sibling_index, layer.nodes.len, current_node_val, layer.nodes[sibling_index][0].value });
+                log.print("ZIG_SIGN: computePathFromLayers epoch {} layer {}: current_position={}, sibling_position={}, layer.start_index={}, sibling_index={}, layer.nodes.len={}, current_node[0]=0x{x:0>8}, sibling_node[0]=0x{x:0>8}\n", .{ position_initial, l, current_position, sibling_position, layer.start_index, sibling_index, layer.nodes.len, current_node_val, layer.nodes[sibling_index][0].value });
             }
 
             // Debug logging for top tree path computation
@@ -2020,7 +2020,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         if (bottom_tree_index == 1 and current_layer.nodes.len >= 2) {
             const epoch_16_index = 0; // epoch 16 is the first epoch in bottom tree 1
             if (current_layer.nodes.len > epoch_16_index) {
-                std.debug.print("ZIG_BUILDTREE: Bottom tree {} level 0 layer: start_index={}, epoch_16_index={}, nodes[{}][0]=0x{x:0>8}, nodes[{}][0]=0x{x:0>8}\n", .{ bottom_tree_index, current_layer.start_index, epoch_16_index, epoch_16_index, current_layer.nodes[epoch_16_index][0].value, epoch_16_index + 1, current_layer.nodes[epoch_16_index + 1][0].value });
+                log.print("ZIG_BUILDTREE: Bottom tree {} level 0 layer: start_index={}, epoch_16_index={}, nodes[{}][0]=0x{x:0>8}, nodes[{}][0]=0x{x:0>8}\n", .{ bottom_tree_index, current_layer.start_index, epoch_16_index, epoch_16_index, current_layer.nodes[epoch_16_index][0].value, epoch_16_index + 1, current_layer.nodes[epoch_16_index + 1][0].value });
             }
         }
 
@@ -2719,13 +2719,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: log path nodes (only for epoch 16 to reduce noise)
         if (epoch == 16) {
-            std.debug.print("ZIG_SIGN: Epoch {} - Bottom co-path: {} nodes\n", .{ epoch, bottom_copath.len });
+            log.print("ZIG_SIGN: Epoch {} - Bottom co-path: {} nodes\n", .{ epoch, bottom_copath.len });
             for (bottom_copath, 0..) |node, i| {
-                std.debug.print("ZIG_SIGN:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+                log.print("ZIG_SIGN:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
             }
-            std.debug.print("ZIG_SIGN: Epoch {} - Top co-path for pos {}: {} nodes\n", .{ epoch, top_pos, top_copath.len });
+            log.print("ZIG_SIGN: Epoch {} - Top co-path for pos {}: {} nodes\n", .{ epoch, top_pos, top_copath.len });
             for (top_copath, 0..) |node, i| {
-                std.debug.print("ZIG_SIGN:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+                log.print("ZIG_SIGN:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
             }
         }
 
@@ -2977,16 +2977,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: log chain ends before reduction
         if (epoch == 16) {
-            std.debug.print("ZIG_VERIFY_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
+            log.print("ZIG_VERIFY_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
             for (0..@min(3, final_chain_domains.len)) |ci| {
-                std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
+                log.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
         }
 
         // 3) Reduce 64 chain domains to a single leaf domain using tree-tweak hashing
         if (epoch == 16) {
-            std.debug.print("ZIG_VERIFY_DEBUG: Calling reduceChainDomainsToLeafDomain with final_chain_domains.len={} epoch={}\n", .{ final_chain_domains.len, epoch });
+            log.print("ZIG_VERIFY_DEBUG: Calling reduceChainDomainsToLeafDomain with final_chain_domains.len={} epoch={}\n", .{ final_chain_domains.len, epoch });
         }
         const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
         defer self.allocator.free(leaf_domain_slice);
@@ -3002,11 +3002,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: log leaf domain
         if (epoch == 16) {
-            std.debug.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
+            log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
             for (0..hash_len) |i| {
-                std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
+                log.print("0x{x:0>8} ", .{current_domain[i].value});
             }
-            std.debug.print("\n", .{});
+            log.print("\n", .{});
         }
 
         // 4) Walk Merkle path using tweak hash and epoch-based orientation
@@ -3016,7 +3016,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Debug: log leaf domain for epoch 16
         if (epoch == 16) {
             const bottom_tree_index = epoch / @as(u32, @intCast(leafs_per_bottom_tree));
-            std.debug.print("ZIG_VERIFY: Epoch {} - Initial leaf domain[0]=0x{x:0>8} (bottom_tree_index={} final_chain_domains.len={})\n", .{ epoch, current_domain[0].value, bottom_tree_index, final_chain_domains.len });
+            log.print("ZIG_VERIFY: Epoch {} - Initial leaf domain[0]=0x{x:0>8} (bottom_tree_index={} final_chain_domains.len={})\n", .{ epoch, current_domain[0].value, bottom_tree_index, final_chain_domains.len });
         }
         const bottom_tree_index = @as(usize, @intCast(epoch)) / leafs_per_bottom_tree;
         // For top tree, we need to compute the position relative to where the top tree starts
@@ -3044,7 +3044,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: log current_domain and sibling for epoch 16
             if (epoch == 16) {
-                std.debug.print("ZIG_VERIFY: Epoch {} - Node {}: current_domain[0]=0x{x:0>8} position={} sibling[0]=0x{x:0>8}\n", .{ epoch, node_idx, current_domain[0].value, position, sibling_domain[0].value });
+                log.print("ZIG_VERIFY: Epoch {} - Node {}: current_domain[0]=0x{x:0>8} position={} sibling[0]=0x{x:0>8}\n", .{ epoch, node_idx, current_domain[0].value, position, sibling_domain[0].value });
             }
 
             // Determine if current is left or right child (matching Rust: current_position.is_multiple_of(2))
@@ -3074,22 +3074,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: log hash inputs for epoch 16, levels 0-4
             if (epoch == 16 and node_idx <= 4) {
-                std.debug.print("ZIG_VERIFY: Epoch {} - Level {} hash inputs: current_domain[0]=0x{x:0>8} sibling[0]=0x{x:0>8} left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} level_for_tweak={} (original_position={} is_left={})\n", .{ epoch, level, current_domain[0].value, sibling_domain[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, level, original_position, is_left });
+                log.print("ZIG_VERIFY: Epoch {} - Level {} hash inputs: current_domain[0]=0x{x:0>8} sibling[0]=0x{x:0>8} left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} level_for_tweak={} (original_position={} is_left={})\n", .{ epoch, level, current_domain[0].value, sibling_domain[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, level, original_position, is_left });
             }
 
             if (is_top_tree and node_idx == bottom_tree_depth) {
-                std.debug.print("ZIG_VERIFY: Epoch {} - Transitioning to top tree at node_idx={}, position={}, bottom_tree_index={}, pos_in_level={}, current_domain[0]=0x{x:0>8}, sibling[0]=0x{x:0>8}\n", .{ epoch, node_idx, position, bottom_tree_index, pos_in_level, current_domain[0].value, sibling_domain[0].value });
+                log.print("ZIG_VERIFY: Epoch {} - Transitioning to top tree at node_idx={}, position={}, bottom_tree_index={}, pos_in_level={}, current_domain[0]=0x{x:0>8}, sibling[0]=0x{x:0>8}\n", .{ epoch, node_idx, position, bottom_tree_index, pos_in_level, current_domain[0].value, sibling_domain[0].value });
                 log.print("ZIG_VERIFY_DEBUG: Transitioning to top tree at node_idx={}, position={}, bottom_tree_index={}, pos_in_level={}\n", .{ node_idx, position, bottom_tree_index, pos_in_level });
                 // Check if current_domain matches what was used during tree building
                 // For epoch 16, bottom_tree_index=1, so current_domain should be root of bottom tree 1
-                std.debug.print("ZIG_VERIFY: After bottom tree (level {}), current_domain should be root of bottom tree {}: ", .{ level - 1, bottom_tree_index });
+                log.print("ZIG_VERIFY: After bottom tree (level {}), current_domain should be root of bottom tree {}: ", .{ level - 1, bottom_tree_index });
                 for (0..hash_len) |i| {
-                    std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
+                    log.print("0x{x:0>8} ", .{current_domain[i].value});
                 }
-                std.debug.print("\n", .{});
+                log.print("\n", .{});
             }
             if (epoch == 16) {
-                std.debug.print("ZIG_VERIFY: Epoch {} - Level {} node {}: original_position={} is_right={} pos_in_level={} sibling[0]=0x{x:0>8} (bottom={} top={})\n", .{ epoch, level, node_idx, original_position, is_right, pos_in_level, sibling_domain[0].value, is_bottom_tree, is_top_tree });
+                log.print("ZIG_VERIFY: Epoch {} - Level {} node {}: original_position={} is_right={} pos_in_level={} sibling[0]=0x{x:0>8} (bottom={} top={})\n", .{ epoch, level, node_idx, original_position, is_right, pos_in_level, sibling_domain[0].value, is_bottom_tree, is_top_tree });
             }
 
             log.print("ZIG_VERIFY_DEBUG: Level {} node {}: original_position={} is_right={} pos_in_level={} (bottom={} top={})\n", .{ level, node_idx, original_position, is_right, pos_in_level, is_bottom_tree, is_top_tree });
@@ -3101,34 +3101,34 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Use level+1 for tweak (matching Rust: (l + 1))
             // Debug: log parameter for epoch 16
             if (epoch == 16 and level == 0) {
-                std.debug.print("ZIG_VERIFY: Epoch {} - Parameter[0]=0x{x:0>8}\n", .{ epoch, public_key.parameter[0].value });
-                std.debug.print("ZIG_VERIFY: Epoch {} - Level {} tweak params: level={} pos_in_level={} (compare with tree building: level=0 parent_pos=8)\n", .{ epoch, level, level, pos_in_level });
+                log.print("ZIG_VERIFY: Epoch {} - Parameter[0]=0x{x:0>8}\n", .{ epoch, public_key.parameter[0].value });
+                log.print("ZIG_VERIFY: Epoch {} - Level {} tweak params: level={} pos_in_level={} (compare with tree building: level=0 parent_pos=8)\n", .{ epoch, level, level, pos_in_level });
             }
             // Debug: log hash call for epoch 16, level 0
             if (epoch == 16 and level == 0) {
                 // Create call_id to match with tree building
                 const verify_call_id = left_slice[0].value ^ right_slice[0].value ^ public_key.parameter[0].value ^ @as(u32, @intCast(level)) ^ @as(u32, @intCast(pos_in_level));
-                std.debug.print("ZIG_VERIFY_HASH: Epoch {} - Level {} calling hash with left[0]=0x{x:0>8} right[0]=0x{x:0>8} level={} pos_in_level={} param[0]=0x{x:0>8} hash_len={} left_slice.len={} right_slice.len={} call_id=0x{x:0>8} left_all=", .{ epoch, level, left_slice[0].value, right_slice[0].value, level, pos_in_level, public_key.parameter[0].value, hash_len, left_slice.len, right_slice.len, verify_call_id });
-                for (left_slice) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
-                std.debug.print("right_all=", .{});
-                for (right_slice) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
-                std.debug.print("\n", .{});
+                log.print("ZIG_VERIFY_HASH: Epoch {} - Level {} calling hash with left[0]=0x{x:0>8} right[0]=0x{x:0>8} level={} pos_in_level={} param[0]=0x{x:0>8} hash_len={} left_slice.len={} right_slice.len={} call_id=0x{x:0>8} left_all=", .{ epoch, level, left_slice[0].value, right_slice[0].value, level, pos_in_level, public_key.parameter[0].value, hash_len, left_slice.len, right_slice.len, verify_call_id });
+                for (left_slice) |fe| log.print("0x{x:0>8} ", .{fe.value});
+                log.print("right_all=", .{});
+                for (right_slice) |fe| log.print("0x{x:0>8} ", .{fe.value});
+                log.print("\n", .{});
             }
             const parent = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, level, pos_in_level, public_key.parameter);
             defer self.allocator.free(parent);
             // Debug: log hash result for epoch 16, level 0
             if (epoch == 16 and level == 0) {
                 const verify_call_id = left_slice[0].value ^ right_slice[0].value ^ public_key.parameter[0].value ^ @as(u32, @intCast(level)) ^ @as(u32, @intCast(pos_in_level));
-                std.debug.print("ZIG_VERIFY_HASH: Epoch {} - Level {} hash result parent[0]=0x{x:0>8} parent.len={} hash_len={} call_id=0x{x:0>8}\n", .{ epoch, level, parent[0].value, parent.len, hash_len, verify_call_id });
+                log.print("ZIG_VERIFY_HASH: Epoch {} - Level {} hash result parent[0]=0x{x:0>8} parent.len={} hash_len={} call_id=0x{x:0>8}\n", .{ epoch, level, parent[0].value, parent.len, hash_len, verify_call_id });
             }
 
             // Debug: log parent computation for bottom tree (level 0-3) for epoch 16
             if (epoch == 16 and level < 4) {
-                std.debug.print("ZIG_VERIFY: Bottom tree level {} node {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} original_position={})\n", .{ level, node_idx, parent[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, original_position });
+                log.print("ZIG_VERIFY: Bottom tree level {} node {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} original_position={})\n", .{ level, node_idx, parent[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, original_position });
             }
             // Debug: log parent after hashing for top tree (level 4+)
             if (level >= 4) {
-                std.debug.print("ZIG_VERIFY: Top tree level {} node {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} original_position={} is_right={} current[0]=0x{x:0>8} sibling[0]=0x{x:0>8})\n", .{ level, node_idx, parent[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, original_position, is_right, current_domain[0].value, sibling_domain[0].value });
+                log.print("ZIG_VERIFY: Top tree level {} node {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} original_position={} is_right={} current[0]=0x{x:0>8} sibling[0]=0x{x:0>8})\n", .{ level, node_idx, parent[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, original_position, is_right, current_domain[0].value, sibling_domain[0].value });
             }
             log.print("ZIG_VERIFY_DEBUG:   parent[0]=0x{x:0>8}\n", .{parent[0].value});
 
@@ -3141,7 +3141,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: log current_domain after each step for epoch 16
             if (epoch == 16) {
-                std.debug.print("ZIG_VERIFY: Epoch {} - After level {}: current_domain[0]=0x{x:0>8} (original_position={}, is_left={}, pos_in_level={})\n", .{ epoch, level, current_domain[0].value, original_position, is_left, pos_in_level });
+                log.print("ZIG_VERIFY: Epoch {} - After level {}: current_domain[0]=0x{x:0>8} (original_position={}, is_left={}, pos_in_level={})\n", .{ epoch, level, current_domain[0].value, original_position, is_left, pos_in_level });
             }
 
             level += 1;
@@ -3155,7 +3155,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var match = true;
         for (0..root_len) |i| {
             if (!current_domain[i].eql(public_key.root[i])) {
-                std.debug.print("ZIG_VERIFY_ERROR: Epoch {} - root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ epoch, i, current_domain[i].value, public_key.root[i].value });
+                log.print("ZIG_VERIFY_ERROR: Epoch {} - root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ epoch, i, current_domain[i].value, public_key.root[i].value });
                 log.print(
                     "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
                     .{ i, current_domain[i].value, public_key.root[i].value },
