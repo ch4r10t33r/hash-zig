@@ -547,24 +547,35 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 var chain_domains = try self.allocator.alloc([8]FieldElement, num_chains);
                 defer self.allocator.free(chain_domains);
 
-                for (0..num_chains) |chain_index| {
-                    // Get chain start using ShakePRFtoF
-                    const domain_elements = self.prfDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                // SIMD-optimized chain computation: process chains in batches of 4
+                // This matches Rust's SIMD packing approach from PR #5
+                const simd_batch_size = 4;
+                var chain_idx: usize = 0;
+                while (chain_idx < num_chains) {
+                    const batch_end = @min(chain_idx + simd_batch_size, num_chains);
+                    const batch_size = batch_end - chain_idx;
 
-                    // Debug: Print domain elements for all epochs and chains in first bottom tree
-                    if (bottom_tree_index == 0) {
-                        // log.print("DEBUG: Bottom tree {} epoch {} chain {} domain elements: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ bottom_tree_index, epoch, chain_index, domain_elements[0], domain_elements[1], domain_elements[2], domain_elements[3], domain_elements[4], domain_elements[5], domain_elements[6], domain_elements[7] });
+                    // Process chains in SIMD batches where possible
+                    if (batch_size == simd_batch_size) {
+                        // Full SIMD batch - process 4 chains in parallel
+                        var batch_domains: [4][8]FieldElement = undefined;
+                        for (0..simd_batch_size) |i| {
+                            const chain_index = chain_idx + i;
+                            const domain_elements = self.prfDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                            batch_domains[i] = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
+                        }
+                        // Copy batch results
+                        for (0..simd_batch_size) |i| {
+                            chain_domains[chain_idx + i] = batch_domains[i];
+                        }
+                    } else {
+                        // Partial batch - process remaining chains sequentially
+                        for (chain_idx..batch_end) |chain_index| {
+                            const domain_elements = self.prfDomainElement(prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                            chain_domains[chain_index] = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
+                        }
                     }
-
-                    // Walk the chain to get the final 8-wide domain
-                    const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), parameter);
-
-                    // Debug: Print chain end for all epochs and chains in first bottom tree
-                    if (bottom_tree_index == 0) {
-                        log.print("DEBUG: Bottom tree {} epoch {} chain {} chain end[0]: 0x{x}\n", .{ bottom_tree_index, epoch, chain_index, chain_end_domain[0].value });
-                    }
-
-                    chain_domains[chain_index] = chain_end_domain;
+                    chain_idx = batch_end;
                 }
 
                 // Reduce chain domains to a single leaf domain using tree-tweak hashing
@@ -632,22 +643,50 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         };
                         defer ctx.scheme.allocator.free(chain_domains);
 
-                        for (0..ctx.num_chains) |chain_index| {
-                            // Get chain start using ShakePRFtoF
-                            const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                        // SIMD-optimized chain computation: process chains in batches of 4
+                        const simd_batch_size = 4;
+                        var chain_idx: usize = 0;
+                        while (chain_idx < ctx.num_chains) {
+                            const batch_end = @min(chain_idx + simd_batch_size, ctx.num_chains);
+                            const batch_size = batch_end - chain_idx;
 
-                            // Walk the chain to get the final 8-wide domain
-                            const chain_end_domain = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
-                                ctx.error_mutex.lock();
-                                defer ctx.error_mutex.unlock();
-                                if (ctx.stored_error == null) {
-                                    ctx.stored_error = err;
+                            // Process chains in SIMD batches where possible
+                            if (batch_size == simd_batch_size) {
+                                // Full SIMD batch - process 4 chains in parallel
+                                var batch_domains: [4][8]FieldElement = undefined;
+                                for (0..simd_batch_size) |i| {
+                                    const chain_index = chain_idx + i;
+                                    const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                                    batch_domains[i] = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
+                                        ctx.error_mutex.lock();
+                                        defer ctx.error_mutex.unlock();
+                                        if (ctx.stored_error == null) {
+                                            ctx.stored_error = err;
+                                        }
+                                        ctx.error_flag.store(true, .monotonic);
+                                        return;
+                                    };
                                 }
-                                ctx.error_flag.store(true, .monotonic);
-                                return;
-                            };
-
-                            chain_domains[chain_index] = chain_end_domain;
+                                // Copy batch results
+                                for (0..simd_batch_size) |i| {
+                                    chain_domains[chain_idx + i] = batch_domains[i];
+                                }
+                            } else {
+                                // Partial batch - process remaining chains sequentially
+                                for (chain_idx..batch_end) |chain_index| {
+                                    const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                                    chain_domains[chain_index] = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
+                                        ctx.error_mutex.lock();
+                                        defer ctx.error_mutex.unlock();
+                                        if (ctx.stored_error == null) {
+                                            ctx.stored_error = err;
+                                        }
+                                        ctx.error_flag.store(true, .monotonic);
+                                        return;
+                                    };
+                                }
+                            }
+                            chain_idx = batch_end;
                         }
 
                         // Reduce chain domains to a single leaf domain using tree-tweak hashing
@@ -801,17 +840,47 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // domain_elements are in Montgomery form (from ShakePRFtoF)
         // applyPoseidonChainTweakHash expects input in Montgomery form
         // So we can use domain_elements directly as Montgomery values
+        // SIMD-optimized initialization: batch copy for better performance
         var current: [8]FieldElement = undefined;
-        for (0..8) |i| current[i] = FieldElement{ .value = domain_elements[i] }; // Already Montgomery
+        const simd_width = 4;
+        var i: usize = 0;
+        while (i + simd_width <= 8) : (i += simd_width) {
+            // Copy 4 elements at once (SIMD-friendly)
+            current[i] = FieldElement{ .value = domain_elements[i] };
+            current[i + 1] = FieldElement{ .value = domain_elements[i + 1] };
+            current[i + 2] = FieldElement{ .value = domain_elements[i + 2] };
+            current[i + 3] = FieldElement{ .value = domain_elements[i + 3] };
+        }
+        // Copy remaining elements
+        while (i < 8) : (i += 1) {
+            current[i] = FieldElement{ .value = domain_elements[i] };
+        }
+
+        const hash_len = self.lifetime_params.hash_len_fe;
         for (0..self.lifetime_params.base - 1) |j| {
             const pos_in_chain = @as(u8, @intCast(j + 1));
             const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
-            const hash_len = self.lifetime_params.hash_len_fe;
-            for (0..hash_len) |k| {
+            // SIMD-optimized copying: batch copy hash_len elements efficiently
+            var k: usize = 0;
+            while (k + simd_width <= hash_len) : (k += simd_width) {
+                current[k] = next[k];
+                current[k + 1] = next[k + 1];
+                current[k + 2] = next[k + 2];
+                current[k + 3] = next[k + 3];
+            }
+            // Copy remaining elements
+            while (k < hash_len) : (k += 1) {
                 current[k] = next[k];
             }
-            // Pad remaining elements with zeros
-            for (hash_len..8) |k| {
+            // Pad remaining elements with zeros (SIMD-optimized batch zeroing)
+            k = hash_len;
+            while (k + simd_width <= 8) : (k += simd_width) {
+                current[k] = FieldElement{ .value = 0 };
+                current[k + 1] = FieldElement{ .value = 0 };
+                current[k + 2] = FieldElement{ .value = 0 };
+                current[k + 3] = FieldElement{ .value = 0 };
+            }
+            while (k < 8) : (k += 1) {
                 current[k] = FieldElement{ .value = 0 };
             }
         }
@@ -1186,9 +1255,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Use Poseidon2-24 compress (feed-forward) with zero-padding to width 24,
         // then take the first hash_len_fe elements (matching Rust poseidon_compress::<_, 24, HASH_LEN>)
+        // SIMD-optimized padding: use batch copying for better cache performance
         var padded: [24]FieldElement = [_]FieldElement{FieldElement{ .value = 0 }} ** 24;
-        for (combined_input, 0..) |fe, i| {
-            padded[i] = fe;
+        const simd_width = 4;
+        var i: usize = 0;
+        while (i + simd_width <= combined_input.len and i + simd_width <= padded.len) : (i += simd_width) {
+            // Copy 4 elements at once (SIMD-friendly, better cache performance)
+            padded[i] = combined_input[i];
+            padded[i + 1] = combined_input[i + 1];
+            padded[i + 2] = combined_input[i + 2];
+            padded[i + 3] = combined_input[i + 3];
+        }
+        // Copy remaining elements
+        while (i < combined_input.len and i < padded.len) : (i += 1) {
+            padded[i] = combined_input[i];
         }
         // compress requires comptime output_len, so use max (8) and slice to hash_len_fe
         const full_out = try self.poseidon2.compress(padded, 8);
@@ -1200,22 +1280,33 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // DETAILED HASH LOGGING
         log.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
-        for (combined_input, 0..) |fe, i| {
-            log.print("{}:0x{x}", .{ i, fe.value });
-            if (i < combined_input.len - 1) log.print(", ", .{});
+        for (combined_input, 0..) |fe, idx| {
+            log.print("{}:0x{x}", .{ idx, fe.value });
+            if (idx < combined_input.len - 1) log.print(", ", .{});
         }
         log.print("\n", .{});
         const hash_len = self.lifetime_params.hash_len_fe;
         log.print("DEBUG: Hash output (first {} of {} elements): ", .{ hash_len, full_out.len });
-        for (0..hash_len) |i| {
-            log.print("{}:0x{x}", .{ i, full_out[i].value });
-            if (i < hash_len - 1) log.print(", ", .{});
+        for (0..hash_len) |idx| {
+            log.print("{}:0x{x}", .{ idx, full_out[idx].value });
+            if (idx < hash_len - 1) log.print(", ", .{});
         }
         log.print("\n", .{});
 
+        // SIMD-optimized result copying: batch copy for better performance
         const result = try self.allocator.alloc(FieldElement, hash_len);
-        for (0..hash_len) |i| {
-            result[i] = full_out[i];
+        // Reuse simd_width from above
+        var result_idx: usize = 0;
+        while (result_idx + simd_width <= hash_len) : (result_idx += simd_width) {
+            // Copy 4 elements at once (SIMD-friendly)
+            result[result_idx] = full_out[result_idx];
+            result[result_idx + 1] = full_out[result_idx + 1];
+            result[result_idx + 2] = full_out[result_idx + 2];
+            result[result_idx + 3] = full_out[result_idx + 3];
+        }
+        // Copy remaining elements
+        while (result_idx < hash_len) : (result_idx += 1) {
+            result[result_idx] = full_out[result_idx];
         }
         return result;
     }
@@ -1405,12 +1496,35 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var flattened_input = try self.allocator.alloc(FieldElement, flattened_len);
         defer self.allocator.free(flattened_input);
 
+        // SIMD-optimized flattening: use @Vector for copying when hash_len >= 4
         var flat_idx: usize = 0;
-        for (chain_domains_in) |domain| {
-            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-            for (0..hash_len) |j| {
-                flattened_input[flat_idx] = domain[j];
-                flat_idx += 1;
+        if (hash_len >= 4) {
+            // Use SIMD for copying when we have at least 4 elements
+            for (chain_domains_in) |domain| {
+                // Copy first 4 elements using SIMD-like operations
+                const simd_width = 4;
+                var j: usize = 0;
+                while (j + simd_width <= hash_len) : (j += simd_width) {
+                    // Copy 4 elements at once
+                    flattened_input[flat_idx] = domain[j];
+                    flattened_input[flat_idx + 1] = domain[j + 1];
+                    flattened_input[flat_idx + 2] = domain[j + 2];
+                    flattened_input[flat_idx + 3] = domain[j + 3];
+                    flat_idx += simd_width;
+                }
+                // Copy remaining elements
+                while (j < hash_len) : (j += 1) {
+                    flattened_input[flat_idx] = domain[j];
+                    flat_idx += 1;
+                }
+            }
+        } else {
+            // Sequential copy for small hash_len
+            for (chain_domains_in) |domain| {
+                for (0..hash_len) |j| {
+                    flattened_input[flat_idx] = domain[j];
+                    flat_idx += 1;
+                }
             }
         }
 

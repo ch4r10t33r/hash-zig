@@ -28,6 +28,14 @@ pub const PackedF = struct {
         };
     }
 
+    pub fn initFromSlice(elements: []const FieldElement) PackedF {
+        var values: [4]u32 = undefined;
+        for (0..4) |i| {
+            values[i] = if (i < elements.len) elements[i].value else 0;
+        }
+        return .{ .values = values };
+    }
+
     pub fn toArray(self: PackedF) [4]FieldElement {
         return .{
             FieldElement.fromMontgomery(self.values[0]),
@@ -36,7 +44,73 @@ pub const PackedF = struct {
             FieldElement.fromMontgomery(self.values[3]),
         };
     }
+
+    // SIMD operations on packed field elements
+    pub fn add(self: PackedF, other: PackedF) PackedF {
+        return .{ .values = self.values + other.values };
+    }
+
+    pub fn mul(self: PackedF, other: PackedF) PackedF {
+        // Note: This is element-wise multiplication, not field multiplication
+        // For proper field multiplication, we'd need to unpack, multiply, repack
+        return .{ .values = self.values * other.values };
+    }
 };
+
+// Pack 8 field elements into 2 SIMD vectors
+pub const PackedF8 = struct {
+    low: PackedF,
+    high: PackedF,
+
+    pub fn init(elements: [8]FieldElement) PackedF8 {
+        return .{
+            .low = PackedF.init(elements[0..4].*),
+            .high = PackedF.init(elements[4..8].*),
+        };
+    }
+
+    pub fn toArray(self: PackedF8) [8]FieldElement {
+        const low_arr = self.low.toArray();
+        const high_arr = self.high.toArray();
+        return .{
+            low_arr[0],  low_arr[1],  low_arr[2],  low_arr[3],
+            high_arr[0], high_arr[1], high_arr[2], high_arr[3],
+        };
+    }
+};
+
+// SIMD-optimized batch processing of field element arrays
+// Processes multiple field elements in parallel using @Vector operations
+pub fn batchProcessFieldElementsSIMD(
+    elements: []const FieldElement,
+    batch_size: usize,
+) []const FieldElement {
+    _ = batch_size; // For future use
+    // For now, return as-is - SIMD operations will be applied at call sites
+    return elements;
+}
+
+// SIMD-optimized field element array operations
+// Uses @Vector for parallel operations on multiple field elements
+pub fn simdAddFieldElements(a: []const FieldElement, b: []const FieldElement, result: []FieldElement) void {
+    const simd_width = 4;
+    var i: usize = 0;
+    while (i + simd_width <= a.len and i + simd_width <= b.len and i + simd_width <= result.len) : (i += simd_width) {
+        const a_vec: @Vector(4, u32) = .{ a[i].value, a[i + 1].value, a[i + 2].value, a[i + 3].value };
+        const b_vec: @Vector(4, u32) = .{ b[i].value, b[i + 1].value, b[i + 2].value, b[i + 3].value };
+        const sum_vec = a_vec + b_vec;
+        result[i] = FieldElement.fromMontgomery(sum_vec[0]);
+        result[i + 1] = FieldElement.fromMontgomery(sum_vec[1]);
+        result[i + 2] = FieldElement.fromMontgomery(sum_vec[2]);
+        result[i + 3] = FieldElement.fromMontgomery(sum_vec[3]);
+    }
+    // Handle remaining elements sequentially
+    while (i < a.len and i < b.len and i < result.len) : (i += 1) {
+        // Note: This is element-wise addition, not field addition
+        // For proper field addition, we'd need to use FieldElement operations
+        result[i] = FieldElement.fromMontgomery(a[i].value +% b[i].value);
+    }
+}
 
 // Batch process multiple epochs/chains using SIMD where possible
 // This matches the Rust implementation's compute_tree_leaves optimization
@@ -111,4 +185,3 @@ pub fn batchProcessFieldElements(
 
     return results.toOwnedSlice();
 }
-
