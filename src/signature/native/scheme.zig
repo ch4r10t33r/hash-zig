@@ -753,13 +753,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Build bottom tree layers from leaf domains (shared with signing path)
+        // CRITICAL: Store layers so they can be reused during signing (major performance optimization!)
         const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains, parameter, bottom_tree_index);
-        defer {
-            for (bottom_layers) |layer| self.allocator.free(layer.nodes);
-            self.allocator.free(bottom_layers);
-        }
+        // Don't defer free - we're transferring ownership to HashSubTree
 
         if (bottom_layers.len == 0 or bottom_layers[bottom_layers.len - 1].nodes.len == 0) {
+            for (bottom_layers) |layer| self.allocator.free(layer.nodes);
+            self.allocator.free(bottom_layers);
             return error.InvalidBottomTree;
         }
 
@@ -782,7 +782,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             std.debug.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
         }
 
-        return try HashSubTree.init(self.allocator, bottom_root);
+        // Store layers in HashSubTree so they can be reused during signing (major optimization!)
+        return try HashSubTree.initWithLayers(self.allocator, bottom_root, bottom_layers);
     }
 
     /// Compute hash chain (matching Rust chain function)
@@ -1066,50 +1067,44 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
     }
 
-    /// Worker function for parallel pair processing with batch hash operations
+    /// Worker function for parallel pair processing with optimized batch memory operations
     fn pairProcessWorker(ctx: *PairProcessContext) void {
         const total = ctx.parents.len;
-        const batch_size = 4; // Process pairs in batches for better performance
 
         while (true) {
-            const start_i = ctx.index.fetchAdd(batch_size, .monotonic);
-            if (start_i >= total) break;
+            const i = ctx.index.fetchAdd(1, .monotonic);
+            if (i >= total) break;
 
-            const end_i = @min(start_i + batch_size, total);
+            const left_idx = i * 2;
+            const right_idx = i * 2 + 1;
 
-            // Process batch of pairs together (reduces function call overhead)
-            for (start_i..end_i) |i| {
-                const left_idx = i * 2;
-                const right_idx = i * 2 + 1;
+            const left = ctx.nodes[left_idx];
+            const right = ctx.nodes[right_idx];
 
-                const left = ctx.nodes[left_idx];
-                const right = ctx.nodes[right_idx];
+            const left_slice = left[0..ctx.hash_len];
+            const right_slice = right[0..ctx.hash_len];
 
-                const left_slice = left[0..ctx.hash_len];
-                const right_slice = right[0..ctx.hash_len];
+            const parent_pos = @as(u32, @intCast(ctx.parent_start + i));
+            const hash_result = ctx.scheme.applyPoseidonTreeTweakHashWithSeparateInputs(
+                left_slice,
+                right_slice,
+                @as(u8, @intCast(ctx.current_level)),
+                parent_pos,
+                ctx.parameter,
+            ) catch |err| {
+                ctx.error_mutex.lock();
+                defer ctx.error_mutex.unlock();
+                if (ctx.stored_error == null) {
+                    ctx.stored_error = err;
+                }
+                ctx.error_flag.store(true, .monotonic);
+                return;
+            };
+            defer ctx.scheme.allocator.free(hash_result);
 
-                const parent_pos = @as(u32, @intCast(ctx.parent_start + i));
-                const hash_result = ctx.scheme.applyPoseidonTreeTweakHashWithSeparateInputs(
-                    left_slice,
-                    right_slice,
-                    @as(u8, @intCast(ctx.current_level)),
-                    parent_pos,
-                    ctx.parameter,
-                ) catch |err| {
-                    ctx.error_mutex.lock();
-                    defer ctx.error_mutex.unlock();
-                    if (ctx.stored_error == null) {
-                        ctx.stored_error = err;
-                    }
-                    ctx.error_flag.store(true, .monotonic);
-                    return;
-                };
-                defer ctx.scheme.allocator.free(hash_result);
-
-                // Copy result efficiently using memcpy
-                @memcpy(ctx.parents[i][0..ctx.hash_len], hash_result[0..ctx.hash_len]);
-                @memset(ctx.parents[i][ctx.hash_len..8], FieldElement{ .value = 0 });
-            }
+            // Batch copy result efficiently using memcpy (reduces function call overhead)
+            @memcpy(ctx.parents[i][0..ctx.hash_len], hash_result[0..ctx.hash_len]);
+            @memset(ctx.parents[i][ctx.hash_len..8], FieldElement{ .value = 0 });
         }
     }
 
@@ -2670,92 +2665,27 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Generate Merkle path via combined bottom+top tree layers
+        // CRITICAL OPTIMIZATION: Reuse pre-computed bottom trees instead of rebuilding!
+        // Rust doesn't rebuild bottom trees during signing - it reuses the stored trees
         const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
         const bottom_tree_index = @as(usize, @intCast(epoch)) / leafs_per_bottom_tree;
+        const left_bottom_tree_index = secret_key.getLeftBottomTreeIndex();
 
-        // Build bottom tree layers for the selected bottom tree
-        const epoch_range_start = bottom_tree_index * leafs_per_bottom_tree;
-        const epoch_range_end = epoch_range_start + leafs_per_bottom_tree;
-        var leaf_domains_bt = try self.allocator.alloc([8]FieldElement, leafs_per_bottom_tree);
-        defer self.allocator.free(leaf_domains_bt);
-        for (epoch_range_start..epoch_range_end) |e| {
-            const num_chains = self.lifetime_params.dimension;
-            var chain_domains = try self.allocator.alloc([8]FieldElement, num_chains);
-            defer self.allocator.free(chain_domains);
-            for (0..num_chains) |chain_index| {
-                const domain_elements = self.prfDomainElement(secret_key.prf_key, @as(u32, @intCast(e)), @as(u64, @intCast(chain_index)));
-                const chain_end_domain = try self.computeHashChainDomain(domain_elements, @as(u32, @intCast(e)), @as(u8, @intCast(chain_index)), secret_key.parameter);
-                chain_domains[chain_index] = chain_end_domain;
+        // Determine which stored bottom tree contains this epoch and get its layers
+        const bottom_layers_opt: ?[]const PaddedLayer = blk: {
+            if (bottom_tree_index == left_bottom_tree_index) {
+                break :blk secret_key.left_bottom_tree.getLayers();
+            } else if (bottom_tree_index == left_bottom_tree_index + 1) {
+                break :blk secret_key.right_bottom_tree.getLayers();
+            } else {
+                return error.EpochNotPrepared;
             }
-            // Debug: log chain ends before reduction for the signing epoch
-            if (e == epoch) {
-                std.debug.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
-                for (0..@min(3, chain_domains.len)) |ci| {
-                    std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
-                }
-                std.debug.print("\n", .{});
-            }
-            const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
-            defer self.allocator.free(leaf_domain_slice);
-            // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
-            var leaf_domain: [8]FieldElement = undefined;
-            const hash_len = self.lifetime_params.hash_len_fe;
-            for (0..hash_len) |i| {
-                leaf_domain[i] = leaf_domain_slice[i];
-            }
-            for (hash_len..8) |i| {
-                leaf_domain[i] = FieldElement{ .value = 0 };
-            }
-            leaf_domains_bt[e - epoch_range_start] = leaf_domain;
+        };
 
-            // Debug: log leaf domain for the signing epoch
-            if (e == epoch) {
-                std.debug.print("ZIG_SIGN: Epoch {} - Leaf domain[0]=0x{x:0>8} (chain_domains.len={})\n", .{ epoch, leaf_domain[0].value, chain_domains.len });
-                log.print("ZIG_SIGN_DEBUG: Leaf domain for epoch {}: ", .{epoch});
-                for (leaf_domain) |fe| {
-                    log.print("0x{x:0>8} ", .{fe.value});
-                }
-                log.print("\n", .{});
-            }
-        }
-        const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains_bt, secret_key.parameter, bottom_tree_index);
-        defer {
-            for (bottom_layers) |pl| self.allocator.free(pl.nodes);
-            self.allocator.free(bottom_layers);
-        }
+        const bottom_layers = bottom_layers_opt orelse return error.MissingBottomTreeLayers;
 
-        // Debug: log number of bottom layers
-        log.print("ZIG_SIGN_DEBUG: Built {} bottom tree layers\n", .{bottom_layers.len});
-        for (bottom_layers, 0..) |layer, i| {
-            log.print("ZIG_SIGN_DEBUG:   Bottom layer {}: {} nodes, start_index={}\n", .{ i, layer.nodes.len, layer.start_index });
-        }
-
-        // Debug: compare computed bottom tree root with stored left bottom tree root (canonical values)
-        if (bottom_layers.len > 0) {
-            const bottom_root_layer = bottom_layers[bottom_layers.len - 1];
-            if (bottom_root_layer.nodes.len > 0) {
-                // CRITICAL FIX: Extract root using bottom_tree_index % 2 to match Rust and bottomTreeFromPrfKey
-                const root_node_index = if (bottom_root_layer.nodes.len > 1) bottom_tree_index % 2 else 0;
-                const computed_bottom_root = bottom_root_layer.nodes[root_node_index];
-
-                // Debug: log computed bottom root for epoch 16
-                if (epoch == 16) {
-                    std.debug.print("ZIG_SIGN: Epoch {} - Computed bottom tree {} root[0]=0x{x:0>8} (using root_node_index={})\n", .{ epoch, bottom_tree_index, computed_bottom_root[0].value, root_node_index });
-                }
-
-                const stored_bottom_root = secret_key.left_bottom_tree.root();
-                log.print("ZIG_SIGN_DEBUG: Computed bottom root (canonical): ", .{});
-                for (computed_bottom_root) |fe| {
-                    log.print("0x{x:0>8} ", .{fe.value});
-                }
-                log.print("\n", .{});
-                log.print("ZIG_SIGN_DEBUG: Stored left bottom root (canonical): ", .{});
-                for (stored_bottom_root) |fe| {
-                    log.print("0x{x:0>8} ", .{fe.value});
-                }
-                log.print("\n", .{});
-            }
-        }
+        // Debug: log number of bottom layers (reused from stored tree)
+        log.print("ZIG_SIGN_DEBUG: Reusing {} bottom tree layers from stored tree (bottom_tree_index={})\n", .{ bottom_layers.len, bottom_tree_index });
 
         // Use the stored top tree layers from the secret key (generated during keyGen)
         const top_layers = secret_key.top_tree.getLayers() orelse return error.MissingTopTreeLayers;
@@ -2775,7 +2705,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Rust's combined_path uses epoch directly, and the top tree layers are built
         // with start_index = left_bottom_tree_index from keyGen, so we use bottom_tree_index
         // directly, and computePathFromLayers handles the offset via layer.start_index subtraction
-        const left_bottom_tree_index = secret_key.getLeftBottomTreeIndex();
+        // left_bottom_tree_index already declared above
         const top_pos = @as(u32, @intCast(bottom_tree_index));
 
         // Debug: log top tree layer start_index values
@@ -2896,14 +2826,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 var s: u8 = 1;
                 while (s <= steps) : (s += 1) {
                     const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
-                    // next is produced in Montgomery form; store directly
-                    for (0..hash_len) |j| {
-                        current[j] = next[j];
-                    }
-                    // Pad remaining elements with zeros
-                    for (hash_len..8) |j| {
-                        current[j] = FieldElement{ .value = 0 };
-                    }
+                    // Batch copy using memcpy for better performance
+                    @memcpy(current[0..hash_len], next[0..hash_len]);
+                    @memset(current[hash_len..8], FieldElement{ .value = 0 });
                     if (chain_index == 0) {
                         log.print("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ chain_index, s - 1, s, current[0].value });
                     }
