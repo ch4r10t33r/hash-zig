@@ -8,6 +8,8 @@ pub fn build(b: *std.Build) void {
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_debug_logs", enable_debug_logs);
+    const enable_lifetime_2_32 = b.option(bool, "enable-lifetime-2-32", "Enable lifetime 2^32 tests (default: false)") orelse false;
+    build_options.addOption(bool, "enable_lifetime_2_32", enable_lifetime_2_32);
 
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
@@ -82,12 +84,15 @@ pub fn build(b: *std.Build) void {
     const run_performance_benchmark_tests = b.addRunArtifact(performance_benchmark_tests);
 
     // Lifetime tests (2^8 and 2^18) - always use ReleaseFast for key generation
+    const lifetime_tests_options = b.addOptions();
+    lifetime_tests_options.addOption(bool, "enable_lifetime_2_32", enable_lifetime_2_32);
     const lifetime_tests = b.addTest(.{
-        .root_source_file = b.path("test_lifetimes.zig"),
+        .root_source_file = b.path("scripts/test_lifetimes.zig"),
         .target = target,
         .optimize = .ReleaseFast,
     });
     lifetime_tests.root_module.addImport("hash-zig", hash_zig_module);
+    lifetime_tests.root_module.addOptions("build_options", lifetime_tests_options);
     const run_lifetime_tests = b.addRunArtifact(lifetime_tests);
 
     // Test step runs all tests
