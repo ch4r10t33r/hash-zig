@@ -17,6 +17,7 @@ const BigInt = std.math.big.int.Managed;
 const rng_flow = @import("rng_flow.zig");
 const poseidon_top_level = @import("poseidon_top_level.zig");
 const target_sum_encoding = @import("target_sum_encoding.zig");
+const simd_utils = @import("simd_utils.zig");
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;
@@ -341,32 +342,28 @@ pub const GeneralizedXMSSSecretKey = struct {
         return .{ .start = start, .end = end };
     }
 
-    /// Advance preparation (matching Rust advance_preparation)
-    pub fn advancePreparation(self: *GeneralizedXMSSSecretKey, log_lifetime: usize) !void {
+    /// Advance preparation (matching Rust advance_preparation exactly)
+    /// Note: This method needs access to the scheme to compute bottom trees
+    pub fn advancePreparation(self: *GeneralizedXMSSSecretKey, scheme: *GeneralizedXMSSSignatureScheme, log_lifetime: usize) !void {
         const leafs_per_bottom_tree = @as(usize, 1) << @intCast(log_lifetime / 2);
         const next_prepared_end_epoch = self.left_bottom_tree_index * leafs_per_bottom_tree + 3 * leafs_per_bottom_tree;
 
-        if (next_prepared_end_epoch > self.activation_epoch + self.num_active_epochs) {
+        // Match Rust: compare with get_activation_interval().end
+        const activation_interval = self.getActivationInterval();
+        if (@as(u64, @intCast(next_prepared_end_epoch)) > activation_interval.end) {
             return; // Cannot advance
         }
 
-        // Compute new right bottom tree
-        const new_right_bottom_tree = try self.bottomTreeFromPrfKey(log_lifetime, self.left_bottom_tree_index + 2);
+        // Compute new right bottom tree using scheme's method (matching Rust bottom_tree_from_prf_key)
+        const new_right_bottom_tree = try scheme.bottomTreeFromPrfKey(self.prf_key, self.left_bottom_tree_index + 2, self.parameter);
 
         // Clean up the old left bottom tree before replacing it
         self.left_bottom_tree.deinit();
 
-        // Move right to left and update index
+        // Move right to left and update index (matching Rust exactly)
         self.left_bottom_tree = self.right_bottom_tree;
         self.right_bottom_tree = new_right_bottom_tree;
         self.left_bottom_tree_index += 1;
-    }
-
-    /// Helper function to compute bottom tree from PRF key
-    pub fn bottomTreeFromPrfKey(self: *GeneralizedXMSSSecretKey, _: usize, _: usize) !*HashSubTree {
-        // This is a simplified implementation - in practice this would need the full tree construction
-        // For now, return a placeholder tree
-        return try HashSubTree.init(self.allocator, FieldElement{ .value = 0 });
     }
 };
 
@@ -382,12 +379,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     pub fn init(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
 
-        // Select the correct lifetime parameters
+        // Select the correct lifetime parameters (only 3 lifetimes supported: 2^8, 2^18, 2^32)
         const lifetime_params = switch (lifetime) {
             .lifetime_2_8 => LIFETIME_2_8_PARAMS,
             .lifetime_2_18 => LIFETIME_2_18_PARAMS,
             .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
-            else => return error.UnsupportedLifetime,
         };
 
         const self = try allocator.create(GeneralizedXMSSSignatureScheme);
@@ -407,11 +403,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     pub fn initWithSeed(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime, seed: [32]u8) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
+        // Select the correct lifetime parameters (only 3 lifetimes supported: 2^8, 2^18, 2^32)
         const lifetime_params = switch (lifetime) {
             .lifetime_2_8 => LIFETIME_2_8_PARAMS,
             .lifetime_2_18 => LIFETIME_2_18_PARAMS,
             .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
-            else => return error.UnsupportedLifetime,
         };
         const self = try allocator.create(GeneralizedXMSSSignatureScheme);
         self.* = GeneralizedXMSSSignatureScheme{
@@ -516,6 +512,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Bottom tree from PRF key (matching Rust bottom_tree_from_prf_key exactly)
+    ///
+    /// Note: This matches the structure from leanSig PR #5 (simd: apply packing for tree leaves).
+    /// The Rust implementation uses SIMD packing via Plonky3's Packing trait to optimize
+    /// tree leaf computation. Future optimizations can use Zig's @Vector for SIMD operations.
     pub fn bottomTreeFromPrfKey(
         self: *GeneralizedXMSSSignatureScheme,
         prf_key: [32]u8,
@@ -533,6 +533,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const epoch_range_end = epoch_range_start + leafs_per_bottom_tree;
 
         // Generate leaf domains (8-wide) for each epoch
+        // TODO: Optimize with SIMD packing (see leanSig PR #5) to process multiple epochs/chains in parallel
         var leaf_domains = try self.allocator.alloc([8]FieldElement, leafs_per_bottom_tree);
         defer self.allocator.free(leaf_domains);
 
@@ -600,8 +601,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             return error.InvalidBottomTree;
         }
 
+        // Debug: check root layer structure
+        const root_layer = bottom_layers[bottom_layers.len - 1];
+        if (bottom_tree_index == 1) {
+            std.debug.print("ZIG_BOTTOM_ROOT: bottom_tree_index={}, root_layer.nodes.len={}, root_layer.start_index={}\n", .{ bottom_tree_index, root_layer.nodes.len, root_layer.start_index });
+        }
+
+        // Rust extracts from layers[depth / 2].nodes[bottom_tree_index % 2]
+        // For depth=8: layers[4].nodes[bottom_tree_index % 2]
+        // For bottom_tree_index=1: layers[4].nodes[1]
+        // But we build with full_depth=4, so our root layer should have only 1 node
+        // However, if the root layer has multiple nodes, we should use bottom_tree_index % 2
+        const root_node_index = if (root_layer.nodes.len > 1) bottom_tree_index % 2 else 0;
         var bottom_root: [8]FieldElement = undefined;
-        @memcpy(&bottom_root, &bottom_layers[bottom_layers.len - 1].nodes[0]);
+        @memcpy(&bottom_root, &root_layer.nodes[root_node_index]);
+        
+        if (bottom_tree_index == 1) {
+            std.debug.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
+        }
+        
         return try HashSubTree.init(self.allocator, bottom_root);
     }
 
@@ -808,24 +826,53 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Convert arrays to slices for hashing
             // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
             const hash_len = self.lifetime_params.hash_len_fe;
+            // Debug: log hash_len for epoch 16 (bottom tree 1, level 0, parent_pos=8)
+            if (current_level == 0 and parent_start == 8 and i == 0) {
+                std.debug.print("ZIG_BUILDTREE_HASHLEN: level={} parent_start={} i={} hash_len={} left.len={} right.len={}\n", .{ current_level, parent_start, i, hash_len, left.len, right.len });
+            }
             const left_slice = left[0..hash_len];
             const right_slice = right[0..hash_len];
+            // Debug: log slice lengths for epoch 16
+            if (current_level == 0 and parent_start == 8 and i == 0) {
+                std.debug.print("ZIG_BUILDTREE_SLICES: left_slice.len={} right_slice.len={}\n", .{ left_slice.len, right_slice.len });
+            }
 
             // Use tree tweak for this level and position (matching Rust exactly)
+            // CRITICAL FIX: parent_pos should be computed from actual node positions
+            // For i=0, we hash nodes[0] and nodes[1], which are at positions
+            // layer_start_index and layer_start_index+1, so parent is at layer_start_index >> 1
+            // But Rust uses parent_pos = parent_start + i, where parent_start = layer_start_index >> 1
+            // So parent_pos = (layer_start_index >> 1) + i, which matches Rust!
             const parent_pos = @as(u32, @intCast(parent_start + i));
-            // Debug: log parent computation (only for first parent at level 0)
-            if (current_level == 0 and i == 0 and parent_start == 0) {
-                log.print("ZIG_BUILDTREE_DEBUG: Level {} parent {}: parent_start={} parent_pos={} left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ current_level, i, parent_start, parent_pos, left[0].value, right[0].value });
+            // Debug: log parent computation for bottom tree (level 0-3) - show all parent_start values
+            // Only log for parent_start=8 (bottom tree 1, level 0) to match epoch 16
+            // For epoch 16 in bottom tree 1: epoch=16, bottom_tree_index=1, position in tree=16-16=0
+            // So we hash nodes[0] and nodes[1] (left_idx=0, right_idx=1) for i=0
+            // Calculate which epoch this corresponds to: for bottom tree 1, start_index=16, so epoch = start_index + left_idx = 16 + 0 = 16
+            if (current_level == 0 and i == 0 and parent_start == 8) {
+                // Get epoch_range_start from the function context - we need to pass it or calculate it
+                // For now, calculate: parent_start=8 means start_index=16, so epoch_range_start = (parent_start << 1) = 16
+                const epoch_range_start = parent_start << 1;
+                const epoch = @as(u32, @intCast(epoch_range_start + left_idx));
+                std.debug.print("ZIG_BUILDTREE: Bottom tree level {} parent {}: parent_start={} parent_pos={} left[0]=0x{x:0>8} right[0]=0x{x:0>8} (left_idx={} right_idx={}) level={} tweak_level={} epoch={} param[0]=0x{x:0>8} hash_len={}\n", .{ current_level, i, parent_start, parent_pos, left[0].value, right[0].value, left_idx, right_idx, current_level, current_level, epoch, parameter[0].value, hash_len });
+            }
+            // Debug: log parent computation for top tree (level 4+)
+            if (current_level >= 4) {
+                std.debug.print("ZIG_BUILDTREE: Top tree level {} parent {}: parent_start={} parent_pos={} left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ current_level, i, parent_start, parent_pos, left[0].value, right[0].value });
             }
             const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
                 // Handle error - in a real implementation, we'd need proper error handling
                 return;
             };
             defer self.allocator.free(hash_result);
-
-            // Debug: log parent result
-            if (current_level == 0 and i == 0 and parent_start == 0) {
-                log.print("ZIG_BUILDTREE_DEBUG:   parent[0]=0x{x:0>8}\n", .{hash_result[0].value});
+            
+            // Debug: log parent result for bottom tree (level 0-3) - show all parent_start values
+            if (current_level < 4 and i == 0) {
+                std.debug.print("ZIG_BUILDTREE: Bottom tree level {} parent {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} level={} parent_start={} parent_pos={})\n", .{ current_level, i, hash_result[0].value, left[0].value, right[0].value, current_level, parent_start, parent_pos });
+            }
+            // Debug: log parent result for top tree (level 4+)
+            if (current_level >= 4) {
+                std.debug.print("ZIG_BUILDTREE: Top tree level {} parent {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} parent_pos={})\n", .{ current_level, i, hash_result[0].value, left[0].value, right[0].value, parent_pos });
             }
 
             // Copy the result to the parents array (only hash_len_fe elements, pad rest with zeros)
@@ -888,6 +935,20 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Match Rust: let tweak_level = (level as u8) + 1;
         const tweak_level = level + 1;
         const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, pos_in_level) << 8) | 0x01;
+        
+        // Create a unique identifier for this hash call based on inputs (for matching across build/verify)
+        // Use first element of left, right, and param[0] as a simple identifier
+        const call_id = left[0].value ^ right[0].value ^ parameter[0].value ^ @as(u32, @intCast(level)) ^ @as(u32, @intCast(pos_in_level));
+        
+        // Debug: log hash call for level 0, pos 8 (epoch 16 bottom tree)
+        if (level == 0 and pos_in_level == 8 and left.len > 0 and right.len > 0) {
+            std.debug.print("ZIG_HASH_CALL: level={} pos={} tweak=0x{x} param[0]=0x{x:0>8} left[0]=0x{x:0>8} right[0]=0x{x:0>8} left.len={} right.len={} call_id=0x{x:0>8} left_all=", .{ level, pos_in_level, tweak_bigint, parameter[0].value, left[0].value, right[0].value, left.len, right.len, call_id });
+            for (left) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
+            std.debug.print("right_all=", .{});
+            for (right) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
+            std.debug.print("\n", .{});
+        }
+        
         log.print("DEBUG: Tree tweak level={} pos={} -> 0x{x}\n", .{ tweak_level, pos_in_level, tweak_bigint });
 
         // Convert to 2 field elements using base-p representation
@@ -939,6 +1000,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
         // compress requires comptime output_len, so use max (8) and slice to hash_len_fe
         const full_out = try self.poseidon2.compress(padded, 8);
+        
+        // Debug: log hash result for level 0, pos 8 (epoch 16 bottom tree)
+        if (level == 0 and pos_in_level == 8 and left.len > 0 and right.len > 0) {
+            std.debug.print("ZIG_HASH_RESULT: level={} pos={} result[0]=0x{x:0>8} call_id=0x{x:0>8}\n", .{ level, pos_in_level, full_out[0].value, call_id });
+        }
+        
         // DETAILED HASH LOGGING
         log.print("DEBUG: Hash input ({} elements): ", .{combined_input.len});
         for (combined_input, 0..) |fe, i| {
@@ -1550,7 +1617,23 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const sibling_position: u32 = current_position ^ 0x01;
             const sibling_index_in_vec_u32: u32 = sibling_position - @as(u32, @intCast(layer.start_index));
             const sibling_index = @as(usize, @intCast(sibling_index_in_vec_u32));
-            if (sibling_index >= layer.nodes.len) return error.InvalidPathComputation;
+            
+            // Debug logging for epoch 16, bottom tree (layers.len == 4)
+            if (position_initial == 16 and layers.len == 4 and l == 0) {
+                const current_node_index = current_position - @as(u32, @intCast(layer.start_index));
+                const current_node_val = if (current_node_index < layer.nodes.len) layer.nodes[@as(usize, @intCast(current_node_index))][0].value else 0;
+                std.debug.print("ZIG_SIGN: computePathFromLayers epoch {} layer {}: current_position={}, sibling_position={}, layer.start_index={}, sibling_index={}, layer.nodes.len={}, current_node[0]=0x{x:0>8}, sibling_node[0]=0x{x:0>8}\n", .{ position_initial, l, current_position, sibling_position, layer.start_index, sibling_index, layer.nodes.len, current_node_val, layer.nodes[sibling_index][0].value });
+            }
+            
+            // Debug logging for top tree path computation
+            if (layers.len > 4) { // Likely top tree (more layers than bottom tree)
+                log.print("ZIG_SIGN_DEBUG: computePathFromLayers layer {}: current_position={}, sibling_position={}, layer.start_index={}, sibling_index={}, layer.nodes.len={}\n", .{ l, current_position, sibling_position, layer.start_index, sibling_index, layer.nodes.len });
+            }
+            
+            if (sibling_index >= layer.nodes.len) {
+                log.print("ZIG_SIGN_DEBUG: ERROR: sibling_index {} >= layer.nodes.len {} (layer {}, start_index={}, current_position={})\n", .{ sibling_index, layer.nodes.len, l, layer.start_index, current_position });
+                return error.InvalidPathComputation;
+            }
 
             co_path[co_len] = layer.nodes[sibling_index];
             co_len += 1;
@@ -1634,10 +1717,23 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var current_layer = try self.padLayer(leaf_nodes, start_index);
         try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
         @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
+        
+        // Debug: log leaf nodes for epoch 16 (bottom tree 1)
+        // For bottom tree 1, epoch 16 is at index 0 (epoch - epoch_range_start = 16 - 16 = 0)
+        if (bottom_tree_index == 1 and current_layer.nodes.len >= 2) {
+            const epoch_16_index = 0; // epoch 16 is the first epoch in bottom tree 1
+            if (current_layer.nodes.len > epoch_16_index) {
+                std.debug.print("ZIG_BUILDTREE: Bottom tree {} level 0 layer: start_index={}, epoch_16_index={}, nodes[{}][0]=0x{x:0>8}, nodes[{}][0]=0x{x:0>8}\n", .{ bottom_tree_index, current_layer.start_index, epoch_16_index, epoch_16_index, current_layer.nodes[epoch_16_index][0].value, epoch_16_index + 1, current_layer.nodes[epoch_16_index + 1][0].value });
+            }
+        }
 
         var current_level: usize = 0;
         while (current_level < full_depth) : (current_level += 1) {
-            const parent_start = current_layer.start_index >> 1;
+            // CRITICAL FIX: Use current_layer.start_index (which is the previous layer at start of iteration)
+            // This matches Rust's behavior: prev = &layers[level - lowest_layer]
+            // At the start of each iteration, current_layer is the previous layer
+            const prev_layer_start_index = current_layer.start_index;
+            const parent_start = prev_layer_start_index >> 1;
             const parents_len = current_layer.nodes.len / 2;
             const parents = try self.allocator.alloc([8]FieldElement, parents_len);
             try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
@@ -1660,9 +1756,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         parameter: [5]FieldElement,
         start_bottom_tree_index: usize,
     ) ![]PaddedLayer {
+        // start_bottom_tree_index is used as start_index for top tree layers
         const log_lifetime = self.lifetime_params.log_lifetime;
         const lowest_layer = log_lifetime / 2;
         const depth = log_lifetime;
+        // Use the actual start_bottom_tree_index for top tree layers
+        // Rust's combined_path uses epoch directly, and the top tree layers must use
+        // the actual bottom tree indices (start_bottom_tree_index) so that path computation
+        // can use bottom_tree_index directly (absolute position)
         const start_index = start_bottom_tree_index;
 
         var layers = std.ArrayList(PaddedLayer).init(self.allocator);
@@ -2286,11 +2387,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
             // Debug: log chain ends before reduction for the signing epoch
             if (e == epoch) {
-                log.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
+                std.debug.print("ZIG_SIGN_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
                 for (0..@min(3, chain_domains.len)) |ci| {
-                    log.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
+                    std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, chain_domains[ci][0].value });
                 }
-                log.print("\n", .{});
+                std.debug.print("\n", .{});
             }
             const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, secret_key.parameter, @as(u32, @intCast(e)));
             defer self.allocator.free(leaf_domain_slice);
@@ -2307,6 +2408,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: log leaf domain for the signing epoch
             if (e == epoch) {
+                std.debug.print("ZIG_SIGN: Epoch {} - Leaf domain[0]=0x{x:0>8} (chain_domains.len={})\n", .{ epoch, leaf_domain[0].value, chain_domains.len });
                 log.print("ZIG_SIGN_DEBUG: Leaf domain for epoch {}: ", .{epoch});
                 for (leaf_domain) |fe| {
                     log.print("0x{x:0>8} ", .{fe.value});
@@ -2330,7 +2432,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         if (bottom_layers.len > 0) {
             const bottom_root_layer = bottom_layers[bottom_layers.len - 1];
             if (bottom_root_layer.nodes.len > 0) {
-                const computed_bottom_root = bottom_root_layer.nodes[0];
+                // CRITICAL FIX: Extract root using bottom_tree_index % 2 to match Rust and bottomTreeFromPrfKey
+                const root_node_index = if (bottom_root_layer.nodes.len > 1) bottom_tree_index % 2 else 0;
+                const computed_bottom_root = bottom_root_layer.nodes[root_node_index];
+                
+                // Debug: log computed bottom root for epoch 16
+                if (epoch == 16) {
+                    std.debug.print("ZIG_SIGN: Epoch {} - Computed bottom tree {} root[0]=0x{x:0>8} (using root_node_index={})\n", .{ epoch, bottom_tree_index, computed_bottom_root[0].value, root_node_index });
+                }
+                
                 const stored_bottom_root = secret_key.left_bottom_tree.root();
                 log.print("ZIG_SIGN_DEBUG: Computed bottom root (canonical): ", .{});
                 for (computed_bottom_root) |fe| {
@@ -2353,23 +2463,38 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             self.lifetime_params.log_lifetime / 2,
         });
 
-        // Bottom path at absolute epoch, top path at index within top segment
+        // Bottom path at absolute epoch, top path uses bottom_tree_index directly
+        // Rust's combined_path uses epoch directly, and the top tree layers are built
+        // with start_index matching the actual bottom tree indices
         const bottom_copath = try self.computePathFromLayers(bottom_layers, epoch);
         defer self.allocator.free(bottom_copath);
-        // For top tree, use bottom_tree_index directly (matching Rust's combined_path and verification)
-        // This matches verification which uses bottom_tree_index directly, not bottom_tree_index - expansion.start
+        
+        // For top tree, use bottom_tree_index directly (absolute position)
+        // Rust's combined_path uses epoch directly, and the top tree layers are built
+        // with start_index = left_bottom_tree_index from keyGen, so we use bottom_tree_index
+        // directly, and computePathFromLayers handles the offset via layer.start_index subtraction
+        const left_bottom_tree_index = secret_key.getLeftBottomTreeIndex();
         const top_pos = @as(u32, @intCast(bottom_tree_index));
+        
+        // Debug: log top tree layer start_index values
+        log.print("ZIG_SIGN_DEBUG: Computing top tree path: bottom_tree_index={}, left_bottom_tree_index={}, top_pos={}\n", .{ bottom_tree_index, left_bottom_tree_index, top_pos });
+        for (top_layers, 0..) |layer, i| {
+            log.print("ZIG_SIGN_DEBUG: Top layer {}: {} nodes, start_index={}\n", .{ i, layer.nodes.len, layer.start_index });
+        }
+        
         const top_copath = try self.computePathFromLayers(top_layers, top_pos);
         defer self.allocator.free(top_copath);
 
-        // Debug: log path nodes
-        log.print("ZIG_SIGN_DEBUG: Bottom co-path for epoch {}: {} nodes\n", .{ epoch, bottom_copath.len });
-        for (bottom_copath, 0..) |node, i| {
-            log.print("ZIG_SIGN_DEBUG:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
-        }
-        log.print("ZIG_SIGN_DEBUG: Top co-path for pos {}: {} nodes\n", .{ top_pos, top_copath.len });
-        for (top_copath, 0..) |node, i| {
-            log.print("ZIG_SIGN_DEBUG:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+        // Debug: log path nodes (only for epoch 16 to reduce noise)
+        if (epoch == 16) {
+            std.debug.print("ZIG_SIGN: Epoch {} - Bottom co-path: {} nodes\n", .{ epoch, bottom_copath.len });
+            for (bottom_copath, 0..) |node, i| {
+                std.debug.print("ZIG_SIGN:   Bottom node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+            }
+            std.debug.print("ZIG_SIGN: Epoch {} - Top co-path for pos {}: {} nodes\n", .{ epoch, top_pos, top_copath.len });
+            for (top_copath, 0..) |node, i| {
+                std.debug.print("ZIG_SIGN:   Top node {}: 0x{x:0>8}\n", .{ i, node[0].value });
+            }
         }
 
         var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
@@ -2570,11 +2695,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const hashes = signature.getHashes();
 
         // Handle hashes for both cross-implementation (Rust→Zig) and same-implementation (Zig→Zig):
-        // - Rust→Zig: hashes come from JSON as canonical values (Rust signer uses as_canonical_u32())
-        //   But Rust stores hashes internally in Montgomery form, so we need to treat JSON values as canonical
-        //   and convert to Montgomery for chain walking
-        // - Zig→Zig: hashes are stored in Montgomery form during signing (matching Rust's internal representation)
-        //   So we can use them directly in Montgomery form for chain walking
+        // - Both implementations: hashes come from binary as Montgomery values (wrappers use Montgomery form)
+        //   Both libraries store hashes internally in Montgomery form, so we use them directly in Montgomery form
         // Use plonky3_field.KoalaBearField which uses Montgomery form (not core.KoalaBearField which uses canonical)
         const plonky3_field = @import("../../poseidon2/plonky3_field.zig");
         const F = plonky3_field.KoalaBearField; // Montgomery form implementation
@@ -2627,17 +2749,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log chain ends before reduction
-        log.print("ZIG_VERIFY_DEBUG: Chain ends before reduction (first 3 chains): ", .{});
-        for (0..@min(3, final_chain_domains.len)) |ci| {
-            log.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
+        if (epoch == 16) {
+            std.debug.print("ZIG_VERIFY_DEBUG: Chain ends before reduction for epoch {} (first 3 chains): ", .{epoch});
+            for (0..@min(3, final_chain_domains.len)) |ci| {
+                std.debug.print("chain{}[0]=0x{x:0>8} ", .{ ci, final_chain_domains[ci][0].value });
+            }
+            std.debug.print("\n", .{});
         }
-        log.print("\n", .{});
 
         // 3) Reduce 64 chain domains to a single leaf domain using tree-tweak hashing
+        if (epoch == 16) {
+            std.debug.print("ZIG_VERIFY_DEBUG: Calling reduceChainDomainsToLeafDomain with final_chain_domains.len={} epoch={}\n", .{ final_chain_domains.len, epoch });
+        }
         const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
         defer self.allocator.free(leaf_domain_slice);
         // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
-        // hash_len is already declared above (line 2999)
+        // hash_len is already declared above (line 2643)
         var current_domain: [8]FieldElement = undefined;
         for (0..hash_len) |i| {
             current_domain[i] = leaf_domain_slice[i];
@@ -2647,66 +2774,153 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log leaf domain
-        log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
-        for (0..hash_len) |i| {
-            log.print("0x{x:0>8} ", .{current_domain[i].value});
+        if (epoch == 16) {
+            std.debug.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
+            for (0..hash_len) |i| {
+                std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
+            }
+            std.debug.print("\n", .{});
         }
-        log.print("\n", .{});
-
+        
         // 4) Walk Merkle path using tweak hash and epoch-based orientation
         // Calculate bottom tree index to know where bottom tree ends
         const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
+        
+        // Debug: log leaf domain for epoch 16
+        if (epoch == 16) {
+            const bottom_tree_index = epoch / @as(u32, @intCast(leafs_per_bottom_tree));
+            std.debug.print("ZIG_VERIFY: Epoch {} - Initial leaf domain[0]=0x{x:0>8} (bottom_tree_index={} final_chain_domains.len={})\n", .{ epoch, current_domain[0].value, bottom_tree_index, final_chain_domains.len });
+        }
         const bottom_tree_index = @as(usize, @intCast(epoch)) / leafs_per_bottom_tree;
-        // For top tree, use bottom_tree_index directly (matching Rust's combined_path)
-        // The top tree path is computed using bottom_tree_index, not bottom_tree_index - expansion.start
+        // For top tree, we need to compute the position relative to where the top tree starts
+        // During verification, we don't have access to left_bottom_tree_index, but we can infer it
+        // from the path structure. However, the path was computed during signing with:
+        // top_pos = bottom_tree_index - left_bottom_tree_index
+        // Since verification walks the path sequentially, the position naturally transitions
+        // from bottom tree position to top tree position after log_lifetime/2 levels.
+        // The top_pos here is only used for debug logging - the actual path walk uses the
+        // position that naturally evolves from the epoch.
         const top_pos = @as(u32, @intCast(bottom_tree_index));
 
         var position: u32 = epoch;
         const nodes = signature.getPath().getNodes();
         var level: u8 = 0;
-        log.print("ZIG_VERIFY_DEBUG: Starting Merkle path walk from epoch {} with {} nodes (bottom_tree_index={} top_pos={})\n", .{ epoch, nodes.len, bottom_tree_index, top_pos });
+        const bottom_tree_depth = self.lifetime_params.log_lifetime / 2;
+        log.print("ZIG_VERIFY_DEBUG: Starting Merkle path walk from epoch {} with {} nodes (bottom_tree_index={} top_pos={} bottom_depth={})\n", .{ epoch, nodes.len, bottom_tree_index, top_pos, bottom_tree_depth });
 
         for (nodes, 0..) |sibling_domain, node_idx| {
             // Note: After walking the bottom tree (depth/2 levels), position should naturally
             // be bottom_tree_index, which is the position in the top tree's first layer.
             // No need to reset position - it continues shifting naturally.
+            const is_bottom_tree = node_idx < bottom_tree_depth;
+            const is_top_tree = !is_bottom_tree;
+
+            // Debug: log current_domain and sibling for epoch 16
+            if (epoch == 16) {
+                std.debug.print("ZIG_VERIFY: Epoch {} - Node {}: current_domain[0]=0x{x:0>8} position={} sibling[0]=0x{x:0>8}\n", .{ epoch, node_idx, current_domain[0].value, position, sibling_domain[0].value });
+            }
 
             // Determine if current is left or right child (matching Rust: current_position.is_multiple_of(2))
             // Use position BEFORE shifting (matching Rust exactly)
             const original_position = position;
             const is_left = (position & 1) == 0;
             const is_right = !is_left;
-
+            
             // Build children array (matching Rust exactly: [current_node, opening.co_path[l]] for left, [opening.co_path[l], current_node] for right)
             // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
             // hash_len is already declared above
             const left_slice = if (is_left) current_domain[0..hash_len] else sibling_domain[0..hash_len];
             const right_slice = if (is_left) sibling_domain[0..hash_len] else current_domain[0..hash_len];
-
+            
             // Determine new position (position of the parent) - shift BEFORE computing tweak (matching Rust)
+            // pos_in_level is the position of the parent in its level, which is position / 2
+            // For top tree transition, we need to use the shifted position (which is bottom_tree_index >> 1)
+            // But wait - after shifting, position = bottom_tree_index >> 1, which is correct for the parent position
+            // However, Rust's combined_path uses bottom_tree_index directly for the top tree path computation
+            // But pos_in_level in the hash tweak should be the actual parent position, which is position >> 1
             position >>= 1;
+            // CRITICAL FIX: pos_in_level should be the parent position, which is position after shifting
+            // For top tree transition, position after shifting is bottom_tree_index >> 1, which is the parent position
+            // But we need to check if Rust actually uses bottom_tree_index or the shifted position
+            // Let's try using the shifted position first (position after shifting)
             const pos_in_level: u32 = position;
+            
+            // Debug: log hash inputs for epoch 16, levels 0-4
+            if (epoch == 16 and node_idx <= 4) {
+                std.debug.print("ZIG_VERIFY: Epoch {} - Level {} hash inputs: current_domain[0]=0x{x:0>8} sibling[0]=0x{x:0>8} left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} level_for_tweak={} (original_position={} is_left={})\n", .{ epoch, level, current_domain[0].value, sibling_domain[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, level, original_position, is_left });
+            }
+            
+            if (is_top_tree and node_idx == bottom_tree_depth) {
+                std.debug.print("ZIG_VERIFY: Epoch {} - Transitioning to top tree at node_idx={}, position={}, bottom_tree_index={}, pos_in_level={}, current_domain[0]=0x{x:0>8}, sibling[0]=0x{x:0>8}\n", .{ epoch, node_idx, position, bottom_tree_index, pos_in_level, current_domain[0].value, sibling_domain[0].value });
+                log.print("ZIG_VERIFY_DEBUG: Transitioning to top tree at node_idx={}, position={}, bottom_tree_index={}, pos_in_level={}\n", .{ node_idx, position, bottom_tree_index, pos_in_level });
+                // Check if current_domain matches what was used during tree building
+                // For epoch 16, bottom_tree_index=1, so current_domain should be root of bottom tree 1
+                std.debug.print("ZIG_VERIFY: After bottom tree (level {}), current_domain should be root of bottom tree {}: ", .{ level - 1, bottom_tree_index });
+                for (0..hash_len) |i| {
+                    std.debug.print("0x{x:0>8} ", .{current_domain[i].value});
+                }
+                std.debug.print("\n", .{});
+            }
+            if (epoch == 16) {
+                std.debug.print("ZIG_VERIFY: Epoch {} - Level {} node {}: original_position={} is_right={} pos_in_level={} sibling[0]=0x{x:0>8} (bottom={} top={})\n", .{ epoch, level, node_idx, original_position, is_right, pos_in_level, sibling_domain[0].value, is_bottom_tree, is_top_tree });
+            }
 
-            log.print("ZIG_VERIFY_DEBUG: Level {} node {}: original_position={} is_right={} pos_in_level={}\n", .{ level, node_idx, original_position, is_right, pos_in_level });
+            log.print("ZIG_VERIFY_DEBUG: Level {} node {}: original_position={} is_right={} pos_in_level={} (bottom={} top={})\n", .{ level, node_idx, original_position, is_right, pos_in_level, is_bottom_tree, is_top_tree });
 
             // Debug: log first element of left and right before hashing
             log.print("ZIG_VERIFY_DEBUG:   current[0]=0x{x:0>8} sibling[0]=0x{x:0>8}\n", .{ current_domain[0].value, sibling_domain[0].value });
             log.print("ZIG_VERIFY_DEBUG:   left[0]=0x{x:0>8} right[0]=0x{x:0>8}\n", .{ left_slice[0].value, right_slice[0].value });
 
-            // Use level+1 for tweak (matching Rust: (l + 1))
-            const parent = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, level, pos_in_level, public_key.parameter);
-            defer self.allocator.free(parent);
+          // Use level+1 for tweak (matching Rust: (l + 1))
+          // Debug: log parameter for epoch 16
+          if (epoch == 16 and level == 0) {
+              std.debug.print("ZIG_VERIFY: Epoch {} - Parameter[0]=0x{x:0>8}\n", .{ epoch, public_key.parameter[0].value });
+              std.debug.print("ZIG_VERIFY: Epoch {} - Level {} tweak params: level={} pos_in_level={} (compare with tree building: level=0 parent_pos=8)\n", .{ epoch, level, level, pos_in_level });
+          }
+          // Debug: log hash call for epoch 16, level 0
+          if (epoch == 16 and level == 0) {
+              // Create call_id to match with tree building
+              const verify_call_id = left_slice[0].value ^ right_slice[0].value ^ public_key.parameter[0].value ^ @as(u32, @intCast(level)) ^ @as(u32, @intCast(pos_in_level));
+              std.debug.print("ZIG_VERIFY_HASH: Epoch {} - Level {} calling hash with left[0]=0x{x:0>8} right[0]=0x{x:0>8} level={} pos_in_level={} param[0]=0x{x:0>8} hash_len={} left_slice.len={} right_slice.len={} call_id=0x{x:0>8} left_all=", .{ epoch, level, left_slice[0].value, right_slice[0].value, level, pos_in_level, public_key.parameter[0].value, hash_len, left_slice.len, right_slice.len, verify_call_id });
+              for (left_slice) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
+              std.debug.print("right_all=", .{});
+              for (right_slice) |fe| std.debug.print("0x{x:0>8} ", .{fe.value});
+              std.debug.print("\n", .{});
+          }
+          const parent = try self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, level, pos_in_level, public_key.parameter);
+          defer self.allocator.free(parent);
+          // Debug: log hash result for epoch 16, level 0
+          if (epoch == 16 and level == 0) {
+              const verify_call_id = left_slice[0].value ^ right_slice[0].value ^ public_key.parameter[0].value ^ @as(u32, @intCast(level)) ^ @as(u32, @intCast(pos_in_level));
+              std.debug.print("ZIG_VERIFY_HASH: Epoch {} - Level {} hash result parent[0]=0x{x:0>8} parent.len={} hash_len={} call_id=0x{x:0>8}\n", .{ epoch, level, parent[0].value, parent.len, hash_len, verify_call_id });
+          }
 
-            // Debug: log parent after hashing
+            // Debug: log parent computation for bottom tree (level 0-3) for epoch 16
+            if (epoch == 16 and level < 4) {
+                std.debug.print("ZIG_VERIFY: Bottom tree level {} node {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} original_position={})\n", .{ level, node_idx, parent[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, original_position });
+            }
+            // Debug: log parent after hashing for top tree (level 4+)
+            if (level >= 4) {
+                std.debug.print("ZIG_VERIFY: Top tree level {} node {}: parent[0]=0x{x:0>8} (left[0]=0x{x:0>8} right[0]=0x{x:0>8} pos_in_level={} original_position={} is_right={} current[0]=0x{x:0>8} sibling[0]=0x{x:0>8})\n", .{ level, node_idx, parent[0].value, left_slice[0].value, right_slice[0].value, pos_in_level, original_position, is_right, current_domain[0].value, sibling_domain[0].value });
+            }
             log.print("ZIG_VERIFY_DEBUG:   parent[0]=0x{x:0>8}\n", .{parent[0].value});
 
             // Copy back hash_len_fe elements into current_domain (7 for lifetime 2^18, 8 for lifetime 2^8)
             // current_domain is [8]FieldElement, but we only use the first hash_len_fe elements
             // hash_len is already declared above
             for (0..hash_len) |i| current_domain[i] = parent[i];
+            // Zero out remaining elements to ensure clean state
+            for (hash_len..8) |i| current_domain[i] = FieldElement{ .value = 0 };
+            
+            // Debug: log current_domain after each step for epoch 16
+            if (epoch == 16) {
+                std.debug.print("ZIG_VERIFY: Epoch {} - After level {}: current_domain[0]=0x{x:0>8} (original_position={}, is_left={}, pos_in_level={})\n", .{ epoch, level, current_domain[0].value, original_position, is_left, pos_in_level });
+            }
+            
             level += 1;
         }
         log.print("ZIG_VERIFY_DEBUG: Final computed root[0]=0x{x:0>8}\n", .{current_domain[0].value});
+        log.print("ZIG_VERIFY_DEBUG: Public key root[0]=0x{x:0>8}\n", .{public_key.root[0].value});
 
         // 4) Compare computed root with public key root (both stored as canonical field elements)
         // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
@@ -2714,6 +2928,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var match = true;
         for (0..root_len) |i| {
             if (!current_domain[i].eql(public_key.root[i])) {
+                std.debug.print("ZIG_VERIFY_ERROR: Epoch {} - root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ epoch, i, current_domain[i].value, public_key.root[i].value });
                 log.print(
                     "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
                     .{ i, current_domain[i].value, public_key.root[i].value },

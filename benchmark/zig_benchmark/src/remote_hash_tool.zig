@@ -39,10 +39,14 @@ fn readLength(reader: anytype) !usize {
 }
 
 fn writeFieldElement(writer: anytype, value: FieldElement) !void {
+    // Write Montgomery form directly (matching internal representation)
+    // Both libraries use Montgomery internally, so wrappers should use Montgomery too
     try writer.writeInt(u32, value.toMontgomery(), .little);
 }
 
 fn readFieldElement(reader: anytype) !FieldElement {
+    // Read Montgomery form directly (matching internal representation)
+    // Both libraries use Montgomery internally, so wrappers should use Montgomery too
     const mont = try reader.readInt(u32, .little);
     return FieldElement.fromMontgomery(mont);
 }

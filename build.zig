@@ -81,6 +81,15 @@ pub fn build(b: *std.Build) void {
     performance_benchmark_tests.root_module.addImport("hash-zig", hash_zig_module);
     const run_performance_benchmark_tests = b.addRunArtifact(performance_benchmark_tests);
 
+    // Lifetime tests (2^8 and 2^18) - always use ReleaseFast for key generation
+    const lifetime_tests = b.addTest(.{
+        .root_source_file = b.path("test_lifetimes.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    lifetime_tests.root_module.addImport("hash-zig", hash_zig_module);
+    const run_lifetime_tests = b.addRunArtifact(lifetime_tests);
+
     // Test step runs all tests
     const test_step = b.step("test", "Run core library tests");
     test_step.dependOn(&run_lib_unit_tests.step);
@@ -91,6 +100,9 @@ pub fn build(b: *std.Build) void {
     extended_tests_step.dependOn(&run_comprehensive_rust_compat_tests.step);
     extended_tests_step.dependOn(&run_encoding_variants_tests.step);
     extended_tests_step.dependOn(&run_performance_benchmark_tests.step);
+
+    const lifetime_tests_step = b.step("test-lifetimes", "Run lifetime tests (2^8 and 2^18)");
+    lifetime_tests_step.dependOn(&run_lifetime_tests.step);
 
     // Basic usage example
     const basic_example_module = b.createModule(.{

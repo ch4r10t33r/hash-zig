@@ -14,9 +14,10 @@ fn fromMontgomeryValue(value: u32) FieldElement {
     return FieldElement.fromMontgomery(value);
 }
 
-/// Serialize a FieldElement to a decimal string (Montgomery residue)
+/// Serialize a FieldElement to a decimal string (canonical form matching Rust's serde implementation)
+/// Rust's serde serializes field elements as canonical values (as_canonical_u32())
 pub fn serializeFieldElement(allocator: Allocator, elem: FieldElement) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "{}", .{elem.toMontgomery()});
+    return try std.fmt.allocPrint(allocator, "{}", .{elem.toCanonical()});
 }
 
 /// Deserialize a FieldElement from a hex string
@@ -42,23 +43,25 @@ fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
             if (std.mem.startsWith(u8, s, "0x") or std.mem.startsWith(u8, s, "0X")) {
                 return deserializeFieldElement(s);
             }
-            // Interpret decimal or plain-hex strings as Montgomery values
+            // Interpret decimal or plain-hex strings as canonical values (Rust serializes as canonical)
             if (std.fmt.parseInt(u32, s, 10)) |dec| {
-                return FieldElement.fromMontgomery(dec);
+                return FieldElement.fromCanonical(dec);
             } else |_| {}
             const value = try std.fmt.parseInt(u32, s, 16);
-            return FieldElement.fromMontgomery(value);
+            return FieldElement.fromCanonical(value);
         },
         .integer => |i| {
             if (i < 0) return error.InvalidJsonFormat;
             const as_u64: u64 = @intCast(i);
             const as_u32: u32 = @intCast(@min(as_u64, @as(u64, std.math.maxInt(u32))));
-            return FieldElement.fromMontgomery(as_u32);
+            // JSON values are canonical (Rust serializes as canonical), convert to Montgomery
+            return FieldElement.fromCanonical(as_u32);
         },
         .float => |f| {
             const clamped: f64 = if (f < 0) 0 else f;
             const as_u32: u32 = @intFromFloat(@min(clamped, @as(f64, @floatFromInt(std.math.maxInt(u32)))));
-            return FieldElement.fromMontgomery(as_u32);
+            // JSON values are canonical (Rust serializes as canonical), convert to Montgomery
+            return FieldElement.fromCanonical(as_u32);
         },
         .object => |o| {
             if (o.get("value")) |inner| {

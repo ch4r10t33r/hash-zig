@@ -8,7 +8,7 @@ default = []
 debug-tools = []
 
 [dependencies]
-hashsig = { git = "https://github.com/leanEthereum/leanSig", branch = "main" }
+hashsig = { git = "https://github.com/b-wagn/hash-sig", branch = "main" }
 p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
 p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }
 p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "2117e4b" }

@@ -18,26 +18,17 @@ pub const EncodingType = enum {
     binary, // Binary encoding for 128-bit security
 };
 
-/// Key lifetime configuration matching Rust
+/// Key lifetime configuration matching Rust exactly
+/// Only 3 lifetimes are supported: 2^8, 2^18, and 2^32
 pub const KeyLifetime = enum {
-    lifetime_2_3, // 2^3 = 8 signatures (matches Rust PR #91)
     lifetime_2_8, // 2^8 = 256 signatures (matches Rust SIGTopLevelTargetSumLifetime8Dim64Base8)
-    lifetime_2_10, // 2^10 = 1,024 signatures
-    lifetime_2_16, // 2^16 = 65,536 signatures
-    lifetime_2_18, // 2^18 = 262,144 signatures
-    lifetime_2_20, // 2^20 = 1,048,576 signatures
-    lifetime_2_28, // 2^28 = 268,435,456 signatures
-    lifetime_2_32, // 2^32 = 4,294,967,296 signatures
+    lifetime_2_18, // 2^18 = 262,144 signatures (matches Rust SIGTopLevelTargetSumLifetime18Dim64Base8)
+    lifetime_2_32, // 2^32 = 4,294,967,296 signatures (matches Rust SIGTopLevelTargetSumLifetime32Dim64Base8)
 
     pub fn treeHeight(self: KeyLifetime) u32 {
         return switch (self) {
-            .lifetime_2_3 => 3,
             .lifetime_2_8 => 8,
-            .lifetime_2_10 => 10,
-            .lifetime_2_16 => 16,
             .lifetime_2_18 => 18,
-            .lifetime_2_20 => 20,
-            .lifetime_2_28 => 28,
             .lifetime_2_32 => 32,
         };
     }

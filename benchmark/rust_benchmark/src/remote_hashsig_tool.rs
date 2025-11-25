@@ -14,6 +14,41 @@ use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lif
 use hashsig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
 use hashsig::signature::{SignatureScheme, SignatureSchemeSecretKey};
 
+// KoalaBear field parameters for Montgomery conversion
+const KOALABEAR_PRIME: u64 = 0x7f000001; // 2^31 - 2^24 + 1
+const KOALABEAR_MONTY_BITS: u32 = 32;
+
+// Convert canonical to Montgomery form
+fn canonical_to_montgomery(canonical: u32) -> u32 {
+    // to_monty: (((x as u64) << MONTY_BITS) % PRIME) as u32
+    let shifted = (canonical as u64) << KOALABEAR_MONTY_BITS;
+    (shifted % KOALABEAR_PRIME) as u32
+}
+
+// Convert Montgomery to canonical form
+fn montgomery_to_canonical(montgomery: u32) -> u32 {
+    // from_monty: monty_reduce(x as u64)
+    monty_reduce(montgomery as u64)
+}
+
+// Montgomery reduction
+fn monty_reduce(x: u64) -> u32 {
+    const MONTY_MU: u64 = 0x81000001;
+    const MONTY_MASK: u64 = 0xffffffff;
+    
+    // t = x * MONTY_MU mod MONTY
+    let t = (x.wrapping_mul(MONTY_MU)) & MONTY_MASK;
+    
+    // u = t * P
+    let u = t * KOALABEAR_PRIME;
+    
+    // x - u = x mod P
+    let (x_sub_u, overflow) = x.overflowing_sub(u);
+    let x_sub_u_hi = (x_sub_u >> KOALABEAR_MONTY_BITS) as u32;
+    let corr = if overflow { KOALABEAR_PRIME as u32 } else { 0 };
+    x_sub_u_hi.wrapping_add(corr)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum LifetimeTag {
     Pow8,
@@ -171,6 +206,58 @@ fn message_to_bytes(message: &str) -> [u8; 32] {
     bytes
 }
 
+// Convert field elements in JSON from canonical (serde format) to Montgomery (JSON format)
+fn convert_field_elements_to_montgomery(value: &mut Value) {
+    match value {
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                convert_field_elements_to_montgomery(item);
+            }
+        }
+        Value::Object(obj) => {
+            for (_, v) in obj.iter_mut() {
+                convert_field_elements_to_montgomery(v);
+            }
+        }
+        Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                if u <= u32::MAX as u64 {
+                    let canonical = u as u32;
+                    let montgomery = canonical_to_montgomery(canonical);
+                    *value = Value::Number(montgomery.into());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// Convert field elements in JSON from Montgomery (JSON format) to canonical (serde format)
+fn convert_field_elements_to_canonical(value: &mut Value) {
+    match value {
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                convert_field_elements_to_canonical(item);
+            }
+        }
+        Value::Object(obj) => {
+            for (_, v) in obj.iter_mut() {
+                convert_field_elements_to_canonical(v);
+            }
+        }
+        Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                if u <= u32::MAX as u64 {
+                    let montgomery = u as u32;
+                    let canonical = montgomery_to_canonical(montgomery);
+                    *value = Value::Number(canonical.into());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn serialize_public_key_to_file<P, K>(
     pk: &K,
     path: P,
@@ -182,6 +269,7 @@ where
 {
     let mut pk_value = serde_json::to_value(pk)?;
     trim_public_key_value(&mut pk_value, meta);
+    // JSON serialization uses canonical form (matching Rust's serde default)
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer_pretty(&mut writer, &pk_value)?;
@@ -201,6 +289,7 @@ where
     let reader = BufReader::new(file);
     let mut pk_value: serde_json::Value = serde_json::from_reader(reader)?;
     trim_public_key_value(&mut pk_value, meta);
+    // JSON deserialization uses canonical form (matching Rust's serde default)
     let pk = serde_json::from_value(pk_value)?;
     Ok(pk)
 }
@@ -230,6 +319,7 @@ where
             }
         }
     }
+    // JSON serialization uses canonical form (matching Rust's serde default)
     Ok(value)
 }
 
@@ -247,6 +337,7 @@ where
             }
         }
     }
+    // JSON deserialization uses canonical form (matching Rust's serde default)
     Ok(serde_json::from_value(value)?)
 }
 
@@ -357,8 +448,10 @@ where
             let num = entry
                 .as_u64()
                 .ok_or("path node entry is not an unsigned integer")?;
-            let value = u32::try_from(num).map_err(|_| "path node entry exceeds u32")?;
-            write_u32(&mut writer, value)?;
+            let canonical = u32::try_from(num).map_err(|_| "path node entry exceeds u32")?;
+            // Convert canonical (from serde) to Montgomery (for binary format)
+            let montgomery = canonical_to_montgomery(canonical);
+            write_u32(&mut writer, montgomery)?;
         }
     }
 
@@ -366,8 +459,10 @@ where
         let num = entry
             .as_u64()
             .ok_or("rho entry is not an unsigned integer")?;
-        let value = u32::try_from(num).map_err(|_| "rho entry exceeds u32")?;
-        write_u32(&mut writer, value)?;
+        let canonical = u32::try_from(num).map_err(|_| "rho entry exceeds u32")?;
+        // Convert canonical (from serde) to Montgomery (for binary format)
+        let montgomery = canonical_to_montgomery(canonical);
+        write_u32(&mut writer, montgomery)?;
     }
 
     write_u64(&mut writer, u64::try_from(hashes_array.len())?)?;
@@ -385,8 +480,10 @@ where
             let num = entry
                 .as_u64()
                 .ok_or("hash entry is not an unsigned integer")?;
-            let value = u32::try_from(num).map_err(|_| "hash entry exceeds u32")?;
-            write_u32(&mut writer, value)?;
+            let canonical = u32::try_from(num).map_err(|_| "hash entry exceeds u32")?;
+            // Convert canonical (from serde) to Montgomery (for binary format)
+            let montgomery = canonical_to_montgomery(canonical);
+            write_u32(&mut writer, montgomery)?;
         }
     }
 
@@ -406,14 +503,20 @@ where
     for _ in 0..path_len {
         let mut node = Vec::with_capacity(meta.hash_len);
         for _ in 0..meta.hash_len {
-            node.push(Value::from(read_u32(&mut reader)?));
+            let montgomery = read_u32(&mut reader)?;
+            // Convert Montgomery (from binary) to canonical (for serde deserialization)
+            let canonical = montgomery_to_canonical(montgomery);
+            node.push(Value::from(canonical));
         }
         nodes.push(Value::Array(node));
     }
 
     let mut rho = Vec::with_capacity(meta.rand_len);
     for _ in 0..meta.rand_len {
-        rho.push(Value::from(read_u32(&mut reader)?));
+        let montgomery = read_u32(&mut reader)?;
+        // Convert Montgomery (from binary) to canonical (for serde deserialization)
+        let canonical = montgomery_to_canonical(montgomery);
+        rho.push(Value::from(canonical));
     }
 
     let hashes_len = read_u64(&mut reader)? as usize;
@@ -421,7 +524,10 @@ where
     for _ in 0..hashes_len {
         let mut domain = Vec::with_capacity(meta.hash_len);
         for _ in 0..meta.hash_len {
-            domain.push(Value::from(read_u32(&mut reader)?));
+            let montgomery = read_u32(&mut reader)?;
+            // Convert Montgomery (from binary) to canonical (for serde deserialization)
+            let canonical = montgomery_to_canonical(montgomery);
+            domain.push(Value::from(canonical));
         }
         hashes.push(Value::Array(domain));
     }
@@ -484,11 +590,51 @@ where
     S::SecretKey: SignatureSchemeSecretKey + Serialize + for<'de> DeserializeOwned,
     S::Signature: Serialize + for<'de> DeserializeOwned,
 {
+    eprintln!("RUST_VERIFY_DEBUG: Entering verify function, epoch={}", epoch);
     let pk: S::PublicKey = deserialize_public_key_from_file(pk_json_path, meta)?;
+    eprintln!("RUST_VERIFY_DEBUG: Public key deserialized");
     let sig_json = read_signature_binary(sig_bin_path, meta)?;
-    let signature: S::Signature = signature_from_json(sig_json, meta)?;
+    
+    // Debug: print rho values
+    if let Some(rho_array) = sig_json.get("rho").and_then(|r| r.as_array()) {
+        eprintln!("RUST_VERIFY_DEBUG: Signature rho values (first {}):", rho_array.len().min(7));
+        for (i, val) in rho_array.iter().take(7).enumerate() {
+            if let Some(num) = val.as_u64() {
+                eprintln!("RUST_VERIFY_DEBUG:   rho[{}] = {} (0x{:x})", i, num, num);
+            }
+        }
+    }
+    
+    // Debug: print first hash domain
+    if let Some(hashes_array) = sig_json.get("hashes").and_then(|h| h.as_array()) {
+        if let Some(first_hash) = hashes_array.get(0).and_then(|h| h.as_array()) {
+            eprintln!("RUST_VERIFY_DEBUG: First hash domain (first {}):", first_hash.len().min(8));
+            for (i, val) in first_hash.iter().take(8).enumerate() {
+                if let Some(num) = val.as_u64() {
+                    eprintln!("RUST_VERIFY_DEBUG:   hash[0][{}] = {} (0x{:x})", i, num, num);
+                }
+            }
+        }
+    }
+    
+    let signature: S::Signature = match signature_from_json(sig_json, meta) {
+        Ok(sig) => {
+            eprintln!("RUST_VERIFY_DEBUG: Signature deserialized successfully");
+            sig
+        }
+        Err(e) => {
+            eprintln!("RUST_VERIFY_DEBUG: Failed to deserialize signature: {}", e);
+            return Err(e);
+        }
+    };
     let msg_bytes = message_to_bytes(&message);
+    eprintln!("RUST_VERIFY_DEBUG: Calling S::verify with message={:?}", &msg_bytes[..8]);
     let ok = S::verify(&pk, epoch, &msg_bytes, &signature);
+    if !ok {
+        eprintln!("RUST_VERIFY_DEBUG: Verification returned false - encoding or chain verification failed");
+    } else {
+        eprintln!("RUST_VERIFY_DEBUG: Verification succeeded");
+    }
     Ok(ok)
 }
 
