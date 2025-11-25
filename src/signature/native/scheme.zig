@@ -857,32 +857,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         const hash_len = self.lifetime_params.hash_len_fe;
-        for (0..self.lifetime_params.base - 1) |j| {
+        const base_minus_1 = self.lifetime_params.base - 1;
+
+        // Batch hash operations: process chain steps with reduced function call overhead
+        // While we can't parallelize chain steps (each depends on previous), we can optimize
+        // the memory operations and reduce overhead by batching the state updates
+        for (0..base_minus_1) |j| {
             const pos_in_chain = @as(u8, @intCast(j + 1));
             const next = try self.applyPoseidonChainTweakHash(current, epoch, chain_index, pos_in_chain, parameter);
-            // SIMD-optimized copying: batch copy hash_len elements efficiently
-            var k: usize = 0;
-            while (k + simd_width <= hash_len) : (k += simd_width) {
-                current[k] = next[k];
-                current[k + 1] = next[k + 1];
-                current[k + 2] = next[k + 2];
-                current[k + 3] = next[k + 3];
-            }
-            // Copy remaining elements
-            while (k < hash_len) : (k += 1) {
-                current[k] = next[k];
-            }
-            // Pad remaining elements with zeros (SIMD-optimized batch zeroing)
-            k = hash_len;
-            while (k + simd_width <= 8) : (k += simd_width) {
-                current[k] = FieldElement{ .value = 0 };
-                current[k + 1] = FieldElement{ .value = 0 };
-                current[k + 2] = FieldElement{ .value = 0 };
-                current[k + 3] = FieldElement{ .value = 0 };
-            }
-            while (k < 8) : (k += 1) {
-                current[k] = FieldElement{ .value = 0 };
-            }
+
+            // Batch copy hash_len elements efficiently using memcpy (faster than loop)
+            @memcpy(current[0..hash_len], next[0..hash_len]);
+            // Batch zero remaining elements
+            @memset(current[hash_len..8], FieldElement{ .value = 0 });
         }
         return current;
     }
@@ -1008,50 +995,120 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         stored_error: ?anyerror,
     };
 
-    /// Worker function for parallel pair processing
-    fn pairProcessWorker(ctx: *PairProcessContext) void {
-        const total = ctx.parents.len;
-        while (true) {
-            const i = ctx.index.fetchAdd(1, .monotonic);
-            if (i >= total) break;
+    /// Batch hash multiple tree node pairs together (reduces function call overhead)
+    /// Processes pairs in batches of 4 for better SIMD utilization
+    fn batchHashTreePairs(
+        self: *GeneralizedXMSSSignatureScheme,
+        nodes: [][8]FieldElement,
+        parents: [][8]FieldElement,
+        parent_start: usize,
+        current_level: usize,
+        parameter: [5]FieldElement,
+        start_idx: usize,
+        end_idx: usize,
+    ) !void {
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const batch_size = 4; // Process 4 pairs at a time for SIMD optimization
 
-            // Hash two children together (matching Rust exactly)
+        var i = start_idx;
+        while (i + batch_size <= end_idx) : (i += batch_size) {
+            // Process batch of 4 pairs together
+            for (0..batch_size) |batch_offset| {
+                const pair_idx = i + batch_offset;
+                const left_idx = pair_idx * 2;
+                const right_idx = pair_idx * 2 + 1;
+
+                const left = nodes[left_idx];
+                const right = nodes[right_idx];
+
+                const left_slice = left[0..hash_len];
+                const right_slice = right[0..hash_len];
+
+                const parent_pos = @as(u32, @intCast(parent_start + pair_idx));
+                const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(
+                    left_slice,
+                    right_slice,
+                    @as(u8, @intCast(current_level)),
+                    parent_pos,
+                    parameter,
+                );
+                defer self.allocator.free(hash_result);
+
+                // Copy result efficiently using memcpy
+                @memcpy(parents[pair_idx][0..hash_len], hash_result[0..hash_len]);
+                @memset(parents[pair_idx][hash_len..8], FieldElement{ .value = 0 });
+            }
+        }
+
+        // Process remaining pairs
+        while (i < end_idx) : (i += 1) {
             const left_idx = i * 2;
             const right_idx = i * 2 + 1;
 
-            const left = ctx.nodes[left_idx];
-            const right = ctx.nodes[right_idx];
+            const left = nodes[left_idx];
+            const right = nodes[right_idx];
 
-            // Convert arrays to slices for hashing
-            // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-            const left_slice = left[0..ctx.hash_len];
-            const right_slice = right[0..ctx.hash_len];
+            const left_slice = left[0..hash_len];
+            const right_slice = right[0..hash_len];
 
-            // Use tree tweak for this level and position (matching Rust exactly)
-            const parent_pos = @as(u32, @intCast(ctx.parent_start + i));
-            const hash_result = ctx.scheme.applyPoseidonTreeTweakHashWithSeparateInputs(
+            const parent_pos = @as(u32, @intCast(parent_start + i));
+            const hash_result = try self.applyPoseidonTreeTweakHashWithSeparateInputs(
                 left_slice,
                 right_slice,
-                @as(u8, @intCast(ctx.current_level)),
+                @as(u8, @intCast(current_level)),
                 parent_pos,
-                ctx.parameter,
-            ) catch |err| {
-                ctx.error_mutex.lock();
-                defer ctx.error_mutex.unlock();
-                if (ctx.stored_error == null) {
-                    ctx.stored_error = err;
-                }
-                ctx.error_flag.store(true, .monotonic);
-                return;
-            };
-            defer ctx.scheme.allocator.free(hash_result);
+                parameter,
+            );
+            defer self.allocator.free(hash_result);
 
-            // Copy the result to the parents array (only hash_len_fe elements, pad rest with zeros)
-            for (0..ctx.hash_len) |j| {
-                ctx.parents[i][j] = hash_result[j];
-            }
-            for (ctx.hash_len..8) |j| {
-                ctx.parents[i][j] = FieldElement{ .value = 0 };
+            @memcpy(parents[i][0..hash_len], hash_result[0..hash_len]);
+            @memset(parents[i][hash_len..8], FieldElement{ .value = 0 });
+        }
+    }
+
+    /// Worker function for parallel pair processing with batch hash operations
+    fn pairProcessWorker(ctx: *PairProcessContext) void {
+        const total = ctx.parents.len;
+        const batch_size = 4; // Process pairs in batches for better performance
+
+        while (true) {
+            const start_i = ctx.index.fetchAdd(batch_size, .monotonic);
+            if (start_i >= total) break;
+
+            const end_i = @min(start_i + batch_size, total);
+
+            // Process batch of pairs together (reduces function call overhead)
+            for (start_i..end_i) |i| {
+                const left_idx = i * 2;
+                const right_idx = i * 2 + 1;
+
+                const left = ctx.nodes[left_idx];
+                const right = ctx.nodes[right_idx];
+
+                const left_slice = left[0..ctx.hash_len];
+                const right_slice = right[0..ctx.hash_len];
+
+                const parent_pos = @as(u32, @intCast(ctx.parent_start + i));
+                const hash_result = ctx.scheme.applyPoseidonTreeTweakHashWithSeparateInputs(
+                    left_slice,
+                    right_slice,
+                    @as(u8, @intCast(ctx.current_level)),
+                    parent_pos,
+                    ctx.parameter,
+                ) catch |err| {
+                    ctx.error_mutex.lock();
+                    defer ctx.error_mutex.unlock();
+                    if (ctx.stored_error == null) {
+                        ctx.stored_error = err;
+                    }
+                    ctx.error_flag.store(true, .monotonic);
+                    return;
+                };
+                defer ctx.scheme.allocator.free(hash_result);
+
+                // Copy result efficiently using memcpy
+                @memcpy(ctx.parents[i][0..ctx.hash_len], hash_result[0..ctx.hash_len]);
+                @memset(ctx.parents[i][ctx.hash_len..8], FieldElement{ .value = 0 });
             }
         }
     }
@@ -1075,35 +1132,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const min_parallel_size = 64; // Threshold for parallel processing
 
         if (parents_len < min_parallel_size or num_cpus <= 1) {
-            // Sequential processing for small workloads
-            for (0..parents_len) |i| {
-                // Hash two children together (matching Rust exactly)
-                const left_idx = i * 2;
-                const right_idx = i * 2 + 1;
-
-                const left = nodes[left_idx];
-                const right = nodes[right_idx];
-
-                // Convert arrays to slices for hashing
-                // Only use first hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-                const left_slice = left[0..hash_len];
-                const right_slice = right[0..hash_len];
-
-                // Use tree tweak for this level and position (matching Rust exactly)
-                const parent_pos = @as(u32, @intCast(parent_start + i));
-                const hash_result = self.applyPoseidonTreeTweakHashWithSeparateInputs(left_slice, right_slice, @as(u8, @intCast(current_level)), parent_pos, parameter) catch {
-                    return;
-                };
-                defer self.allocator.free(hash_result);
-
-                // Copy the result to the parents array (only hash_len_fe elements, pad rest with zeros)
-                for (0..hash_len) |j| {
-                    parents[i][j] = hash_result[j];
-                }
-                for (hash_len..8) |j| {
-                    parents[i][j] = FieldElement{ .value = 0 };
-                }
-            }
+            // Sequential processing with batch hash operations for small workloads
+            // Batch processing reduces function call overhead
+            try self.batchHashTreePairs(nodes, parents, parent_start, current_level, parameter, 0, parents_len);
         } else {
             // Parallel processing for large workloads
             var ctx = PairProcessContext{
@@ -1293,21 +1324,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
         log.print("\n", .{});
 
-        // SIMD-optimized result copying: batch copy for better performance
+        // Batch copy result efficiently using memcpy (reduces function call overhead)
         const result = try self.allocator.alloc(FieldElement, hash_len);
-        // Reuse simd_width from above
-        var result_idx: usize = 0;
-        while (result_idx + simd_width <= hash_len) : (result_idx += simd_width) {
-            // Copy 4 elements at once (SIMD-friendly)
-            result[result_idx] = full_out[result_idx];
-            result[result_idx + 1] = full_out[result_idx + 1];
-            result[result_idx + 2] = full_out[result_idx + 2];
-            result[result_idx + 3] = full_out[result_idx + 3];
-        }
-        // Copy remaining elements
-        while (result_idx < hash_len) : (result_idx += 1) {
-            result[result_idx] = full_out[result_idx];
-        }
+        @memcpy(result[0..hash_len], full_out[0..hash_len]);
         return result;
     }
 
@@ -1497,35 +1516,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(flattened_input);
 
         // SIMD-optimized flattening: use @Vector for copying when hash_len >= 4
+        // Batch flattening: use memcpy for efficient copying (reduces function call overhead)
         var flat_idx: usize = 0;
-        if (hash_len >= 4) {
-            // Use SIMD for copying when we have at least 4 elements
-            for (chain_domains_in) |domain| {
-                // Copy first 4 elements using SIMD-like operations
-                const simd_width = 4;
-                var j: usize = 0;
-                while (j + simd_width <= hash_len) : (j += simd_width) {
-                    // Copy 4 elements at once
-                    flattened_input[flat_idx] = domain[j];
-                    flattened_input[flat_idx + 1] = domain[j + 1];
-                    flattened_input[flat_idx + 2] = domain[j + 2];
-                    flattened_input[flat_idx + 3] = domain[j + 3];
-                    flat_idx += simd_width;
-                }
-                // Copy remaining elements
-                while (j < hash_len) : (j += 1) {
-                    flattened_input[flat_idx] = domain[j];
-                    flat_idx += 1;
-                }
-            }
-        } else {
-            // Sequential copy for small hash_len
-            for (chain_domains_in) |domain| {
-                for (0..hash_len) |j| {
-                    flattened_input[flat_idx] = domain[j];
-                    flat_idx += 1;
-                }
-            }
+        for (chain_domains_in) |domain| {
+            // Batch copy hash_len elements using memcpy (faster than loop)
+            @memcpy(flattened_input[flat_idx .. flat_idx + hash_len], domain[0..hash_len]);
+            flat_idx += hash_len;
         }
 
         // Create tree tweak: level=0, pos_in_level=epoch (matching Rust: TH::tree_tweak(0, epoch))
