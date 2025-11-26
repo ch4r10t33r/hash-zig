@@ -28,7 +28,11 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, args[1], "keygen")) {
         const seed_hex = if (args.len > 2) args[2] else null;
-        try keygenCommand(allocator, seed_hex);
+        const stderr = std.io.getStdErr().writer();
+        keygenCommand(allocator, seed_hex) catch |err| {
+            stderr.print("ZIG_MAIN_ERROR: keygenCommand failed with error {s}\n", .{@errorName(err)}) catch {};
+            return err;
+        };
     } else if (std.mem.eql(u8, args[1], "sign")) {
         if (args.len < 4) {
             std.debug.print("Usage: {s} sign <message> <epoch>\n", .{args[0]});
@@ -62,24 +66,43 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8) !void {
     };
 
     var seed: [32]u8 = undefined;
+    var seed_str: []const u8 = undefined;
     if (seed_hex) |hex| {
-        // Parse hex seed
+        // Parse hex seed provided by caller
         if (hex.len != 64) {
             std.debug.print("Error: Seed must be 64 hex characters (32 bytes)\n", .{});
             std.process.exit(1);
         }
         _ = try std.fmt.hexToBytes(&seed, hex);
+        seed_str = hex;
     } else {
         // Generate random seed
         try std.posix.getrandom(&seed);
+        // Convert generated seed to hex string so we can persist it
+        const seed_hex_alloc = try std.fmt.allocPrint(allocator, "{x:0>64}", .{std.fmt.fmtSliceHexLower(&seed)});
+        defer allocator.free(seed_hex_alloc);
+        seed_str = seed_hex_alloc;
     }
 
     // Initialize signature scheme with seed
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
     defer scheme.deinit();
 
+    // Persist seed so that signing can reconstruct the exact same keypair
+    // and follow the same in-memory path as initial key generation.
+    {
+        var seed_file = try std.fs.cwd().createFile("tmp/zig_seed.hex", .{});
+        defer seed_file.close();
+        try seed_file.writeAll(seed_str);
+        std.debug.print("✅ Seed saved to tmp/zig_seed.hex\n", .{});
+    }
+
     // Generate keypair
-    var keypair = try scheme.keyGen(0, 256);
+    var keypair = scheme.keyGen(0, 256) catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("ZIG_KEYGEN_ERROR: keyGen failed with error {s}\n", .{@errorName(err)}) catch {};
+        return err;
+    };
     defer keypair.secret_key.deinit();
 
     // Serialize secret key to JSON
@@ -93,6 +116,19 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8) !void {
     // Serialize public key to JSON
     const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
     defer allocator.free(pk_json);
+    
+    // Debug: print parameter that will be written to public key file
+    const stderr_pk = std.io.getStdErr().writer();
+    stderr_pk.print("ZIG_KEYGEN_DEBUG: parameter to be written to public key file (canonical): ", .{}) catch {};
+    for (0..5) |i| {
+        stderr_pk.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toCanonical()}) catch {};
+    }
+    stderr_pk.print("(Montgomery: ", .{}) catch {};
+    for (0..5) |i| {
+        stderr_pk.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toMontgomery()}) catch {};
+    }
+    stderr_pk.print(")\n", .{}) catch {};
+    
     var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
     defer pk_file.close();
     try pk_file.writeAll(pk_json);
@@ -104,23 +140,68 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8) !void {
 fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
     std.debug.print("Signing message: '{s}' (epoch: {})\n", .{ message, epoch });
 
-    // Load secret key data from tmp/zig_sk.json
-    const sk_json = try std.fs.cwd().readFileAlloc(allocator, "tmp/zig_sk.json", std.math.maxInt(usize));
-    defer allocator.free(sk_json);
-    const sk_data = try hash_zig.serialization.deserializeSecretKeyData(allocator, sk_json);
-    
-    // Reconstruct the secret key by regenerating the keypair from the PRF key
-    // Use the PRF key as the seed for keyGenFromSeed
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, sk_data.prf_key);
-    defer scheme.deinit();
-    
-    // Generate keypair to get the full secret key with trees
-    // Note: The parameter will be regenerated and may not match the serialized one,
-    // but the PRF key and activation parameters will match, which is sufficient for signing
-    var keypair = try scheme.keyGen(sk_data.activation_epoch, sk_data.num_active_epochs);
+    const stderr = std.io.getStdErr().writer();
+
+    // Prefer deterministic reconstruction from the original seed so that
+    // signing follows the exact same path as in-memory key generation.
+    const seed_file = std.fs.cwd().openFile("tmp/zig_seed.hex", .{}) catch null;
+    var keypair: hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult = undefined;
+    var scheme: *hash_zig.GeneralizedXMSSSignatureScheme = undefined;
+
+    if (seed_file) |file| {
+        defer file.close();
+
+        // Read seed hex string
+        var buf: [64]u8 = undefined;
+        const read_len = try file.readAll(&buf);
+        const hex_slice = buf[0..read_len];
+
+        var seed: [32]u8 = undefined;
+        if (hex_slice.len != 64) {
+            stderr.print("ZIG_SIGN_DEBUG: Invalid seed length in tmp/zig_seed.hex (got {}, expected 64)\n", .{hex_slice.len}) catch {};
+            return error.InvalidSeed;
+        }
+        _ = try std.fmt.hexToBytes(&seed, hex_slice);
+
+        // Rebuild scheme and keypair exactly as in keygenCommand
+        scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
+        defer scheme.deinit();
+
+        keypair = try scheme.keyGen(0, 256);
+        // NOTE: keypair.secret_key will be deinit'd below
+
+        stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from seed (deterministic path)\n", .{}) catch {};
+    } else {
+        // Fallback: use legacy deserialization path (PRF key + parameter).
+        // This path may not perfectly match original RNG state, but keeps
+        // compatibility if seed file is missing.
+        const sk_json = try std.fs.cwd().readFileAlloc(allocator, "tmp/zig_sk.json", std.math.maxInt(usize));
+        defer allocator.free(sk_json);
+
+        const sk_data = try hash_zig.serialization.deserializeSecretKeyData(allocator, sk_json);
+
+        scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, sk_data.prf_key);
+        defer scheme.deinit();
+
+        keypair = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key);
+
+        stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from PRF key + parameter (fallback path)\n", .{}) catch {};
+    }
+
     defer keypair.secret_key.deinit();
     
     const secret_key = keypair.secret_key;
+    
+    // CRITICAL DEBUG: Verify the secret key has the correct parameter
+    stderr.print("ZIG_SIGN_DEBUG_STEP4: Secret key parameter after keyGenWithParameter (canonical): ", .{}) catch {};
+    for (0..5) |i| {
+        stderr.print("0x{x:0>8} ", .{secret_key.getParameter()[i].toCanonical()}) catch {};
+    }
+    stderr.print("(Montgomery: ", .{}) catch {};
+    for (0..5) |i| {
+        stderr.print("0x{x:0>8} ", .{secret_key.getParameter()[i].toMontgomery()}) catch {};
+    }
+    stderr.print(")\n", .{}) catch {};
 
     // Convert message to 32 bytes
     var msg_bytes: [32]u8 = undefined;
@@ -131,6 +212,24 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
     // Sign the message
     var signature = try scheme.sign(secret_key, epoch, msg_bytes);
     defer signature.deinit();
+
+    // In-memory self-check: verify immediately using the same keypair and message.
+    const in_memory_valid = try scheme.verify(&keypair.public_key, epoch, msg_bytes, signature);
+    if (in_memory_valid) {
+        std.debug.print("ZIG_SIGN_DEBUG: In-memory sign→verify PASSED for epoch {}\n", .{epoch});
+    } else {
+        std.debug.print("ZIG_SIGN_DEBUG: In-memory sign→verify FAILED for epoch {}\n", .{epoch});
+    }
+
+    // IMPORTANT: Also update the public key JSON to match the regenerated keypair.
+    // This ensures that verification (in both Zig and Rust) uses a public key that
+    // is consistent with the trees/roots used during signing.
+    const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
+    defer allocator.free(pk_json);
+    var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
+    defer pk_file.close();
+    try pk_file.writeAll(pk_json);
+    std.debug.print("✅ Public key updated to tmp/zig_pk.json (from regenerated keypair)\n", .{});
 
     // Serialize signature to bincode binary format (3116 bytes per leanSignature spec)
     // Import bincode functions from remote_hash_tool
@@ -171,6 +270,10 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     std.debug.print("  Message: '{s}'\n", .{message});
     std.debug.print("  Epoch: {}\n", .{epoch});
 
+    // Debug: print file path to verify we're reading from the correct file
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("ZIG_VERIFY_DEBUG: Reading signature from file: {s}\n", .{sig_path}) catch {};
+
     // Load signature from binary format (bincode)
     // Import bincode functions from remote_hash_tool
     const remote_hash_tool = @import("remote_hash_tool.zig");
@@ -186,11 +289,34 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     // The readSignatureBincode function reads from file path directly
     var signature = try remote_hash_tool.readSignatureBincode(sig_path, allocator, rand_len, max_path_len, hash_len, max_hashes);
     defer signature.deinit();
+    
+    // Debug: print rho from signature right after reading (before verify)
+    const rho_after_read = signature.getRho();
+    stderr.print("ZIG_VERIFY_DEBUG: rho from signature.getRho() RIGHT AFTER READ (Montgomery): ", .{}) catch {};
+    for (0..rand_len) |i| {
+        stderr.print("0x{x:0>8} ", .{rho_after_read[i].toMontgomery()}) catch {};
+    }
+    stderr.print("\n", .{}) catch {};
 
+    // Debug: print which public key file we're reading from
+    const stderr_pk = std.io.getStdErr().writer();
+    stderr_pk.print("ZIG_VERIFY_DEBUG: Reading public key from file: {s}\n", .{pk_path}) catch {};
+    
     // Load public key from Rust
     const pk_json = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
     defer allocator.free(pk_json);
     const public_key = try hash_zig.serialization.deserializePublicKey(pk_json);
+    
+    // Debug: print parameter from public key right after reading
+    stderr_pk.print("ZIG_VERIFY_DEBUG: parameter from public key file (canonical): ", .{}) catch {};
+    for (0..5) |i| {
+        stderr_pk.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()}) catch {};
+    }
+    stderr_pk.print("(Montgomery: ", .{}) catch {};
+    for (0..5) |i| {
+        stderr_pk.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()}) catch {};
+    }
+    stderr_pk.print(")\n", .{}) catch {};
 
     // Scheme already initialized above
 

@@ -968,6 +968,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Apply Poseidon2-16 hash (matching Rust's poseidon_compress with CHAIN_COMPRESSION_WIDTH=16)
         // Rust uses poseidon2_16() for chain hashing, not poseidon2_24()
+        // hashFieldElements16 uses compress internally which does permute + feed-forward
         const hash_result = try self.poseidon2.hashFieldElements16(self.allocator, combined_input);
         defer self.allocator.free(hash_result);
 
@@ -2538,12 +2539,32 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return rng_flow.generateRandomDomainSingleWithRng(self, rng);
     }
 
+    /// Key generation return type
+    pub const KeyGenResult = struct {
+        public_key: GeneralizedXMSSPublicKey,
+        secret_key: *GeneralizedXMSSSecretKey,
+    };
+
     /// Key generation (matching Rust key_gen exactly)
     pub fn keyGen(
         self: *GeneralizedXMSSSignatureScheme,
         activation_epoch: usize,
         num_active_epochs: usize,
-    ) !struct { public_key: GeneralizedXMSSPublicKey, secret_key: *GeneralizedXMSSSecretKey } {
+    ) !KeyGenResult {
+        // Generate random parameter and PRF key (matching Rust order exactly)
+        const parameter = try self.generateRandomParameter();
+        const prf_key = try self.generateRandomPRFKey();
+        return self.keyGenWithParameter(activation_epoch, num_active_epochs, parameter, prf_key);
+    }
+
+    /// Key generation with provided parameter and PRF key (for reconstructing keys from serialized data)
+    pub fn keyGenWithParameter(
+        self: *GeneralizedXMSSSignatureScheme,
+        activation_epoch: usize,
+        num_active_epochs: usize,
+        parameter: [5]FieldElement,
+        prf_key: [32]u8,
+    ) !KeyGenResult {
         const lifetime = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime);
 
         // Validate activation parameters
@@ -2563,10 +2584,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const expanded_activation_epoch = activation_epoch;
         const expanded_num_active_epochs = num_active_epochs;
 
-        // Generate random parameter and PRF key (matching Rust order exactly)
-        const parameter = try self.generateRandomParameter();
-
-        const prf_key = try self.generateRandomPRFKey();
+        // CRITICAL: Consume RNG state to match what keyGen() would do
+        // generateRandomParameter() uses peekRngBytes() which doesn't consume, but
+        // generateRandomPRFKey() consumes 32 bytes via rng.fill()
+        // So we need to consume 32 bytes to match the RNG state after keyGen()'s parameter/PRF key generation
+        var dummy_prf_key: [32]u8 = undefined;
+        self.rng.fill(&dummy_prf_key);
 
         // Consume RNG state for padding AFTER parameter generation to match Rust's HashTreeLayer::padded
         // This happens in Rust's HashSubTree::new_top_tree call, which occurs after parameter generation
@@ -2679,6 +2702,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             log.print("0x{x:0>8} ", .{fe.value});
         }
         log.print("\n", .{});
+        
+        // CRITICAL DEBUG: Print parameter BEFORE creating secret key
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{}) catch {};
+        for (0..5) |i| {
+            stderr.print("0x{x:0>8} ", .{parameter[i].toCanonical()}) catch {};
+        }
+        stderr.print("(Montgomery: ", .{}) catch {};
+        for (0..5) |i| {
+            stderr.print("0x{x:0>8} ", .{parameter[i].toMontgomery()}) catch {};
+        }
+        stderr.print(")\n", .{}) catch {};
+        
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
             prf_key,
@@ -2690,6 +2726,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             left_bottom_tree,
             right_bottom_tree,
         );
+
+        // CRITICAL DEBUG: Verify the parameter is correctly stored in the secret key
+        stderr.print("ZIG_KEYGEN_DEBUG: Secret key parameter after init (canonical): ", .{}) catch {};
+        for (0..5) |i| {
+            stderr.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+        }
+        stderr.print("(Montgomery: ", .{}) catch {};
+        for (0..5) |i| {
+            stderr.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+        }
+        stderr.print(")\n", .{}) catch {};
 
         return .{
             .public_key = public_key,
@@ -2818,9 +2865,46 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 rho_fixed[i] = FieldElement{ .value = 0 };
             }
 
+            // Debug: print rho_slice vs rho_fixed to verify they match
+            const stderr_rho = std.io.getStdErr().writer();
+            stderr_rho.print("ZIG_SIGN_DEBUG: rho_slice (used for encoding, Montgomery): ", .{}) catch {};
+            for (0..rand_len) |i| {
+                stderr_rho.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()}) catch {};
+            }
+            stderr_rho.print("\n", .{}) catch {};
+            stderr_rho.print("ZIG_SIGN_DEBUG: rho_fixed (stored in signature, Montgomery): ", .{}) catch {};
+            for (0..rand_len) |i| {
+                stderr_rho.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()}) catch {};
+            }
+            stderr_rho.print("\n", .{}) catch {};
+
+            // Debug: print parameter used for encoding (for Zig→Zig debugging, only for successful attempt)
+            // CRITICAL: Print parameter BEFORE calling deriveTargetSumEncoding
+            const stderr_param_before = std.io.getStdErr().writer();
+            stderr_param_before.print("ZIG_SIGN_DEBUG: secret_key.parameter BEFORE encoding (canonical): ", .{}) catch {};
+            for (0..5) |i| {
+                stderr_param_before.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+            }
+            stderr_param_before.print("(Montgomery: ", .{}) catch {};
+            for (0..5) |i| {
+                stderr_param_before.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+            }
+            stderr_param_before.print(")\n", .{}) catch {};
+            
             // Try to encode with this randomness
             const encoding_result = self.deriveTargetSumEncoding(secret_key.parameter, epoch, rho_slice, message);
             if (encoding_result) |x_val| {
+                // Debug: print parameter after encoding succeeds (for comparison with verification)
+                const stderr_param = std.io.getStdErr().writer();
+                stderr_param.print("ZIG_SIGN_DEBUG: parameter used for encoding (canonical): ", .{}) catch {};
+                for (0..5) |i| {
+                    stderr_param.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+                }
+                stderr_param.print("(Montgomery: ", .{}) catch {};
+                for (0..5) |i| {
+                    stderr_param.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+                }
+                stderr_param.print(")\n", .{}) catch {};
                 x = x_val;
                 encoding_succeeded = true;
                 break;
@@ -2896,6 +2980,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
         }
 
+        // Debug: print rho values before creating signature (for Zig→Zig debugging)
+        const rand_len_debug = self.lifetime_params.rand_len_fe;
+        const stderr_sign = std.io.getStdErr().writer();
+        stderr_sign.print("ZIG_SIGN_DEBUG: rho before signature creation (Montgomery): ", .{}) catch {};
+        for (0..rand_len_debug) |i| {
+            stderr_sign.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()}) catch {};
+        }
+        stderr_sign.print("\n", .{}) catch {};
+        
         // Create signature with proper error handling
         const signature = GeneralizedXMSSSignature.init(self.allocator, path, rho_fixed, hashes) catch |err| {
             // Clean up allocations if signature creation fails
@@ -2940,16 +3033,45 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const rho = signature.getRho();
 
         // Debug: log rho values (only first rand_len_fe elements are used)
+        // Use stderr to ensure output always appears (bypasses build_options)
         const rand_len = self.lifetime_params.rand_len_fe;
-        log.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements): ", .{rand_len});
+        const stderr = std.io.getStdErr().writer();
+        // Print a test line first to verify we reach this code
+        stderr.print("ZIG_VERIFY_DEBUG: About to print rho, rand_len={}\n", .{rand_len}) catch {};
+        // Debug: print rho in BOTH Montgomery and canonical to verify it matches what we read
+        stderr.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, Montgomery): ", .{rand_len}) catch {};
         for (0..rand_len) |i| {
-            log.print("0x{x:0>8} ", .{rho[i].value});
+            stderr.print("0x{x:0>8} ", .{rho[i].toMontgomery()}) catch {};
         }
-        log.print("\n", .{});
+        stderr.print("\n", .{}) catch {};
+        stderr.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, canonical): ", .{rand_len}) catch {};
+        for (0..rand_len) |i| {
+            stderr.print("0x{x:0>8} ", .{rho[i].toCanonical()}) catch {};
+        }
+        stderr.print("\n", .{}) catch {};
 
         // Use parameter as-is (canonical); Poseidon handles Montgomery internally
         // Only use first rand_len_fe elements of rho (6 for lifetime 2^18, 7 for lifetime 2^8)
         const rho_slice = rho[0..rand_len];
+        
+        // Debug: print rho_slice used for encoding (for Zig→Zig debugging)
+        stderr.print("ZIG_VERIFY_DEBUG: rho_slice used for encoding (Montgomery): ", .{}) catch {};
+        for (0..rand_len) |i| {
+            stderr.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()}) catch {};
+        }
+        stderr.print("\n", .{}) catch {};
+        
+        // Debug: print parameter used for encoding (for Zig→Zig debugging)
+        stderr.print("ZIG_VERIFY_DEBUG: parameter used for encoding (canonical): ", .{}) catch {};
+        for (0..5) |i| {
+            stderr.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()}) catch {};
+        }
+        stderr.print("(Montgomery: ", .{}) catch {};
+        for (0..5) |i| {
+            stderr.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()}) catch {};
+        }
+        stderr.print(")\n", .{}) catch {};
+        
         const chunks = try self.applyTopLevelPoseidonMessageHash(public_key.parameter, epoch, rho_slice, message);
         defer self.allocator.free(chunks);
 
@@ -2962,7 +3084,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var encoding_sum: usize = 0;
         for (x) |chunk| encoding_sum += chunk;
         // Always print to stderr for verification testing (bypasses build_options)
-        const stderr = std.io.getStdErr().writer();
+        // Reuse stderr from above (already declared)
         stderr.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum}) catch {};
         stderr.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{}) catch {};
         for (0..@min(5, x.len)) |i| {
@@ -3000,17 +3122,21 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const steps: u8 = base_minus_one - start_pos_in_chain;
 
             if (i == 0 or i == 2) {
-                const initial_canonical = domain[0].value;
-                const initial_monty = current[0].value;
-                log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_canonical[0]=0x{x:0>8} initial_monty[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_canonical, initial_monty });
+                // domain[0] is in Montgomery form (we read it as Montgomery)
+                const initial_monty = domain[0].value;
+                const initial_canonical = domain[0].toCanonical();
+                const stderr_writer = std.io.getStdErr().writer();
+                stderr_writer.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical }) catch {};
             }
 
             // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
             // Rust: for j in 0..steps { tweak = chain_tweak(epoch, chain_index, start_pos_in_chain + j + 1) }
             for (0..steps) |j| {
                 const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
-                if (i == 0) {
-                    log.print("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8}\n", .{ i, j, pos_in_chain, current[0].value });
+                if (i == 0 and j == 0) {
+                    // Debug: print inputs to first chain step for comparison with Rust
+                    const stderr_writer = std.io.getStdErr().writer();
+                    stderr_writer.print("ZIG_CHAIN_DEBUG: Chain {} step {} inputs (Montgomery): param[0]=0x{x:0>8} tweak_pos={} current[0]=0x{x:0>8}\n", .{ i, j, public_key.parameter[0].value, pos_in_chain, current[0].value }) catch {};
                 }
                 const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
                 // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
@@ -3019,8 +3145,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 for (hash_len..8) |k| {
                     current[k] = FieldElement{ .value = 0 };
                 }
-                if (i == 0) {
-                    log.print("ZIG_VERIFY_DEBUG: Chain {} step {}: next[0]=0x{x:0>8}\n", .{ i, j, current[0].value });
+                if (i == 0 and j == 0) {
+                    const stderr_writer = std.io.getStdErr().writer();
+                    stderr_writer.print("ZIG_CHAIN_DEBUG: Chain {} step {} output (Montgomery): next[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ i, j, next[0].value, next[0].toCanonical() }) catch {};
                 }
             }
 
