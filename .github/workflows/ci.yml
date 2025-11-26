@@ -204,3 +204,183 @@ jobs:
       
       - name: Build library
         run: zig build
+
+  performance-benchmark-2-32:
+    name: Performance Benchmark (Lifetime 2^32)
+    runs-on: ubuntu-latest
+    needs: test
+    # Only run on push to main branches (not PRs) since this is time-consuming
+    if: |
+      github.event_name == 'push' && 
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop') &&
+      needs.test.outputs.has_zig_changes == 'true'
+    timeout-minutes: 30  # Allow up to 30 minutes for keygen + tests
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      
+      - name: Verify Zig installation
+        run: zig version
+      
+      - name: Clear Zig cache and fetch dependencies
+        shell: bash
+        run: |
+          echo "Clearing Zig cache and fetching dependencies..."
+          rm -rf ~/.cache/zig || true
+          rm -rf .zig-cache || true
+          rm -rf /tmp/zig-* || true
+          zig fetch --save=zig_poseidon https://github.com/blockblaz/zig-poseidon/archive/main.tar.gz
+          echo "Dependencies fetched successfully"
+      
+      - name: Run performance benchmark (Lifetime 2^32, 256 active epochs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=========================================="
+          echo "Performance Benchmark: Lifetime 2^32"
+          echo "Active Epochs: 256"
+          echo "Build Mode: ReleaseFast"
+          echo "=========================================="
+          echo ""
+          
+          # Run the benchmark with ReleaseFast optimization and capture full output
+          zig build test-lifetimes \
+            -Doptimize=ReleaseFast \
+            -Denable-lifetime-2-32=true \
+            2>&1 | tee benchmark_output.txt || {
+            echo "❌ Benchmark failed"
+            exit 1
+          }
+          
+          # Parse the output to extract performance metrics
+          awk '
+          BEGIN {
+              in_lifetime_2_32 = 0
+              epoch_count = 0
+          }
+          /Testing Lifetime: 2\^32/ {
+              in_lifetime_2_32 = 1
+              epoch_count = 0
+              delete sign_times
+              delete verify_times
+              delete epochs
+          }
+          in_lifetime_2_32 && /Key Generation Time:/ {
+              for (i=1; i<=NF; i++) {
+                  if ($i == "seconds") {
+                      keygen_s = $(i-1)
+                      break
+                  }
+              }
+              for (i=1; i<=NF; i++) {
+                  if ($i ~ /ms\)/) {
+                      keygen_ms = $(i-1)
+                      gsub(/\(/, "", keygen_ms)
+                      break
+                  }
+              }
+          }
+          in_lifetime_2_32 && /✅ Epoch/ {
+              epoch_count++
+              epoch = $0
+              gsub(/.*Epoch /, "", epoch)
+              gsub(/:.*/, "", epoch)
+              epochs[epoch_count] = epoch
+              
+              sign = $0
+              gsub(/.*Sign=/, "", sign)
+              gsub(/ms.*/, "", sign)
+              sign_times[epoch_count] = sign + 0
+              
+              verify = $0
+              gsub(/.*Verify=/, "", verify)
+              gsub(/ms.*/, "", verify)
+              verify_times[epoch_count] = verify + 0
+          }
+          in_lifetime_2_32 && /✅ All tests passed for lifetime 2\^32/ {
+              print ""
+              print "============================================================"
+              print "LIFETIME 2^32 PERFORMANCE METRICS"
+              print "============================================================"
+              print ""
+              print "Key Generation:"
+              printf "  Time: %s seconds (%s ms)\n", keygen_s, keygen_ms
+              print ""
+              print "Signing Performance (" epoch_count " epochs):"
+              sum_sign = 0
+              min_sign = 999999
+              max_sign = 0
+              min_epoch_idx = 0
+              max_epoch_idx = 0
+              for (i=1; i<=epoch_count; i++) {
+                  sum_sign += sign_times[i]
+                  if (sign_times[i] < min_sign) {
+                      min_sign = sign_times[i]
+                      min_epoch_idx = i
+                  }
+                  if (sign_times[i] > max_sign) {
+                      max_sign = sign_times[i]
+                      max_epoch_idx = i
+                  }
+              }
+              avg_sign = sum_sign / epoch_count
+              printf "  Average: %.3f ms\n", avg_sign
+              printf "  Min:     %.3f ms (epoch %s)\n", min_sign, epochs[min_epoch_idx]
+              printf "  Max:     %.3f ms (epoch %s)\n", max_sign, epochs[max_epoch_idx]
+              print ""
+              print "Verification Performance (" epoch_count " epochs):"
+              sum_verify = 0
+              min_verify = 999999
+              max_verify = 0
+              for (i=1; i<=epoch_count; i++) {
+                  sum_verify += verify_times[i]
+                  if (verify_times[i] < min_verify) min_verify = verify_times[i]
+                  if (verify_times[i] > max_verify) max_verify = verify_times[i]
+              }
+              avg_verify = sum_verify / epoch_count
+              printf "  Average: %.3f ms\n", avg_verify
+              printf "  Min:     %.3f ms\n", min_verify
+              printf "  Max:     %.3f ms\n", max_verify
+              print ""
+              print "============================================================"
+          }
+          ' benchmark_output.txt > benchmark_summary.txt || true
+          
+          # Display the summary
+          echo ""
+          echo "=========================================="
+          echo "Benchmark Summary"
+          echo "=========================================="
+          if [ -s benchmark_summary.txt ]; then
+            cat benchmark_summary.txt
+          else
+            echo "⚠️  Could not extract summary. Showing key metrics from output:"
+            echo ""
+            echo "Key Generation Time:"
+            grep -E "Key Generation Time:" benchmark_output.txt || echo "  Not found"
+            echo ""
+            echo "Sample Signing Performance:"
+            grep -E "✅ Epoch.*Sign=" benchmark_output.txt | head -3 || echo "  Not found"
+            echo ""
+            echo "Sample Verification Performance:"
+            grep -E "✅ Epoch.*Verify=" benchmark_output.txt | head -3 || echo "  Not found"
+          fi
+          
+          echo ""
+          echo "✅ Performance benchmark completed"
+      
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-2-32
+          path: |
+            benchmark_output.txt
+            benchmark_summary.txt
+          retention-days: 30
