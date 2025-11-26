@@ -4,7 +4,7 @@
 echo "Running benchmark for Lifetime 2^32..."
 echo ""
 
-zig build test-lifetimes 2>&1 | awk '
+zig build test-lifetimes -Denable-lifetime-2-32=true 2>&1 | awk '
 BEGIN {
     in_lifetime_2_32 = 0
     epoch_count = 0

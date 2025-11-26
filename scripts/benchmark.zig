@@ -14,11 +14,12 @@ pub fn main() !void {
     // Removed debug prints for performance
 
     var lifetime_power: u8 = 18; // Default to 2^18 for performance testing
+    var active_epochs: usize = 256; // Default active epochs
     if (args.len > 1) {
         lifetime_power = std.fmt.parseInt(u8, args[1], 10) catch 18;
-        // Removed debug print for performance
-    } else {
-        // Removed debug print for performance
+    }
+    if (args.len > 2) {
+        active_epochs = std.fmt.parseInt(usize, args[2], 10) catch 256;
     }
 
     log.print("Hash-Zig Performance Benchmark\n", .{});
@@ -53,7 +54,7 @@ pub fn main() !void {
         // Key generation benchmark - this is the main focus
         log.print("Starting key generation...\n", .{});
         const keygen_start = std.time.nanoTimestamp();
-        var keypair = try sig_scheme.keyGen(0, @intCast(num_signatures));
+        var keypair = try sig_scheme.keyGen(0, active_epochs);
         const keygen_end = std.time.nanoTimestamp();
         defer keypair.secret_key.deinit();
 
@@ -61,7 +62,7 @@ pub fn main() !void {
         const keygen_duration_sec = @as(f64, @floatFromInt(keygen_duration_ns)) / 1_000_000_000.0;
 
         // Calculate performance metrics
-        const total_signatures = num_signatures;
+        const total_signatures = active_epochs;
         const signatures_per_sec = @as(f64, @floatFromInt(total_signatures)) / keygen_duration_sec;
         const time_per_signature_ms = (keygen_duration_sec * 1000.0) / @as(f64, @floatFromInt(total_signatures));
 

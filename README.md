@@ -249,6 +249,46 @@ DEBUG: Tree tweak level=1 pos=8 -> 0x...
 - ✅ **Debugging**: Use `-Ddebug-logs=true` when investigating issues
 - ✅ **Zero overhead**: When disabled, logging has no performance impact
 
+## Performance Benchmarks
+
+Performance measurements are taken using `zig build test-lifetimes` with ReleaseFast optimization. All benchmarks are run with debug logging disabled for accurate performance measurements.
+
+### Lifetime 2^32 (1024 Active Epochs)
+
+**Key Generation:**
+- Time: **666.726 seconds** (~11.1 minutes)
+
+**Signing Performance (5 epochs tested):**
+- Average: **164.715 ms**
+- Min: **16.543 ms** (epoch 1)
+- Max: **578.319 ms** (epoch 0)
+
+**Verification Performance (5 epochs tested):**
+- Average: **4.510 ms**
+- Min: **4.340 ms**
+- Max: **4.638 ms**
+
+> **Note**: Key generation time scales roughly linearly with the number of active epochs. Using 256 active epochs instead of 1024 reduces key generation time to approximately **166-170 seconds** (~2.8 minutes), about 1/4 the time.
+
+### Running Benchmarks
+
+To run benchmarks for specific lifetimes:
+
+```bash
+# Lifetime 2^8 and 2^18 (default)
+zig build test-lifetimes
+
+# Lifetime 2^32 (requires flag)
+zig build test-lifetimes -Denable-lifetime-2-32=true
+
+# Using benchmark scripts for formatted output
+bash scripts/benchmark_lifetime_2_32.sh
+bash scripts/benchmark_lifetime_2_18.sh
+bash scripts/benchmark_lifetime_2_8.sh
+```
+
+All benchmarks are automatically built in ReleaseFast mode for accurate performance measurements.
+
 ## Development
 
 Key commands:

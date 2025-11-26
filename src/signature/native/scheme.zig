@@ -2588,32 +2588,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // generateRandomParameter() uses peekRngBytes() which doesn't consume, but
         // generateRandomPRFKey() consumes 32 bytes via rng.fill()
         // So we need to consume 32 bytes to match the RNG state after keyGen()'s parameter/PRF key generation
+        // This ensures RNG state matches when keyGenWithParameter is called from keyGen()
         var dummy_prf_key: [32]u8 = undefined;
         self.rng.fill(&dummy_prf_key);
 
-        // Consume RNG state for padding AFTER parameter generation to match Rust's HashTreeLayer::padded
-        // This happens in Rust's HashSubTree::new_top_tree call, which occurs after parameter generation
-        // The parameters that end up in the public key are generated BEFORE this padding consumption
-        const needs_front_padding = (0 % 2) != 0; // start_index = 0
-        const needs_back_padding = (0 + num_bottom_trees) % 2 != 0;
-
-        if (needs_front_padding) {
-            // Consume RNG state for front padding (matching Rust TH::rand_domain)
-            // HASH_LEN = 8 for lifetime_2_to_the_8
-            for (0..8) |_| {
-                _ = self.rng.random().int(u32);
-            }
-            log.print("DEBUG: Consumed RNG state for front padding (8 elements)\n", .{});
-        }
-
-        if (needs_back_padding) {
-            // Consume RNG state for back padding (matching Rust TH::rand_domain)
-            // HASH_LEN = 8 for lifetime_2_to_the_8
-            for (0..8) |_| {
-                _ = self.rng.random().int(u32);
-            }
-            log.print("DEBUG: Consumed RNG state for back padding (8 elements)\n", .{});
-        }
+        // NOTE: RNG consumption for padding happens naturally during tree building
+        // in buildTopTreeLayers() via padLayer() and padLayerWithRng() calls.
+        // We don't need to pre-consume RNG state for padding here - it will be consumed at the
+        // correct time during the actual tree construction.
 
         // Generate bottom trees and collect their roots as arrays of 8 field elements
         var roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);

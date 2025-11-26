@@ -145,10 +145,9 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
     // Prefer deterministic reconstruction from the original seed so that
     // signing follows the exact same path as in-memory key generation.
     const seed_file = std.fs.cwd().openFile("tmp/zig_seed.hex", .{}) catch null;
-    var keypair: hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult = undefined;
+    
     var scheme: *hash_zig.GeneralizedXMSSSignatureScheme = undefined;
-
-    if (seed_file) |file| {
+    const keypair: hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult = if (seed_file) |file| blk: {
         defer file.close();
 
         // Read seed hex string
@@ -165,13 +164,11 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
 
         // Rebuild scheme and keypair exactly as in keygenCommand
         scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
-        defer scheme.deinit();
 
-        keypair = try scheme.keyGen(0, 256);
-        // NOTE: keypair.secret_key will be deinit'd below
-
+        const kp = try scheme.keyGen(0, 256);
         stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from seed (deterministic path)\n", .{}) catch {};
-    } else {
+        break :blk kp;
+    } else blk: {
         // Fallback: use legacy deserialization path (PRF key + parameter).
         // This path may not perfectly match original RNG state, but keeps
         // compatibility if seed file is missing.
@@ -181,13 +178,14 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
         const sk_data = try hash_zig.serialization.deserializeSecretKeyData(allocator, sk_json);
 
         scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, sk_data.prf_key);
-        defer scheme.deinit();
 
-        keypair = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key);
-
+        const kp = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key);
         stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from PRF key + parameter (fallback path)\n", .{}) catch {};
-    }
-
+        break :blk kp;
+    };
+    
+    // Keep scheme alive for signing - it's needed for the sign() call
+    defer scheme.deinit();
     defer keypair.secret_key.deinit();
     
     const secret_key = keypair.secret_key;
