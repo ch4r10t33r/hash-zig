@@ -359,20 +359,15 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
     }
 
     // Parse parameter
-    // NOTE: The parameter in the JSON file is stored in Montgomery form (internal representation),
-    // not canonical form, even though serializeFieldElement uses toCanonical().
-    // This is a legacy format issue. We read it as Montgomery to match the stored format.
+    // CRITICAL: serializeFieldElement uses toCanonical(), so the JSON file contains canonical values.
+    // We must read them as canonical and convert to Montgomery internally via parseFieldElementFromJsonValue.
     const param_array = obj.get("parameter") orelse return error.MissingParameterField;
     if (param_array != .array or param_array.array.items.len != 5) return error.InvalidJsonFormat;
 
     var parameter: [5]FieldElement = undefined;
     for (param_array.array.items, 0..) |item, i| {
-        // Read as integer and treat as Montgomery form (matching the stored format)
-        const int_val: u32 = switch (item) {
-            .integer => |i_val| if (i_val < 0) return error.InvalidJsonFormat else @intCast(i_val),
-            else => return error.InvalidJsonFormat,
-        };
-        parameter[i] = FieldElement.fromMontgomery(int_val);
+        // Read as canonical (matching serializeFieldElement which uses toCanonical())
+        parameter[i] = try parseFieldElementFromJsonValue(item);
     }
 
     return GeneralizedXMSSPublicKey.init(root, parameter);
@@ -467,20 +462,15 @@ pub fn deserializeSecretKeyData(allocator: Allocator, json_str: []const u8) !Des
     };
 
     // Parse parameter
-    // NOTE: The parameter in the JSON file is stored in Montgomery form (internal representation),
-    // not canonical form, even though serializeFieldElement uses toCanonical().
-    // This is a legacy format issue. We read it as Montgomery to match the stored format.
+    // CRITICAL: serializeFieldElement uses toCanonical(), so the JSON file contains canonical values.
+    // We must read them as canonical and convert to Montgomery internally via parseFieldElementFromJsonValue.
     const param_array = obj.get("parameter") orelse return error.MissingParameterField;
     if (param_array != .array or param_array.array.items.len != 5) return error.InvalidJsonFormat;
 
     var parameter: [5]FieldElement = undefined;
     for (param_array.array.items, 0..) |item, i| {
-        // Read as integer and treat as Montgomery form (matching the stored format)
-        const int_val: u32 = switch (item) {
-            .integer => |i_val| if (i_val < 0) return error.InvalidJsonFormat else @intCast(i_val),
-            else => return error.InvalidJsonFormat,
-        };
-        parameter[i] = FieldElement.fromMontgomery(int_val);
+        // Read as canonical (matching serializeFieldElement which uses toCanonical())
+        parameter[i] = try parseFieldElementFromJsonValue(item);
     }
 
     return DeserializedSecretKeyData{
