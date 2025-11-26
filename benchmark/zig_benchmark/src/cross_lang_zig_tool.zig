@@ -1,7 +1,7 @@
 //! Zig tool for cross-language compatibility testing
 //! 
 //! This tool provides:
-//! - Key generation (lifetime 2^8)
+//! - Key generation (supports lifetime 2^8, 2^18, 2^32)
 //! - Serialization of secret/public keys to bincode JSON
 //! - Signing messages
 //! - Verifying signatures from Rust
@@ -9,6 +9,38 @@
 const std = @import("std");
 const hash_zig = @import("hash-zig");
 const Allocator = std.mem.Allocator;
+const KeyLifetime = hash_zig.KeyLifetimeRustCompat;
+
+fn parseLifetime(lifetime_str: []const u8) !KeyLifetime {
+    if (std.mem.eql(u8, lifetime_str, "2^8")) {
+        return .lifetime_2_8;
+    } else if (std.mem.eql(u8, lifetime_str, "2^18")) {
+        return .lifetime_2_18;
+    } else if (std.mem.eql(u8, lifetime_str, "2^32")) {
+        return .lifetime_2_32;
+    } else {
+        return error.InvalidLifetime;
+    }
+}
+
+fn readLifetimeFromFile(allocator: Allocator) !KeyLifetime {
+    const lifetime_json = std.fs.cwd().readFileAlloc(allocator, "tmp/zig_lifetime.txt", std.math.maxInt(usize)) catch |err| {
+        if (err == error.FileNotFound) {
+            // Default to 2^8 for backward compatibility
+            return .lifetime_2_8;
+        }
+        return err;
+    };
+    defer allocator.free(lifetime_json);
+    
+    // Remove trailing newline if present
+    var lifetime_str = lifetime_json;
+    if (lifetime_str.len > 0 and lifetime_str[lifetime_str.len - 1] == '\n') {
+        lifetime_str = lifetime_str[0..lifetime_str.len - 1];
+    }
+    
+    return parseLifetime(lifetime_str);
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,16 +52,21 @@ pub fn main() !void {
 
     if (args.len < 2) {
         std.debug.print("Usage:\n", .{});
-        std.debug.print("  {s} keygen [seed_hex]                    - Generate keypair and save to tmp/zig_sk.json and tmp/zig_pk.json\n", .{args[0]});
-        std.debug.print("  {s} sign <message> <epoch>               - Sign message using tmp/zig_sk.json, save to tmp/zig_sig.bin (3116 bytes)\n", .{args[0]});
+        std.debug.print("  {s} keygen [seed_hex] [lifetime]        - Generate keypair (lifetime: 2^8, 2^18, or 2^32, default: 2^8)\n", .{args[0]});
+        std.debug.print("  {s} sign <message> <epoch>               - Sign message using tmp/zig_sk.json, save to tmp/zig_sig.bin\n", .{args[0]});
         std.debug.print("  {s} verify <rust_sig.bin> <rust_pk.json> <message> <epoch> - Verify Rust signature\n", .{args[0]});
         std.process.exit(1);
     }
 
     if (std.mem.eql(u8, args[1], "keygen")) {
         const seed_hex = if (args.len > 2) args[2] else null;
+        const lifetime_str = if (args.len > 3) args[3] else "2^8";
+        const lifetime = parseLifetime(lifetime_str) catch {
+            std.debug.print("Error: Invalid lifetime '{s}'. Must be one of: 2^8, 2^18, 2^32\n", .{lifetime_str});
+            std.process.exit(1);
+        };
         const stderr = std.io.getStdErr().writer();
-        keygenCommand(allocator, seed_hex) catch |err| {
+        keygenCommand(allocator, seed_hex, lifetime) catch |err| {
             stderr.print("ZIG_MAIN_ERROR: keygenCommand failed with error {s}\n", .{@errorName(err)}) catch {};
             return err;
         };
@@ -40,7 +77,8 @@ pub fn main() !void {
         }
         const message = args[2];
         const epoch = try std.fmt.parseUnsigned(u32, args[3], 10);
-        try signCommand(allocator, message, epoch);
+        const lifetime = try readLifetimeFromFile(allocator);
+        try signCommand(allocator, message, epoch, lifetime);
     } else if (std.mem.eql(u8, args[1], "verify")) {
         if (args.len < 6) {
             std.debug.print("Usage: {s} verify <rust_sig.bin> <rust_pk.json> <message> <epoch>\n", .{args[0]});
@@ -50,20 +88,33 @@ pub fn main() !void {
         const pk_path = args[3];
         const message = args[4];
         const epoch = try std.fmt.parseUnsigned(u32, args[5], 10);
-        try verifyCommand(allocator, sig_path, pk_path, message, epoch);
+        const lifetime = try readLifetimeFromFile(allocator);
+        try verifyCommand(allocator, sig_path, pk_path, message, epoch, lifetime);
     } else {
         std.debug.print("Unknown command: {s}\n", .{args[1]});
         std.process.exit(1);
     }
 }
 
-fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8) !void {
-    std.debug.print("Generating keypair with lifetime 2^8...\n", .{});
+fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifetime) !void {
+    const lifetime_str = switch (lifetime) {
+        .lifetime_2_8 => "2^8",
+        .lifetime_2_18 => "2^18",
+        .lifetime_2_32 => "2^32",
+    };
+    std.debug.print("Generating keypair with lifetime {s}...\n", .{lifetime_str});
 
     // Create tmp directory if it doesn't exist
     std.fs.cwd().makePath("tmp") catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
+
+    // Save lifetime to file for sign/verify commands
+    {
+        var lifetime_file = try std.fs.cwd().createFile("tmp/zig_lifetime.txt", .{});
+        defer lifetime_file.close();
+        try lifetime_file.writeAll(lifetime_str);
+    }
 
     var seed: [32]u8 = undefined;
     var seed_str: []const u8 = undefined;
@@ -85,7 +136,7 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8) !void {
     }
 
     // Initialize signature scheme with seed
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, seed);
     defer scheme.deinit();
 
     // Persist seed so that signing can reconstruct the exact same keypair
@@ -137,7 +188,7 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8) !void {
     std.debug.print("Keypair generated successfully!\n", .{});
 }
 
-fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
+fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: KeyLifetime) !void {
     std.debug.print("Signing message: '{s}' (epoch: {})\n", .{ message, epoch });
 
     const stderr = std.io.getStdErr().writer();
@@ -163,7 +214,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
         _ = try std.fmt.hexToBytes(&seed, hex_slice);
 
         // Rebuild scheme and keypair exactly as in keygenCommand
-        scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
+        scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, seed);
 
         const kp = try scheme.keyGen(0, 256);
         stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from seed (deterministic path)\n", .{}) catch {};
@@ -177,7 +228,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
 
         const sk_data = try hash_zig.serialization.deserializeSecretKeyData(allocator, sk_json);
 
-        scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, sk_data.prf_key);
+        scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, sk_data.prf_key);
 
         const kp = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key);
         stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from PRF key + parameter (fallback path)\n", .{}) catch {};
@@ -261,7 +312,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32) !void {
     std.debug.print("Message signed successfully!\n", .{});
 }
 
-fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8, message: []const u8, epoch: u32) !void {
+fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8, message: []const u8, epoch: u32, lifetime: KeyLifetime) !void {
     std.debug.print("Verifying signature from Rust...\n", .{});
     std.debug.print("  Signature: {s}\n", .{sig_path});
     std.debug.print("  Public key: {s}\n", .{pk_path});
@@ -275,7 +326,7 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     // Load signature from binary format (bincode)
     // Import bincode functions from remote_hash_tool
     const remote_hash_tool = @import("remote_hash_tool.zig");
-    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
+    var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
     defer scheme.deinit();
     
     const rand_len = scheme.lifetime_params.rand_len_fe;

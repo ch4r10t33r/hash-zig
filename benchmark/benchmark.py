@@ -228,10 +228,6 @@ def command_duration(start: float) -> float:
 
 def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResult:
     print(f"\n-- Rust key generation & signing ({cfg.lifetime}) --")
-    # Note: cross-lang-rust-tool is hardcoded to lifetime 2^8, so skip if not 2^8
-    if cfg.lifetime != "2^8":
-        print(f"  Skipping: cross-lang-rust-tool only supports lifetime 2^8")
-        return OperationResult(False, 0.0, "", "Unsupported lifetime")
     
     # Setup tmp directory in project root
     tmp_dir = RUST_PROJECT / "tmp"
@@ -240,7 +236,7 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResul
     # Generate keypair first
     start = time.perf_counter()
     keygen_result = run_command(
-        [str(RUST_BIN), "keygen", cfg.seed_hex],
+        [str(RUST_BIN), "keygen", cfg.seed_hex, cfg.lifetime],
         cwd=RUST_PROJECT,
     )
     if keygen_result.returncode != 0:
@@ -269,10 +265,6 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResul
 
 def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int) -> OperationResult:
     print(f"\n-- Zig key generation & signing ({cfg.lifetime}) --")
-    # Note: cross-lang-zig-tool is hardcoded to lifetime 2^8, so skip if not 2^8
-    if cfg.lifetime != "2^8":
-        print(f"  Skipping: cross-lang-zig-tool only supports lifetime 2^8")
-        return OperationResult(False, 0.0, "", "Unsupported lifetime")
     
     # Setup tmp directory in project root
     tmp_dir = REPO_ROOT / "tmp"
@@ -281,7 +273,7 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int)
     # Generate keypair first
     start = time.perf_counter()
     keygen_result = run_command(
-        [str(ZIG_BIN), "keygen", cfg.seed_hex],
+        [str(ZIG_BIN), "keygen", cfg.seed_hex, cfg.lifetime],
         cwd=REPO_ROOT,
         timeout=zig_sign_timeout(cfg, timeout_2_32),
     )
@@ -323,10 +315,6 @@ def run_zig_verify(
     label: str,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
-    # Note: cross-lang-zig-tool is hardcoded to lifetime 2^8
-    if cfg.lifetime != "2^8":
-        print(f"  Skipping: cross-lang-zig-tool only supports lifetime 2^8")
-        return OperationResult(False, 0.0, "", "Unsupported lifetime")
     
     start = time.perf_counter()
     result = run_command(
@@ -353,10 +341,6 @@ def run_rust_verify(
     label: str,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
-    # Note: cross-lang-rust-tool is hardcoded to lifetime 2^8
-    if cfg.lifetime != "2^8":
-        print(f"  Skipping: cross-lang-rust-tool only supports lifetime 2^8")
-        return OperationResult(False, 0.0, "", "Unsupported lifetime")
     
     start = time.perf_counter()
     result = run_command(
