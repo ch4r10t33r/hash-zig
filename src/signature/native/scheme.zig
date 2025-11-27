@@ -2,9 +2,6 @@
 //! This implementation matches Rust GeneralizedXMSSSignatureScheme exactly
 
 const std = @import("std");
-const process = std.process;
-const sha256 = std.crypto.hash.sha2.Sha256;
-const Allocator = std.mem.Allocator;
 const log = @import("../../utils/log.zig");
 const FieldElement = @import("../../core/field.zig").FieldElement;
 const ParametersRustCompat = @import("../../core/params_rust_compat.zig").ParametersRustCompat;
@@ -91,9 +88,9 @@ pub const PaddedLayer = struct {
 pub const HashSubTree = struct {
     root_value: [8]FieldElement,
     layers: ?[]PaddedLayer,
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
 
-    pub fn init(allocator: Allocator, root_value: [8]FieldElement) !*HashSubTree {
+    pub fn init(allocator: std.mem.Allocator, root_value: [8]FieldElement) !*HashSubTree {
         const self = try allocator.create(HashSubTree);
         self.* = HashSubTree{
             .root_value = root_value,
@@ -104,7 +101,7 @@ pub const HashSubTree = struct {
     }
 
     pub fn initWithLayers(
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         root_value: [8]FieldElement,
         layers: []PaddedLayer,
     ) !*HashSubTree {
@@ -142,7 +139,7 @@ pub const HashSubTree = struct {
 const CACHE_MAGIC = @as(u32, 0x42544331); // "BTC1"
 
 const BottomTreeCache = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     enabled: bool,
     root_path: []u8,
     mutex: std.Thread.Mutex,
@@ -152,9 +149,9 @@ const BottomTreeCache = struct {
         CacheMismatch,
     };
 
-    pub fn init(allocator: Allocator) !BottomTreeCache {
+    pub fn init(allocator: std.mem.Allocator) !BottomTreeCache {
         var enabled = true;
-        if (process.getEnvVarOwned(allocator, "HASH_ZIG_DISABLE_BT_CACHE")) |value| {
+        if (std.process.getEnvVarOwned(allocator, "HASH_ZIG_DISABLE_BT_CACHE")) |value| {
             enabled = false;
             allocator.free(value);
         } else |err| switch (err) {
@@ -162,7 +159,7 @@ const BottomTreeCache = struct {
             else => return err,
         }
 
-        const path_env = process.getEnvVarOwned(allocator, "HASH_ZIG_BT_CACHE_DIR") catch |err| switch (err) {
+        const path_env = std.process.getEnvVarOwned(allocator, "HASH_ZIG_BT_CACHE_DIR") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => null,
             else => return err,
         };
@@ -198,7 +195,7 @@ const BottomTreeCache = struct {
         prf_key: [32]u8,
         parameter: [5]FieldElement,
     ) [64]u8 {
-        var hasher = sha256.init(.{});
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
 
         var buf8: [8]u8 = undefined;
         std.mem.writeInt(u64, &buf8, @as(u64, @intCast(log_lifetime)), .little);
@@ -242,7 +239,7 @@ const BottomTreeCache = struct {
 
     pub fn load(
         self: *BottomTreeCache,
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         log_lifetime: usize,
         prf_key: [32]u8,
         parameter: [5]FieldElement,
@@ -400,9 +397,9 @@ const BottomTreeCache = struct {
 // Hash Tree Opening for Merkle paths
 pub const HashTreeOpening = struct {
     nodes: [][8]FieldElement,
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
 
-    pub fn init(allocator: Allocator, nodes: [][8]FieldElement) !*HashTreeOpening {
+    pub fn init(allocator: std.mem.Allocator, nodes: [][8]FieldElement) !*HashTreeOpening {
         const self = try allocator.create(HashTreeOpening);
         const nodes_copy = try allocator.alloc([8]FieldElement, nodes.len);
         @memcpy(nodes_copy, nodes);
@@ -429,10 +426,10 @@ pub const GeneralizedXMSSSignature = struct {
     path: *HashTreeOpening,
     rho: [7]FieldElement, // IE::Randomness (max length; actual rand_len_fe may be smaller)
     hashes: [][8]FieldElement, // Vec<TH::Domain>
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     is_deserialized: bool, // Track if signature was deserialized from JSON (Rust→Zig)
 
-    pub fn init(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
+    pub fn init(allocator: std.mem.Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
         const self = try allocator.create(GeneralizedXMSSSignature);
         const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
         @memcpy(hashes_copy, hashes);
@@ -446,7 +443,7 @@ pub const GeneralizedXMSSSignature = struct {
         return self;
     }
 
-    pub fn initDeserialized(allocator: Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
+    pub fn initDeserialized(allocator: std.mem.Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
         const self = try allocator.create(GeneralizedXMSSSignature);
         const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
         @memcpy(hashes_copy, hashes);
@@ -480,7 +477,7 @@ pub const GeneralizedXMSSSignature = struct {
     }
 
     // Serialization method using controlled access
-    pub fn serialize(self: *const GeneralizedXMSSSignature, allocator: Allocator) ![]u8 {
+    pub fn serialize(self: *const GeneralizedXMSSSignature, allocator: std.mem.Allocator) ![]u8 {
         return serialization.serializeSignature(allocator, self);
     }
 };
@@ -508,7 +505,7 @@ pub const GeneralizedXMSSPublicKey = struct {
     }
 
     // Serialization method using controlled access
-    pub fn serialize(self: *const GeneralizedXMSSPublicKey, allocator: Allocator) ![]u8 {
+    pub fn serialize(self: *const GeneralizedXMSSPublicKey, allocator: std.mem.Allocator) ![]u8 {
         return serialization.serializePublicKey(allocator, self);
     }
 };
@@ -524,10 +521,10 @@ pub const GeneralizedXMSSSecretKey = struct {
     left_bottom_tree_index: usize,
     left_bottom_tree: *HashSubTree,
     right_bottom_tree: *HashSubTree,
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
 
     pub fn init(
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         prf_key: [32]u8,
         _parameter: [5]FieldElement,
         activation_epoch: usize,
@@ -583,7 +580,7 @@ pub const GeneralizedXMSSSecretKey = struct {
     }
 
     // Serialization method using controlled access
-    pub fn serialize(self: *const GeneralizedXMSSSecretKey, allocator: Allocator) ![]u8 {
+    pub fn serialize(self: *const GeneralizedXMSSSecretKey, allocator: std.mem.Allocator) ![]u8 {
         return serialization.serializeSecretKey(allocator, self);
     }
 
@@ -631,14 +628,14 @@ pub const GeneralizedXMSSSecretKey = struct {
 pub const GeneralizedXMSSSignatureScheme = struct {
     lifetime_params: LifetimeParams,
     poseidon2: *Poseidon2RustCompat,
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     rng: ChaCha12Rng,
     layer_cache: std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
     layer_cache_mutex: std.Thread.Mutex,
     bottom_tree_cache: BottomTreeCache,
     rng_mutex: std.Thread.Mutex, // Mutex for thread-safe RNG access during parallel tree generation
 
-    pub fn init(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
+    pub fn init(allocator: std.mem.Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
 
         // Select the correct lifetime parameters (only 3 lifetimes supported: 2^8, 2^18, 2^32)
@@ -666,7 +663,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return self;
     }
 
-    pub fn initWithSeed(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime, seed: [32]u8) !*GeneralizedXMSSSignatureScheme {
+    pub fn initWithSeed(allocator: std.mem.Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime, seed: [32]u8) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
         // Select the correct lifetime parameters (only 3 lifetimes supported: 2^8, 2^18, 2^32)
         const lifetime_params = switch (lifetime) {

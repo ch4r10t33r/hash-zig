@@ -13,7 +13,7 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
 - **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^18`. Locally, test all lifetimes (`2^8`, `2^18`, `2^32`) via `--lifetime` and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
-- **Performance optimizations** – Parallel tree generation for improved key generation performance (46.5% faster for 2^32 with 1024 active epochs).
+- **Performance optimizations** – Parallel tree generation and SIMD optimizations for improved key generation performance (46.5% faster for 2^32 with 1024 active epochs).
 - **Pure Zig** – minimal dependencies, explicit memory management, ReleaseFast-ready.
 
 ## Contents
