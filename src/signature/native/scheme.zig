@@ -1553,91 +1553,79 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const field = @import("../../core/field.zig");
         const poseidon2_simd = @import("../../hash/poseidon2_hash_simd.zig");
         
-        // Collect all inputs for the batch
-        var batch_lefts: [SIMD_WIDTH][]const FieldElement = undefined;
-        var batch_rights: [SIMD_WIDTH][]const FieldElement = undefined;
-        var batch_positions: [SIMD_WIDTH]u32 = undefined;
-        
-        for (start_idx..end_idx) |batch_offset| {
-            const pair_idx = start_idx + batch_offset;
-            const left_idx = pair_idx * 2;
-            const right_idx = pair_idx * 2 + 1;
-            
-            batch_lefts[batch_offset] = nodes[left_idx][0..hash_len];
-            batch_rights[batch_offset] = nodes[right_idx][0..hash_len];
-            batch_positions[batch_offset] = @as(u32, @intCast(parent_start + pair_idx));
-        }
-        
-        // Compute tweaks for all pairs in batch
-        const tweak_level = @as(u8, @intCast(current_level)) + 1;
-        var batch_tweaks: [SIMD_WIDTH][2]FieldElement = undefined;
-        const p: u128 = 2130706433; // KoalaBear field modulus
-        
-        for (0..SIMD_WIDTH) |lane| {
-            const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, batch_positions[lane]) << 8) | field.TWEAK_SEPARATOR_FOR_TREE_HASH;
-            batch_tweaks[lane] = [_]FieldElement{
-                FieldElement.fromCanonical(@intCast(tweak_bigint % p)),
-                FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p)),
-            };
-        }
-        
-        // Prepare combined inputs for all lanes
+        // OPTIMIZATION: Use stack-allocated arrays and optimize packing
         // Format: parameter (5) + tweak (2) + left (hash_len) + right (hash_len)
         const total_input_len = 5 + 2 + hash_len + hash_len;
+        const tweak_level = @as(u8, @intCast(current_level)) + 1;
+        const p: u128 = 2130706433; // KoalaBear field modulus
         
-        // Pack inputs vertically for SIMD processing
-        var packed_input = try self.allocator.alloc(simd_utils.PackedF, total_input_len);
-        defer self.allocator.free(packed_input);
+        // OPTIMIZATION: Stack-allocate packed input (max size known: 5+2+8+8=23)
+        var packed_input: [23]simd_utils.PackedF = undefined;
+        const packed_input_slice = packed_input[0..total_input_len];
         
+        // OPTIMIZATION: Pack directly without intermediate buffers (reduce memory overhead)
+        const actual_batch_size = end_idx - start_idx;
         var input_idx: usize = 0;
         
-        // Pack parameter (same for all lanes)
+        // OPTIMIZATION: Pack parameter using @splat (same value in all lanes) - direct packing
         for (0..5) |p_idx| {
-            var param_values: [SIMD_WIDTH]u32 = undefined;
-            for (0..SIMD_WIDTH) |lane| {
-                param_values[lane] = parameter[p_idx].value;
-            }
-            packed_input[input_idx] = simd_utils.PackedF{ .values = param_values };
+            const param_val = parameter[p_idx].value;
+            packed_input_slice[input_idx] = simd_utils.PackedF{ .values = @splat(param_val) };
             input_idx += 1;
         }
         
-        // Pack tweaks (different for each lane)
-        for (0..2) |t_idx| {
-            var tweak_values: [SIMD_WIDTH]u32 = undefined;
-            for (0..SIMD_WIDTH) |lane| {
-                tweak_values[lane] = batch_tweaks[lane][t_idx].value;
-            }
-            packed_input[input_idx] = simd_utils.PackedF{ .values = tweak_values };
-            input_idx += 1;
+        // OPTIMIZATION: Compute tweaks and pack directly (avoid intermediate buffers)
+        var tweak_values_0: [SIMD_WIDTH]u32 = undefined;
+        var tweak_values_1: [SIMD_WIDTH]u32 = undefined;
+        for (0..actual_batch_size) |lane| {
+            const pair_idx = start_idx + lane;
+            const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, @intCast(parent_start + pair_idx)) << 8) | field.TWEAK_SEPARATOR_FOR_TREE_HASH;
+            tweak_values_0[lane] = @as(u32, @intCast(tweak_bigint % p));
+            tweak_values_1[lane] = @as(u32, @intCast((tweak_bigint / p) % p));
         }
+        // Pad remaining lanes with zeros
+        @memset(tweak_values_0[actual_batch_size..], 0);
+        @memset(tweak_values_1[actual_batch_size..], 0);
         
-        // Pack left inputs (different for each lane)
+        // Pack tweaks
+        packed_input_slice[input_idx] = simd_utils.PackedF{ .values = tweak_values_0 };
+        input_idx += 1;
+        packed_input_slice[input_idx] = simd_utils.PackedF{ .values = tweak_values_1 };
+        input_idx += 1;
+        
+        // OPTIMIZATION: Pack left and right inputs directly (transpose on-the-fly, no intermediate buffer)
         for (0..hash_len) |h_idx| {
-            var left_values: [SIMD_WIDTH]u32 = undefined;
-            for (0..SIMD_WIDTH) |lane| {
-                left_values[lane] = batch_lefts[lane][h_idx].value;
+            var left_vals: [SIMD_WIDTH]u32 = undefined;
+            for (0..actual_batch_size) |lane| {
+                const pair_idx = start_idx + lane;
+                const left_idx = pair_idx * 2;
+                left_vals[lane] = nodes[left_idx][h_idx].value;
             }
-            packed_input[input_idx] = simd_utils.PackedF{ .values = left_values };
+            // Pad remaining lanes
+            @memset(left_vals[actual_batch_size..], 0);
+            packed_input_slice[input_idx] = simd_utils.PackedF{ .values = left_vals };
             input_idx += 1;
         }
-        
-        // Pack right inputs (different for each lane)
         for (0..hash_len) |h_idx| {
-            var right_values: [SIMD_WIDTH]u32 = undefined;
-            for (0..SIMD_WIDTH) |lane| {
-                right_values[lane] = batch_rights[lane][h_idx].value;
+            var right_vals: [SIMD_WIDTH]u32 = undefined;
+            for (0..actual_batch_size) |lane| {
+                const pair_idx = start_idx + lane;
+                const right_idx = pair_idx * 2 + 1;
+                right_vals[lane] = nodes[right_idx][h_idx].value;
             }
-            packed_input[input_idx] = simd_utils.PackedF{ .values = right_values };
+            // Pad remaining lanes
+            @memset(right_vals[actual_batch_size..], 0);
+            packed_input_slice[input_idx] = simd_utils.PackedF{ .values = right_vals };
             input_idx += 1;
         }
         
         // Use SIMD Poseidon2-24 compression
         var simd_poseidon2 = poseidon2_simd.Poseidon2SIMD.init(self.allocator, self.poseidon2);
-        const packed_hash_results = try simd_poseidon2.compress24SIMD(packed_input, hash_len);
+        const packed_hash_results = try simd_poseidon2.compress24SIMD(packed_input_slice, hash_len);
         defer self.allocator.free(packed_hash_results);
         
         // Extract results for each lane
-        for (0..SIMD_WIDTH) |lane| {
+        for (0..actual_batch_size) |lane| {
             const pair_idx = start_idx + lane;
             for (0..hash_len) |h_idx| {
                 parents[pair_idx][h_idx] = FieldElement{ .value = packed_hash_results[h_idx].values[lane] };
