@@ -294,6 +294,24 @@ pub fn build(b: *std.Build) void {
     const parallel_benchmark_exe_step = b.step("benchmark-parallel", "Run parallel tree generation benchmark");
     parallel_benchmark_exe_step.dependOn(&run_parallel_benchmark_exe.step);
 
+    // Performance profiling
+    const profile_module = b.createModule(.{
+        .root_source_file = b.path("scripts/profile_keygen_detailed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    profile_module.addImport("hash-zig", hash_zig_module);
+
+    const profile_exe = b.addExecutable(.{
+        .name = "profile-keygen",
+        .root_module = profile_module,
+    });
+    b.installArtifact(profile_exe);
+
+    const run_profile_exe = b.addRunArtifact(profile_exe);
+    const profile_exe_step = b.step("profile-keygen", "Run detailed key generation performance profiling");
+    profile_exe_step.dependOn(&run_profile_exe.step);
+
     // Documentation generation
     if (enable_docs) {
         const docs = b.addInstallDirectory(.{

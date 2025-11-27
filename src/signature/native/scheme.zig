@@ -910,14 +910,39 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const leafWorker = struct {
                 fn worker(ctx: *LeafComputeContext) void {
                     const total = ctx.leaf_domains.len;
+                    const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
+                    
+                    // Process epochs in SIMD batches
                     while (true) {
-                        const local_idx = ctx.index.fetchAdd(1, .monotonic);
-                        if (local_idx >= total) break;
-
-                        const epoch = ctx.epoch_range_start + local_idx;
-
-                        // Generate chain end domains (8-wide) for this epoch
-                        var chain_domains = ctx.scheme.allocator.alloc([8]FieldElement, ctx.num_chains) catch |err| {
+                        const batch_start_idx = ctx.index.fetchAdd(SIMD_WIDTH, .monotonic);
+                        if (batch_start_idx >= total) break;
+                        
+                        const batch_end_idx = @min(batch_start_idx + SIMD_WIDTH, total);
+                        const actual_batch_size = batch_end_idx - batch_start_idx;
+                        
+                        // Get batch of epochs
+                        var epoch_batch: [SIMD_WIDTH]u32 = undefined;
+                        for (0..actual_batch_size) |i| {
+                            epoch_batch[i] = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx + i));
+                        }
+                        // Pad remaining with zeros if batch is incomplete
+                        for (actual_batch_size..SIMD_WIDTH) |i| {
+                            epoch_batch[i] = 0;
+                        }
+                        const packed_epochs: @Vector(SIMD_WIDTH, u32) = epoch_batch;
+                        
+                        // Pack parameter to all lanes for SIMD processing
+                        var packed_parameter: [5]simd_utils.PackedF = undefined;
+                        for (0..5) |i| {
+                            var param_values: [SIMD_WIDTH]u32 = undefined;
+                            for (0..SIMD_WIDTH) |lane| {
+                                param_values[lane] = ctx.parameter[i].value;
+                            }
+                            packed_parameter[i] = simd_utils.PackedF{ .values = param_values };
+                        }
+                        
+                        // Pack chain starting points vertically for SIMD processing
+                        var packed_chains = ctx.scheme.allocator.alloc([]simd_utils.PackedF, ctx.num_chains) catch |err| {
                             ctx.error_mutex.lock();
                             defer ctx.error_mutex.unlock();
                             if (ctx.stored_error == null) {
@@ -926,31 +951,117 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             ctx.error_flag.store(true, .monotonic);
                             return;
                         };
-                        defer ctx.scheme.allocator.free(chain_domains);
-
-                        // Process all chains for this epoch
-                        // Optimized: process chains sequentially with better cache locality
+                        errdefer {
+                            for (packed_chains) |chain| ctx.scheme.allocator.free(chain);
+                            ctx.scheme.allocator.free(packed_chains);
+                        }
+                        
+                        // Generate and pack chain starting points for all epochs in batch
+                        for (0..ctx.num_chains) |chain_idx| {
+                            const packed_chain = ctx.scheme.allocator.alloc(simd_utils.PackedF, ctx.hash_len) catch |err| {
+                                        ctx.error_mutex.lock();
+                                        defer ctx.error_mutex.unlock();
+                                        if (ctx.stored_error == null) {
+                                            ctx.stored_error = err;
+                                        }
+                                        ctx.error_flag.store(true, .monotonic);
+                                
+                                // Cleanup already allocated chains
+                                for (0..chain_idx) |i| ctx.scheme.allocator.free(packed_chains[i]);
+                                ctx.scheme.allocator.free(packed_chains);
+                                        return;
+                                    };
+                            
+                            // Generate starting points for this chain across all epochs in batch
+                            var starts: [SIMD_WIDTH][8]u32 = undefined;
+                            for (0..actual_batch_size) |lane| {
+                                starts[lane] = ctx.scheme.prfDomainElement(ctx.prf_key, epoch_batch[lane], @as(u64, @intCast(chain_idx)));
+                            }
+                            // Pad with zeros if batch is incomplete
+                            for (actual_batch_size..SIMD_WIDTH) |lane| {
+                                @memset(&starts[lane], 0);
+                            }
+                            
+                            // Transpose: [lane][element] -> [element][lane] for SIMD processing
+                            for (0..ctx.hash_len) |h| {
+                                var values: [SIMD_WIDTH]u32 = undefined;
+                                for (0..SIMD_WIDTH) |lane| {
+                                    values[lane] = starts[lane][h];
+                                }
+                                packed_chain[h] = simd_utils.PackedF{ .values = values };
+                            }
+                            
+                            packed_chains[chain_idx] = packed_chain;
+                        }
+                        
+                        // Walk all chains for all epochs in batch using SIMD
+                        const chain_length = ctx.scheme.lifetime_params.base;
                         for (0..ctx.num_chains) |chain_index| {
-                            const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
-                            chain_domains[chain_index] = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
+                            ctx.scheme.walkChainsSIMD(
+                                packed_chains,
+                                packed_epochs,
+                                chain_index,
+                                chain_length - 1,
+                                packed_parameter,
+                            ) catch |err| {
+                                        ctx.error_mutex.lock();
+                                        defer ctx.error_mutex.unlock();
+                                        if (ctx.stored_error == null) {
+                                            ctx.stored_error = err;
+                                        }
+                                        ctx.error_flag.store(true, .monotonic);
+                                
+                                // Cleanup
+                                for (packed_chains) |chain| ctx.scheme.allocator.free(chain);
+                                ctx.scheme.allocator.free(packed_chains);
+                                        return;
+                                    };
+                                }
+                        
+                        // Unpack results and process each epoch in the batch
+                        for (0..actual_batch_size) |batch_offset| {
+                            const local_idx = batch_start_idx + batch_offset;
+                            const epoch = epoch_batch[batch_offset];
+                            
+                            // Unpack chain domains for this epoch
+                            var chain_domains = ctx.scheme.allocator.alloc([8]FieldElement, ctx.num_chains) catch |err| {
                                 ctx.error_mutex.lock();
                                 defer ctx.error_mutex.unlock();
                                 if (ctx.stored_error == null) {
                                     ctx.stored_error = err;
                                 }
                                 ctx.error_flag.store(true, .monotonic);
+                                
+                                // Cleanup
+                                for (packed_chains) |chain| ctx.scheme.allocator.free(chain);
+                                ctx.scheme.allocator.free(packed_chains);
                                 return;
                             };
+                            defer ctx.scheme.allocator.free(chain_domains);
+                            
+                            // Unpack from SIMD format
+                            for (0..ctx.num_chains) |chain_idx| {
+                                for (0..ctx.hash_len) |h| {
+                                    const unpacked = packed_chains[chain_idx][h].toArray();
+                                    chain_domains[chain_idx][h] = unpacked[batch_offset];
+                                }
+                                for (ctx.hash_len..8) |h| {
+                                    chain_domains[chain_idx][h] = FieldElement.zero();
+                                }
                         }
 
                         // Reduce chain domains to a single leaf domain using tree-tweak hashing
-                        const leaf_domain_slice = ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, @as(u32, @intCast(epoch))) catch |err| {
+                            const leaf_domain_slice = ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch) catch |err| {
                             ctx.error_mutex.lock();
                             defer ctx.error_mutex.unlock();
                             if (ctx.stored_error == null) {
                                 ctx.stored_error = err;
                             }
                             ctx.error_flag.store(true, .monotonic);
+                                
+                                // Cleanup
+                                for (packed_chains) |chain| ctx.scheme.allocator.free(chain);
+                                ctx.scheme.allocator.free(packed_chains);
                             return;
                         };
                         defer ctx.scheme.allocator.free(leaf_domain_slice);
@@ -962,6 +1073,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         for (ctx.hash_len..8) |i| {
                             ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
                         }
+                        }
+                        
+                        // Cleanup packed chains
+                        for (packed_chains) |chain| ctx.scheme.allocator.free(chain);
+                        ctx.scheme.allocator.free(packed_chains);
                     }
                 }
             };
@@ -1247,6 +1363,107 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             result[i] = FieldElement{ .value = 0 };
         }
         return result;
+    }
+
+    /// Apply Poseidon2 chain tweak hash with SIMD-packed inputs (processes multiple epochs simultaneously)
+    /// Uses true SIMD Poseidon2 permutation for maximum performance
+    pub fn applyPoseidonChainTweakHashSIMD(
+        self: *GeneralizedXMSSSignatureScheme,
+        packed_input: []const simd_utils.PackedF,  // SIMD-packed: [element][epoch]
+        packed_epochs: @Vector(simd_utils.SIMD_WIDTH, u32),  // Epochs in batch
+        chain_index: u8,
+        pos_in_chain: u8,
+        packed_parameter: [5]simd_utils.PackedF,  // Parameter broadcast to all lanes
+    ) ![]simd_utils.PackedF {
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
+        const field = @import("../../core/field.zig");
+        const poseidon2_simd = @import("../../hash/poseidon2_hash_simd.zig");
+        
+        // Pre-compute tweaks for all lanes
+        var tweak0_values: [SIMD_WIDTH]u32 = undefined;
+        var tweak1_values: [SIMD_WIDTH]u32 = undefined;
+        
+        for (0..SIMD_WIDTH) |lane| {
+            const epoch = packed_epochs[lane];
+            // Only compute tweak if epoch is non-zero (valid epoch)
+            // For padding lanes (epoch=0), use zero tweak
+            if (epoch != 0) {
+                const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | field.TWEAK_SEPARATOR_FOR_CHAIN_HASH;
+                const tweak = tweakToFieldElements(tweak_encoding);
+                tweak0_values[lane] = tweak[0].value;
+                tweak1_values[lane] = tweak[1].value;
+            } else {
+                // Padding lane - use zero tweak
+                tweak0_values[lane] = 0;
+                tweak1_values[lane] = 0;
+            }
+        }
+        
+        const packed_tweaks = [2]simd_utils.PackedF{
+            simd_utils.PackedF{ .values = tweak0_values },
+            simd_utils.PackedF{ .values = tweak1_values },
+        };
+        
+        // Prepare combined input: parameter + tweak + input (all in SIMD-packed format)
+        const total_input_len = 5 + 2 + hash_len;
+        var packed_combined_input = try self.allocator.alloc(simd_utils.PackedF, total_input_len);
+        errdefer self.allocator.free(packed_combined_input);
+        
+        // Copy parameter (already packed)
+        @memcpy(packed_combined_input[0..5], &packed_parameter);
+        
+        // Copy tweak (packed)
+        @memcpy(packed_combined_input[5..7], &packed_tweaks);
+        
+        // Copy input (already packed)
+        @memcpy(packed_combined_input[7 .. 7 + hash_len], packed_input[0..hash_len]);
+        
+        // Pad remaining with zeros if needed
+        for (7 + hash_len..total_input_len) |i| {
+            packed_combined_input[i] = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+        }
+        
+        // Use SIMD Poseidon2 compression
+        var simd_poseidon2 = poseidon2_simd.Poseidon2SIMD.init(self.allocator, self.poseidon2);
+        const packed_hash_result = try simd_poseidon2.compress16SIMD(packed_combined_input, hash_len);
+        // Note: packed_hash_result is owned by the caller, don't free it here
+        
+        // Free the input buffer
+        self.allocator.free(packed_combined_input);
+        
+        // Return result (already in SIMD-packed format)
+        return packed_hash_result;
+    }
+
+    /// Walk chains for multiple epochs simultaneously using SIMD
+    fn walkChainsSIMD(
+        self: *GeneralizedXMSSSignatureScheme,
+        packed_chains: [][]simd_utils.PackedF,
+        packed_epochs: @Vector(simd_utils.SIMD_WIDTH, u32),
+        chain_index: usize,
+        chain_length: usize,
+        packed_parameter: [5]simd_utils.PackedF,
+    ) !void {
+        // Walk chain for chain_length - 1 steps
+        for (0..chain_length - 1) |step| {
+            const pos_in_chain = @as(u8, @intCast(step + 1));
+            
+            // Apply SIMD hash to advance chain for all epochs simultaneously
+            const packed_next = try self.applyPoseidonChainTweakHashSIMD(
+                packed_chains[chain_index],
+                packed_epochs,
+                @as(u8, @intCast(chain_index)),
+                pos_in_chain,
+                packed_parameter,
+            );
+            defer self.allocator.free(packed_next);
+            
+            // Update packed chain state
+            for (0..self.lifetime_params.hash_len_fe) |h| {
+                packed_chains[chain_index][h] = packed_next[h];
+            }
+        }
     }
 
     /// Context for parallel pair processing
@@ -1550,7 +1767,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Use Poseidon2-24 compress (feed-forward) with zero-padding to width 24,
         // then take the first hash_len_fe elements (matching Rust poseidon_compress::<_, 24, HASH_LEN>)
-        // SIMD-optimized padding: use batch copying for better cache performance
+        // Note: For single inputs, use scalar version for correctness
+        // SIMD can be used when batching multiple tree nodes (future optimization)
+        const hash_len = self.lifetime_params.hash_len_fe;
         var padded: [24]FieldElement = [_]FieldElement{FieldElement{ .value = 0 }} ** 24;
         const simd_width = 4;
         var i: usize = 0;
@@ -1580,7 +1799,6 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (idx < combined_input.len - 1) log.print(", ", .{});
         }
         log.print("\n", .{});
-        const hash_len = self.lifetime_params.hash_len_fe;
         log.print("DEBUG: Hash output (first {} of {} elements): ", .{ hash_len, full_out.len });
         for (0..hash_len) |idx| {
             log.print("{}:0x{x}", .{ idx, full_out[idx].value });
@@ -1862,10 +2080,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Chain ends are already in Montgomery form (from Poseidon2-16 compress)
         // Parameter and tweak need to be converted to Montgomery
         const combined_input_len = self.lifetime_params.parameter_len + self.lifetime_params.tweak_len_fe + flattened_len;
-
+        
         // Debug: print lengths
         log.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len });
-
+        
         var combined_input_monty = try self.allocator.alloc(F, combined_input_len);
         defer self.allocator.free(combined_input_monty);
 
@@ -1937,7 +2155,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         for (0..CAPACITY) |i| {
             state[RATE + i] = capacity_value_monty[i]; // Already in Montgomery form
         }
-
+        
         // Debug: verify capacity placement immediately after initialization
         log.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() });
         log.print("ZIG_SPONGE_DEBUG: Verify state[23] = capacity[8]: state[23]=0x{x:0>8} capacity[8]=0x{x:0>8}\n", .{ state[23].toU32(), capacity_value_monty[8].toU32() });
@@ -1962,11 +2180,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var chunk_num: usize = 0;
         const total_chunks = (padded_input.len + RATE - 1) / RATE;
         log.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks});
-
+        
         while (chunk_start < padded_input.len) {
             const chunk_end = @min(chunk_start + RATE, padded_input.len);
             const actual_chunk_len = chunk_end - chunk_start;
-
+            
             // Debug: print input values for first few and last few chunks (in canonical form for comparison)
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
                 log.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) });
@@ -1975,7 +2193,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 }
                 log.print("\n", .{});
             }
-
+            
             // Add chunk to rate part of state (state[0..RATE])
             // Input is already in Montgomery form, so add directly (matching Rust's state[i] += chunk[i])
             for (0..actual_chunk_len) |i| {
@@ -2971,10 +3189,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Log roots for first tree
         if (num_bottom_trees > 0) {
             log.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{tree_indices[0]});
-            for (roots_of_bottom_trees[0]) |fe| {
-                log.print("0x{x:0>8} ", .{fe.value});
-            }
-            log.print("\n", .{});
+        for (roots_of_bottom_trees[0]) |fe| {
+            log.print("0x{x:0>8} ", .{fe.value});
+        }
+        log.print("\n", .{});
         }
 
         // Store first two trees (left and right) for secret key

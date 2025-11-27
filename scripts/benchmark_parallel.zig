@@ -11,8 +11,6 @@ pub fn main() !void {
     std.debug.print("========================================\n", .{});
     std.debug.print("Lifetime: 2^32\n", .{});
     std.debug.print("Active Epochs: 1024\n", .{});
-    std.debug.print("Previous baseline: ~96.6 seconds\n", .{});
-    std.debug.print("Expected improvement: 35-48%%\n", .{});
     std.debug.print("========================================\n\n", .{});
 
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_32);
@@ -28,9 +26,6 @@ pub fn main() !void {
 
     std.debug.print("\n✅ Key generation completed!\n", .{});
     std.debug.print("⏱️  Time: {d:.3} seconds\n", .{elapsed_s});
-    std.debug.print("📊 Improvement: {d:.1}%% faster\n", .{(96.6 - elapsed_s) / 96.6 * 100.0});
-    std.debug.print("   Baseline: 96.6s → Current: {d:.3}s\n", .{elapsed_s});
-    std.debug.print("   Speedup: {d:.2}x\n", .{96.6 / elapsed_s});
 
     keypair.secret_key.deinit();
 }

@@ -55,6 +55,17 @@ pub const PackedF = struct {
         // For proper field multiplication, we'd need to unpack, multiply, repack
         return .{ .values = self.values * other.values };
     }
+    
+    // SIMD-aware field addition (element-wise, assumes values are in Montgomery form)
+    pub fn addField(self: PackedF, other: PackedF) PackedF {
+        // Element-wise addition in Montgomery form
+        return .{ .values = self.values +% other.values };
+    }
+    
+    // Broadcast a single field element to all lanes
+    pub fn broadcast(fe: FieldElement) PackedF {
+        return .{ .values = @splat(fe.value) };
+    }
 };
 
 // Pack 8 field elements into 2 SIMD vectors
@@ -184,4 +195,93 @@ pub fn batchProcessFieldElements(
     }
 
     return results.toOwnedSlice();
+}
+
+// SIMD width constant
+pub const SIMD_WIDTH = 4; // Start with 4, can extend to 8 for AVX-512
+
+// Vertical packing: transpose from [epoch][chain] to [chain][epoch] for SIMD processing
+// This matches Rust's pack_array function from simd_utils.rs
+pub fn packEpochsVertically(
+    allocator: std.mem.Allocator,
+    epochs: []const u32,
+    num_chains: usize,
+    hash_len: usize,
+    prf_fn: *const fn (*const anyopaque, u32, u64) [8]u32,
+    scheme_ptr: *const anyopaque,
+) ![][]PackedF {
+    // Allocate packed chains: [num_chains][hash_len]PackedF
+    const packed_chains = try allocator.alloc([]PackedF, num_chains);
+    errdefer {
+        for (packed_chains) |chain| allocator.free(chain);
+        allocator.free(packed_chains);
+    }
+    
+    // For each chain, pack starting points across all epochs in batch
+    for (0..num_chains) |chain_idx| {
+        const packed_chain = try allocator.alloc(PackedF, hash_len);
+        errdefer allocator.free(packed_chain);
+        
+        // Generate starting points for this chain across all epochs
+        var starts: [SIMD_WIDTH][8]u32 = undefined;
+        for (0..SIMD_WIDTH) |lane| {
+            if (lane < epochs.len) {
+                starts[lane] = prf_fn(scheme_ptr, epochs[lane], @as(u64, @intCast(chain_idx)));
+            } else {
+                // Pad with zeros if batch is incomplete
+                @memset(&starts[lane], 0);
+            }
+        }
+        
+        // Transpose: [lane][element] -> [element][lane]
+        // Each PackedF contains SIMD_WIDTH epochs for one hash element position
+        for (0..hash_len) |h| {
+            var values: [SIMD_WIDTH]u32 = undefined;
+            for (0..SIMD_WIDTH) |lane| {
+                values[lane] = starts[lane][h];
+            }
+            packed_chain[h] = PackedF{ .values = values };
+        }
+        
+        packed_chains[chain_idx] = packed_chain;
+    }
+    
+    return packed_chains;
+}
+
+// Unpack SIMD-packed chains back to scalar representation
+pub fn unpackChainsFromSIMD(
+    allocator: std.mem.Allocator,
+    packed_chains: [][]PackedF,
+    num_chains: usize,
+    hash_len: usize,
+    simd_width: usize,
+) ![][]FieldElement {
+    // Allocate unpacked chains: [simd_width][num_chains][hash_len]FieldElement
+    const unpacked = try allocator.alloc([]FieldElement, simd_width);
+    errdefer {
+        for (unpacked) |chain_domains| allocator.free(chain_domains);
+        allocator.free(unpacked);
+    }
+    
+    for (0..simd_width) |lane| {
+        const chain_domains = try allocator.alloc([8]FieldElement, num_chains);
+        errdefer allocator.free(chain_domains);
+        
+        for (0..num_chains) |chain_idx| {
+            // Unpack this chain for this lane
+            for (0..hash_len) |h| {
+                const unpacked_array = packed_chains[chain_idx][h].toArray();
+                chain_domains[chain_idx][h] = unpacked_array[lane];
+            }
+            // Zero pad remaining elements
+            for (hash_len..8) |h| {
+                chain_domains[chain_idx][h] = FieldElement.zero();
+            }
+        }
+        
+        unpacked[lane] = chain_domains;
+    }
+    
+    return unpacked;
 }
