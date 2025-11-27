@@ -4,12 +4,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_debug_logs", false);
+    build_options.addOption(bool, "enable_lifetime_2_32", true);
+
     // Create hash-zig module directly
     const hash_zig_module = b.addModule("hash-zig", .{
         .root_source_file = b.path("../../src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    hash_zig_module.addOptions("build_options", build_options);
 
     // Removed zig_poseidon dependency - using built-in Poseidon2 implementation
 

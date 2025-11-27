@@ -105,6 +105,12 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
     // Save lifetime to file for sign/verify commands
     fs::write("tmp/rust_lifetime.txt", lifetime_str)?;
     
+    // Read active epochs from file (default to 256 if not found)
+    let num_active_epochs: usize = fs::read_to_string("tmp/rust_active_epochs.txt")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(256);
+    
     let seed = if let Some(hex) = seed_hex {
         let bytes = hex::decode(hex)?;
         if bytes.len() != 32 {
@@ -124,7 +130,7 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
     match lifetime {
         LifetimeTag::Pow8 => {
             let mut rng = StdRng::from_seed(seed);
-            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, 256);
+            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
             
             // Serialize secret key to bincode JSON
             let sk_json = serde_json::to_string_pretty(&secret_key)?;
@@ -138,7 +144,7 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
         }
         LifetimeTag::Pow18 => {
             let mut rng = StdRng::from_seed(seed);
-            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime18Dim64Base8::key_gen(&mut rng, 0, 256);
+            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime18Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
             
             // Serialize secret key to bincode JSON
             let sk_json = serde_json::to_string_pretty(&secret_key)?;
@@ -152,7 +158,7 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
         }
         LifetimeTag::Pow32 => {
             let mut rng = StdRng::from_seed(seed);
-            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime32Dim64Base8::key_gen(&mut rng, 0, 256);
+            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime32Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
             
             // Serialize secret key to bincode JSON
             let sk_json = serde_json::to_string_pretty(&secret_key)?;

@@ -2,6 +2,8 @@
 //! This implementation matches Rust GeneralizedXMSSSignatureScheme exactly
 
 const std = @import("std");
+const process = std.process;
+const sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
 const log = @import("../../utils/log.zig");
 const FieldElement = @import("../../core/field.zig").FieldElement;
@@ -134,6 +136,264 @@ pub const HashSubTree = struct {
             return layers;
         }
         return null;
+    }
+};
+
+const CACHE_MAGIC = @as(u32, 0x42544331); // "BTC1"
+
+const BottomTreeCache = struct {
+    allocator: Allocator,
+    enabled: bool,
+    root_path: []u8,
+    mutex: std.Thread.Mutex,
+
+    const CacheError = error{
+        InvalidCacheFile,
+        CacheMismatch,
+    };
+
+    pub fn init(allocator: Allocator) !BottomTreeCache {
+        var enabled = true;
+        if (process.getEnvVarOwned(allocator, "HASH_ZIG_DISABLE_BT_CACHE")) |value| {
+            enabled = false;
+            allocator.free(value);
+        } else |err| switch (err) {
+            error.EnvironmentVariableNotFound => {},
+            else => return err,
+        }
+
+        const path_env = process.getEnvVarOwned(allocator, "HASH_ZIG_BT_CACHE_DIR") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        const default_path = "tmp/bottom_tree_cache";
+        const source_path = path_env orelse default_path;
+        const root_path = try allocator.dupe(u8, source_path);
+        if (path_env) |env| {
+            allocator.free(env);
+        }
+
+        if (enabled) {
+            std.fs.cwd().makePath(source_path) catch |err| {
+                log.print("ZIG_CACHE: disabling bottom tree cache (makePath failed: {s})\n", .{@errorName(err)});
+                enabled = false;
+            };
+        }
+
+        return BottomTreeCache{
+            .allocator = allocator,
+            .enabled = enabled,
+            .root_path = root_path,
+            .mutex = .{},
+        };
+    }
+
+    pub fn deinit(self: *BottomTreeCache) void {
+        self.allocator.free(self.root_path);
+    }
+
+    fn computeKey(
+        log_lifetime: usize,
+        bottom_tree_index: usize,
+        prf_key: [32]u8,
+        parameter: [5]FieldElement,
+    ) [64]u8 {
+        var hasher = sha256.init(.{});
+
+        var buf8: [8]u8 = undefined;
+        std.mem.writeInt(u64, &buf8, @as(u64, @intCast(log_lifetime)), .little);
+        hasher.update(&buf8);
+
+        std.mem.writeInt(u64, &buf8, @as(u64, bottom_tree_index), .little);
+        hasher.update(&buf8);
+
+        hasher.update(&prf_key);
+
+        for (parameter) |fe| {
+            var buf4: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf4, fe.toCanonical(), .little);
+            hasher.update(&buf4);
+        }
+
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+
+        var hex: [64]u8 = undefined;
+        _ = std.fmt.bufPrint(&hex, "{s}", .{std.fmt.fmtSliceHexLower(&digest)}) catch unreachable;
+        return hex;
+    }
+
+    fn writeFieldElement(writer: anytype, fe: FieldElement) !void {
+        var buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &buf, fe.toCanonical(), .little);
+        try writer.writeAll(&buf);
+    }
+
+    fn readFieldElement(reader: anytype) !FieldElement {
+        var buf: [4]u8 = undefined;
+        try reader.readNoEof(&buf);
+        const value = std.mem.readInt(u32, &buf, .little);
+        return FieldElement.fromCanonical(value);
+    }
+
+    fn openDir(self: *BottomTreeCache) !std.fs.Dir {
+        return std.fs.cwd().openDir(self.root_path, .{});
+    }
+
+    pub fn load(
+        self: *BottomTreeCache,
+        allocator: Allocator,
+        log_lifetime: usize,
+        prf_key: [32]u8,
+        parameter: [5]FieldElement,
+        bottom_tree_index: usize,
+    ) !?*HashSubTree {
+        if (!self.enabled) return null;
+
+        var filename_buf: [80]u8 = undefined;
+        const key = computeKey(log_lifetime, bottom_tree_index, prf_key, parameter);
+        const filename = std.fmt.bufPrint(&filename_buf, "{s}.bin", .{key}) catch {
+            return null;
+        };
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var dir = self.openDir() catch return null;
+        defer dir.close();
+
+        const file = dir.openFile(filename, .{ .mode = .read_only }) catch return null;
+        defer file.close();
+
+        var reader = file.reader();
+
+        const magic = try reader.readInt(u32, .little);
+        if (magic != CACHE_MAGIC) return CacheError.InvalidCacheFile;
+
+        const version = try reader.readByte();
+        if (version != 1) return CacheError.InvalidCacheFile;
+
+        const stored_log = try reader.readByte();
+        _ = try reader.readInt(u16, .little); // reserved
+        if (stored_log != log_lifetime) return CacheError.CacheMismatch;
+
+        const stored_index = try reader.readInt(u32, .little);
+        if (stored_index != bottom_tree_index) return CacheError.CacheMismatch;
+
+        var stored_prf: [32]u8 = undefined;
+        try reader.readNoEof(&stored_prf);
+        if (!std.mem.eql(u8, &stored_prf, &prf_key)) return CacheError.CacheMismatch;
+
+        for (parameter) |expected| {
+            const value = try readFieldElement(reader);
+            if (!value.eql(expected)) return CacheError.CacheMismatch;
+        }
+
+        var root_value: [8]FieldElement = undefined;
+        for (&root_value) |*dest| {
+            dest.* = try readFieldElement(reader);
+        }
+
+        const num_layers = try reader.readInt(u32, .little);
+        if (num_layers == 0) return CacheError.InvalidCacheFile;
+
+        const layers = try allocator.alloc(PaddedLayer, num_layers);
+        errdefer {
+            for (layers) |layer| {
+                allocator.free(layer.nodes);
+            }
+            allocator.free(layers);
+        }
+
+        for (layers, 0..) |*layer, layer_idx| {
+            _ = layer_idx;
+            const start_index_u64 = try reader.readInt(u64, .little);
+            const node_count = try reader.readInt(u32, .little);
+
+            const start_index = std.math.cast(usize, start_index_u64) orelse return CacheError.InvalidCacheFile;
+            var nodes = try allocator.alloc([8]FieldElement, node_count);
+            errdefer allocator.free(nodes);
+
+            for (0..node_count) |node_idx| {
+                for (0..8) |j| {
+                    nodes[node_idx][j] = try readFieldElement(reader);
+                }
+            }
+
+            layer.* = .{
+                .start_index = start_index,
+                .nodes = nodes,
+            };
+        }
+
+        return try HashSubTree.initWithLayers(allocator, root_value, layers);
+    }
+
+    pub fn store(
+        self: *BottomTreeCache,
+        log_lifetime: usize,
+        prf_key: [32]u8,
+        parameter: [5]FieldElement,
+        bottom_tree_index: usize,
+        root_value: [8]FieldElement,
+        layers: []const PaddedLayer,
+    ) void {
+        if (!self.enabled) return;
+
+        var filename_buf: [80]u8 = undefined;
+        const key = computeKey(log_lifetime, bottom_tree_index, prf_key, parameter);
+        const filename = std.fmt.bufPrint(&filename_buf, "{s}.bin", .{key}) catch {
+            log.print("ZIG_CACHE: failed to format cache filename for bottom tree {}\n", .{bottom_tree_index});
+            return;
+        };
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var dir = self.openDir() catch {
+            log.print("ZIG_CACHE: unable to open cache dir {s}\n", .{self.root_path});
+            return;
+        };
+        defer dir.close();
+
+        var atomic_file = dir.atomicFile(filename, .{}) catch {
+            log.print("ZIG_CACHE: unable to create cache file {s}\n", .{filename});
+            return;
+        };
+        defer atomic_file.deinit();
+
+        const writer = atomic_file.file.writer();
+
+        writer.writeInt(u32, CACHE_MAGIC, .little) catch return;
+        writer.writeByte(1) catch return;
+        writer.writeByte(@intCast(log_lifetime)) catch return;
+        writer.writeInt(u16, 0, .little) catch return;
+        writer.writeInt(u32, @intCast(bottom_tree_index), .little) catch return;
+        writer.writeAll(&prf_key) catch return;
+
+        for (parameter) |fe| {
+            writeFieldElement(writer, fe) catch return;
+        }
+
+        for (root_value) |fe| {
+            writeFieldElement(writer, fe) catch return;
+        }
+
+        writer.writeInt(u32, @intCast(layers.len), .little) catch return;
+
+        for (layers) |layer| {
+            writer.writeInt(u64, @intCast(layer.start_index), .little) catch return;
+            writer.writeInt(u32, @intCast(layer.nodes.len), .little) catch return;
+            for (layer.nodes) |node| {
+                for (node) |fe| {
+                    writeFieldElement(writer, fe) catch return;
+                }
+            }
+        }
+
+        if (atomic_file.finish()) |_| {} else |err| {
+            log.print("ZIG_CACHE: failed to finalize cache file {s}: {s}\n", .{ filename, @errorName(err) });
+        }
     }
 };
 
@@ -375,6 +635,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     rng: ChaCha12Rng,
     layer_cache: std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
     layer_cache_mutex: std.Thread.Mutex,
+    bottom_tree_cache: BottomTreeCache,
 
     pub fn init(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
@@ -386,6 +647,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
         };
 
+        const bottom_tree_cache = try BottomTreeCache.init(allocator);
         const self = try allocator.create(GeneralizedXMSSSignatureScheme);
         self.* = GeneralizedXMSSSignatureScheme{
             .lifetime_params = lifetime_params,
@@ -394,6 +656,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .rng = ChaCha12Rng.init(initDefaultSeed()),
             .layer_cache = std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
             .layer_cache_mutex = .{},
+            .bottom_tree_cache = bottom_tree_cache,
         };
 
         self.poseidon2.* = poseidon2;
@@ -409,6 +672,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .lifetime_2_18 => LIFETIME_2_18_PARAMS,
             .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
         };
+        const bottom_tree_cache = try BottomTreeCache.init(allocator);
         const self = try allocator.create(GeneralizedXMSSSignatureScheme);
         self.* = GeneralizedXMSSSignatureScheme{
             .lifetime_params = lifetime_params,
@@ -417,6 +681,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .rng = ChaCha12Rng.init(seed),
             .layer_cache = std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
             .layer_cache_mutex = .{},
+            .bottom_tree_cache = bottom_tree_cache,
         };
         self.poseidon2.* = poseidon2;
         return self;
@@ -442,6 +707,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             entry.value_ptr.deinit();
         }
         self.layer_cache.deinit();
+        self.bottom_tree_cache.deinit();
 
         self.allocator.destroy(self.poseidon2);
         self.allocator.destroy(self);
@@ -524,6 +790,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     ) !*HashSubTree {
         const num_chains = self.lifetime_params.dimension;
         _ = self.lifetime_params.base; // chain_length unused for now
+
+        if (self.bottom_tree_cache.enabled) {
+            const cached = self.bottom_tree_cache.load(
+                self.allocator,
+                self.lifetime_params.log_lifetime,
+                prf_key,
+                parameter,
+                bottom_tree_index,
+            ) catch |err| blk: {
+                log.print("ZIG_CACHE: failed to load bottom tree {}: {s}\n", .{ bottom_tree_index, @errorName(err) });
+                break :blk null;
+            };
+            if (cached) |tree| {
+                return tree;
+            }
+        }
 
         // Calculate leaves per bottom tree
         const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
@@ -780,6 +1062,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         if (bottom_tree_index == 1) {
             log.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
+        }
+
+        if (self.bottom_tree_cache.enabled) {
+            self.bottom_tree_cache.store(
+                self.lifetime_params.log_lifetime,
+                prf_key,
+                parameter,
+                bottom_tree_index,
+                bottom_root,
+                bottom_layers,
+            );
         }
 
         // Store layers in HashSubTree so they can be reused during signing (major optimization!)
@@ -1580,13 +1873,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log capacity_value (in Montgomery form, print as canonical for comparison)
-        // Always print to stderr for comparison
-        const stderr_capacity = std.io.getStdErr().writer();
-        stderr_capacity.print("ZIG_SPONGE_DEBUG: Capacity value ({} elements, canonical): ", .{CAPACITY}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Capacity value ({} elements, canonical): ", .{CAPACITY});
         for (capacity_value_monty) |fe| {
-            stderr_capacity.print("0x{x:0>8} ", .{fe.toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{fe.toU32()});
         }
-        stderr_capacity.print("\n", .{}) catch {};
+        log.print("\n", .{});
         log.print("DEBUG: Sponge capacity_value ({} elements, Montgomery->canonical): ", .{CAPACITY});
         for (capacity_value_monty, 0..) |fe, i| {
             log.print("{}:0x{x}", .{ i, fe.toU32() });
@@ -1601,8 +1892,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const combined_input_len = self.lifetime_params.parameter_len + self.lifetime_params.tweak_len_fe + flattened_len;
 
         // Debug: print lengths
-        const stderr_len = std.io.getStdErr().writer();
-        stderr_len.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len }) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len });
 
         var combined_input_monty = try self.allocator.alloc(F, combined_input_len);
         defer self.allocator.free(combined_input_monty);
@@ -1629,13 +1919,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print first RATE elements of combined input (in canonical form for comparison)
-        // Always print to stderr for comparison
-        const stderr_combined = std.io.getStdErr().writer();
-        stderr_combined.print("ZIG_SPONGE_DEBUG: Combined input (first {} elements, canonical): ", .{@min(15, combined_input_monty.len)}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Combined input (first {} elements, canonical): ", .{@min(15, combined_input_monty.len)});
         for (0..@min(15, combined_input_monty.len)) |i| {
-            stderr_combined.print("0x{x:0>8} ", .{combined_input_monty[i].toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{combined_input_monty[i].toU32()});
         }
-        stderr_combined.print("\n", .{}) catch {};
+        log.print("\n", .{});
         log.print("DEBUG: Sponge combined_input head RATE ({}): ", .{15});
         for (0..@min(15, combined_input_monty.len)) |i| {
             log.print("{}:0x{x}", .{ i, combined_input_monty[i].toU32() });
@@ -1679,18 +1967,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: verify capacity placement immediately after initialization
-        const stderr_verify = std.io.getStdErr().writer();
-        stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() }) catch {};
-        stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[23] = capacity[8]: state[23]=0x{x:0>8} capacity[8]=0x{x:0>8}\n", .{ state[23].toU32(), capacity_value_monty[8].toU32() }) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() });
+        log.print("ZIG_SPONGE_DEBUG: Verify state[23] = capacity[8]: state[23]=0x{x:0>8} capacity[8]=0x{x:0>8}\n", .{ state[23].toU32(), capacity_value_monty[8].toU32() });
 
         // Debug: print initial state (after initialization, before absorption)
-        // Always print to stderr for comparison
-        const stderr_init = std.io.getStdErr().writer();
-        stderr_init.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
         for (0..WIDTH) |i| {
-            stderr_init.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{state[i].toU32()});
         }
-        stderr_init.print("\n", .{}) catch {};
+        log.print("\n", .{});
         log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
         for (0..WIDTH) |i| {
             log.print("{}:0x{x}", .{ i, state[i].toU32() });
@@ -1704,8 +1989,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var chunk_start: usize = 0;
         var chunk_num: usize = 0;
         const total_chunks = (padded_input.len + RATE - 1) / RATE;
-        const stderr_abs = std.io.getStdErr().writer();
-        stderr_abs.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks});
 
         while (chunk_start < padded_input.len) {
             const chunk_end = @min(chunk_start + RATE, padded_input.len);
@@ -1713,11 +1997,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: print input values for first few and last few chunks (in canonical form for comparison)
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
-                stderr_abs.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) }) catch {};
+                log.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) });
                 for (0..@min(8, actual_chunk_len)) |i| {
-                    stderr_abs.print("0x{x:0>8} ", .{padded_input[chunk_start + i].toU32()}) catch {};
+                    log.print("0x{x:0>8} ", .{padded_input[chunk_start + i].toU32()});
                 }
-                stderr_abs.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
 
             // Add chunk to rate part of state (state[0..RATE])
@@ -1727,13 +2011,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             // Debug: print state after adding chunk (before permutation) for first few and last few chunks
-            // Always print to stderr for comparison
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
-                stderr_abs.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm, first 8): ", .{chunk_num}) catch {};
+                log.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm, first 8): ", .{chunk_num});
                 for (0..@min(8, WIDTH)) |i| {
-                    stderr_abs.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+                    log.print("0x{x:0>8} ", .{state[i].toU32()});
                 }
-                stderr_abs.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
 
             // Permute state (matching Rust's perm.permute_mut(&mut state))
@@ -1744,13 +2027,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             Poseidon24.permutation(state[0..]);
 
             // Debug: print state after permutation for first few and last few chunks
-            // Always print to stderr for comparison
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
-                stderr_abs.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (first 8): ", .{chunk_num}) catch {};
+                log.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (first 8): ", .{chunk_num});
                 for (0..@min(8, WIDTH)) |i| {
-                    stderr_abs.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+                    log.print("0x{x:0>8} ", .{state[i].toU32()});
                 }
-                stderr_abs.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
 
             chunk_start = chunk_end;
@@ -1758,13 +2040,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print state after all absorptions (before squeeze)
-        // Always print to stderr for comparison
-        const stderr_final = std.io.getStdErr().writer();
-        stderr_final.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{});
         for (0..WIDTH) |i| {
-            stderr_final.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{state[i].toU32()});
         }
-        stderr_final.print("\n", .{}) catch {};
+        log.print("\n", .{});
 
         // Squeeze: extract OUTPUT_LEN elements from rate part (matching Rust's squeeze exactly)
         // Rust's squeeze: while out.len() < OUT_LEN { out.extend_from_slice(&state[..rate]); perm.permute_mut(&mut state); }
@@ -2686,16 +2966,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.print("\n", .{});
 
         // CRITICAL DEBUG: Print parameter BEFORE creating secret key
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{}) catch {};
+        log.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{parameter[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{parameter[i].toCanonical()});
         }
-        stderr.print("(Montgomery: ", .{}) catch {};
+        log.print("(Montgomery: ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{parameter[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{parameter[i].toMontgomery()});
         }
-        stderr.print(")\n", .{}) catch {};
+        log.print(")\n", .{});
 
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
@@ -2710,15 +2989,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         );
 
         // CRITICAL DEBUG: Verify the parameter is correctly stored in the secret key
-        stderr.print("ZIG_KEYGEN_DEBUG: Secret key parameter after init (canonical): ", .{}) catch {};
+        log.print("ZIG_KEYGEN_DEBUG: Secret key parameter after init (canonical): ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()});
         }
-        stderr.print("(Montgomery: ", .{}) catch {};
+        log.print("(Montgomery: ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()});
         }
-        stderr.print(")\n", .{}) catch {};
+        log.print(")\n", .{});
 
         return .{
             .public_key = public_key,
@@ -2848,45 +3127,42 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             // Debug: print rho_slice vs rho_fixed to verify they match
-            const stderr_rho = std.io.getStdErr().writer();
-            stderr_rho.print("ZIG_SIGN_DEBUG: rho_slice (used for encoding, Montgomery): ", .{}) catch {};
+            log.print("ZIG_SIGN_DEBUG: rho_slice (used for encoding, Montgomery): ", .{});
             for (0..rand_len) |i| {
-                stderr_rho.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()}) catch {};
+                log.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()});
             }
-            stderr_rho.print("\n", .{}) catch {};
-            stderr_rho.print("ZIG_SIGN_DEBUG: rho_fixed (stored in signature, Montgomery): ", .{}) catch {};
+            log.print("\n", .{});
+            log.print("ZIG_SIGN_DEBUG: rho_fixed (stored in signature, Montgomery): ", .{});
             for (0..rand_len) |i| {
-                stderr_rho.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()}) catch {};
+                log.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()});
             }
-            stderr_rho.print("\n", .{}) catch {};
+            log.print("\n", .{});
 
             // Debug: print parameter used for encoding (for Zig→Zig debugging, only for successful attempt)
             // CRITICAL: Print parameter BEFORE calling deriveTargetSumEncoding
-            const stderr_param_before = std.io.getStdErr().writer();
-            stderr_param_before.print("ZIG_SIGN_DEBUG: secret_key.parameter BEFORE encoding (canonical): ", .{}) catch {};
+            log.print("ZIG_SIGN_DEBUG: secret_key.parameter BEFORE encoding (canonical): ", .{});
             for (0..5) |i| {
-                stderr_param_before.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+                log.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()});
             }
-            stderr_param_before.print("(Montgomery: ", .{}) catch {};
+            log.print("(Montgomery: ", .{});
             for (0..5) |i| {
-                stderr_param_before.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+                log.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()});
             }
-            stderr_param_before.print(")\n", .{}) catch {};
+            log.print(")\n", .{});
 
             // Try to encode with this randomness
             const encoding_result = self.deriveTargetSumEncoding(secret_key.parameter, epoch, rho_slice, message);
             if (encoding_result) |x_val| {
                 // Debug: print parameter after encoding succeeds (for comparison with verification)
-                const stderr_param = std.io.getStdErr().writer();
-                stderr_param.print("ZIG_SIGN_DEBUG: parameter used for encoding (canonical): ", .{}) catch {};
+                log.print("ZIG_SIGN_DEBUG: parameter used for encoding (canonical): ", .{});
                 for (0..5) |i| {
-                    stderr_param.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+                    log.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()});
                 }
-                stderr_param.print("(Montgomery: ", .{}) catch {};
+                log.print("(Montgomery: ", .{});
                 for (0..5) |i| {
-                    stderr_param.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+                    log.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()});
                 }
-                stderr_param.print(")\n", .{}) catch {};
+                log.print(")\n", .{});
                 x = x_val;
                 encoding_succeeded = true;
                 break;
@@ -2964,12 +3240,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Debug: print rho values before creating signature (for Zig→Zig debugging)
         const rand_len_debug = self.lifetime_params.rand_len_fe;
-        const stderr_sign = std.io.getStdErr().writer();
-        stderr_sign.print("ZIG_SIGN_DEBUG: rho before signature creation (Montgomery): ", .{}) catch {};
+        log.print("ZIG_SIGN_DEBUG: rho before signature creation (Montgomery): ", .{});
         for (0..rand_len_debug) |i| {
-            stderr_sign.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()});
         }
-        stderr_sign.print("\n", .{}) catch {};
+        log.print("\n", .{});
 
         // Create signature with proper error handling
         const signature = GeneralizedXMSSSignature.init(self.allocator, path, rho_fixed, hashes) catch |err| {
@@ -3015,44 +3290,42 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const rho = signature.getRho();
 
         // Debug: log rho values (only first rand_len_fe elements are used)
-        // Use stderr to ensure output always appears (bypasses build_options)
         const rand_len = self.lifetime_params.rand_len_fe;
-        const stderr = std.io.getStdErr().writer();
         // Print a test line first to verify we reach this code
-        stderr.print("ZIG_VERIFY_DEBUG: About to print rho, rand_len={}\n", .{rand_len}) catch {};
+        log.print("ZIG_VERIFY_DEBUG: About to print rho, rand_len={}\n", .{rand_len});
         // Debug: print rho in BOTH Montgomery and canonical to verify it matches what we read
-        stderr.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, Montgomery): ", .{rand_len}) catch {};
+        log.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, Montgomery): ", .{rand_len});
         for (0..rand_len) |i| {
-            stderr.print("0x{x:0>8} ", .{rho[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{rho[i].toMontgomery()});
         }
-        stderr.print("\n", .{}) catch {};
-        stderr.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, canonical): ", .{rand_len}) catch {};
+        log.print("\n", .{});
+        log.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, canonical): ", .{rand_len});
         for (0..rand_len) |i| {
-            stderr.print("0x{x:0>8} ", .{rho[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{rho[i].toCanonical()});
         }
-        stderr.print("\n", .{}) catch {};
+        log.print("\n", .{});
 
         // Use parameter as-is (canonical); Poseidon handles Montgomery internally
         // Only use first rand_len_fe elements of rho (6 for lifetime 2^18, 7 for lifetime 2^8)
         const rho_slice = rho[0..rand_len];
 
         // Debug: print rho_slice used for encoding (for Zig→Zig debugging)
-        stderr.print("ZIG_VERIFY_DEBUG: rho_slice used for encoding (Montgomery): ", .{}) catch {};
+        log.print("ZIG_VERIFY_DEBUG: rho_slice used for encoding (Montgomery): ", .{});
         for (0..rand_len) |i| {
-            stderr.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()});
         }
-        stderr.print("\n", .{}) catch {};
+        log.print("\n", .{});
 
         // Debug: print parameter used for encoding (for Zig→Zig debugging)
-        stderr.print("ZIG_VERIFY_DEBUG: parameter used for encoding (canonical): ", .{}) catch {};
+        log.print("ZIG_VERIFY_DEBUG: parameter used for encoding (canonical): ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()});
         }
-        stderr.print("(Montgomery: ", .{}) catch {};
+        log.print("(Montgomery: ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()});
         }
-        stderr.print(")\n", .{}) catch {};
+        log.print(")\n", .{});
 
         const chunks = try self.applyTopLevelPoseidonMessageHash(public_key.parameter, epoch, rho_slice, message);
         defer self.allocator.free(chunks);
@@ -3065,14 +3338,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Debug: log encoding sum and first few chunks
         var encoding_sum: usize = 0;
         for (x) |chunk| encoding_sum += chunk;
-        // Always print to stderr for verification testing (bypasses build_options)
-        // Reuse stderr from above (already declared)
-        stderr.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum}) catch {};
-        stderr.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{}) catch {};
+        // Debug: log encoding sum and first few chunks
+        log.print("ZIG_VERIFY_DEBUG: Encoding sum={} (expected 375)\n", .{encoding_sum});
+        log.print("ZIG_VERIFY_DEBUG: Encoding chunks[0..5]: ", .{});
         for (0..@min(5, x.len)) |i| {
-            stderr.print("x[{}]={} ", .{ i, x[i] }) catch {};
+            log.print("x[{}]={} ", .{ i, x[i] });
         }
-        stderr.print("\n", .{}) catch {};
+        log.print("\n", .{});
 
         // 2) Advance each chain domain to max based on message-derived x (target-sum digits)
         const base_minus_one: u8 = @as(u8, @intCast(self.lifetime_params.base - 1));
@@ -3089,8 +3361,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(final_chain_domains);
 
         // Debug: print that we're starting chain computation
-        const stderr_start = std.io.getStdErr().writer();
-        stderr_start.print("ZIG_VERIFY_DEBUG: Starting chain computation, hashes.len={}\n", .{hashes.len}) catch {};
+        log.print("ZIG_VERIFY_DEBUG: Starting chain computation, hashes.len={}\n", .{hashes.len});
 
         const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
         for (hashes, 0..) |domain, i| {
@@ -3107,8 +3378,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // domain[0] is in Montgomery form (we read it as Montgomery)
                 const initial_monty = domain[0].value;
                 const initial_canonical = domain[0].toCanonical();
-                const stderr_writer = std.io.getStdErr().writer();
-                stderr_writer.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical }) catch {};
+                log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical });
             }
 
             // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
@@ -3117,8 +3387,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
                 if (i == 0 and j == 0) {
                     // Debug: print inputs to first chain step for comparison with Rust
-                    const stderr_writer = std.io.getStdErr().writer();
-                    stderr_writer.print("ZIG_CHAIN_DEBUG: Chain {} step {} inputs (Montgomery): param[0]=0x{x:0>8} tweak_pos={} current[0]=0x{x:0>8}\n", .{ i, j, public_key.parameter[0].value, pos_in_chain, current[0].value }) catch {};
+                    log.print("ZIG_CHAIN_DEBUG: Chain {} step {} inputs (Montgomery): param[0]=0x{x:0>8} tweak_pos={} current[0]=0x{x:0>8}\n", .{ i, j, public_key.parameter[0].value, pos_in_chain, current[0].value });
                 }
                 const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
                 // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
@@ -3128,20 +3397,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     current[k] = FieldElement{ .value = 0 };
                 }
                 if (i == 0 and j == 0) {
-                    const stderr_writer = std.io.getStdErr().writer();
-                    stderr_writer.print("ZIG_CHAIN_DEBUG: Chain {} step {} output (Montgomery): next[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ i, j, next[0].value, next[0].toCanonical() }) catch {};
+                    log.print("ZIG_CHAIN_DEBUG: Chain {} step {} output (Montgomery): next[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ i, j, next[0].value, next[0].toCanonical() });
                 }
             }
 
             final_chain_domains[i] = current;
-            // Always print first chain final value to stderr for comparison
+            // Debug: print first chain final value for comparison
             if (i == 0) {
-                const stderr_writer = std.io.getStdErr().writer();
-                stderr_writer.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i}) catch {};
+                log.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i});
                 for (0..hash_len) |j| {
-                    stderr_writer.print("0x{x:0>8} ", .{current[j].toCanonical()}) catch {};
+                    log.print("0x{x:0>8} ", .{current[j].toCanonical()});
                 }
-                stderr_writer.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
             if (i == 0 or i == 2) {
                 // Convert Montgomery to canonical for comparison with Rust
@@ -3176,13 +3443,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             current_domain[i] = FieldElement{ .value = 0 };
         }
 
-        // Debug: log leaf domain (always print to stderr for comparison)
-        const stderr_writer = std.io.getStdErr().writer();
-        stderr_writer.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction (canonical): ", .{}) catch {};
+        // Debug: log leaf domain
+        log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction (canonical): ", .{});
         for (0..hash_len) |i| {
-            stderr_writer.print("0x{x:0>8} ", .{current_domain[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{current_domain[i].toCanonical()});
         }
-        stderr_writer.print("\n", .{}) catch {};
+        log.print("\n", .{});
         if (epoch == 16) {
             log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction: ", .{});
             for (0..hash_len) |i| {
@@ -3336,12 +3602,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
         // Always print root comparison to stderr (bypasses build_options)
-        stderr.print("ZIG_VERIFY_DEBUG: Comparing roots (length={}):\n", .{root_len}) catch {};
+        log.print("ZIG_VERIFY_DEBUG: Comparing roots (length={}):\n", .{root_len});
         for (0..root_len) |i| {
             const computed_val = current_domain[i].toCanonical();
             const expected_val = public_key.root[i].toCanonical();
             if (!current_domain[i].eql(public_key.root[i])) {
-                stderr.print("ZIG_VERIFY_ERROR: Root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ i, computed_val, expected_val }) catch {};
+                log.print("ZIG_VERIFY_ERROR: Root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ i, computed_val, expected_val });
                 log.print("ZIG_VERIFY_ERROR: Epoch {} - root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n", .{ epoch, i, current_domain[i].value, public_key.root[i].value });
                 log.print(
                     "ZIG_VERIFY_DEBUG: root mismatch at index {}: computed=0x{x:0>8} expected=0x{x:0>8}\n",
@@ -3349,7 +3615,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 );
                 match = false;
             } else {
-                stderr.print("ZIG_VERIFY_DEBUG: Root[{}] matches: 0x{x:0>8}\n", .{ i, computed_val }) catch {};
+                log.print("ZIG_VERIFY_DEBUG: Root[{}] matches: 0x{x:0>8}\n", .{ i, computed_val });
             }
         }
         if (match) {

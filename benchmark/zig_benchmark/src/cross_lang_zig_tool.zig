@@ -10,6 +10,7 @@ const std = @import("std");
 const hash_zig = @import("hash-zig");
 const Allocator = std.mem.Allocator;
 const KeyLifetime = hash_zig.KeyLifetimeRustCompat;
+const log = hash_zig.utils.log;
 
 fn parseLifetime(lifetime_str: []const u8) !KeyLifetime {
     if (std.mem.eql(u8, lifetime_str, "2^8")) {
@@ -65,9 +66,8 @@ pub fn main() !void {
             std.debug.print("Error: Invalid lifetime '{s}'. Must be one of: 2^8, 2^18, 2^32\n", .{lifetime_str});
             std.process.exit(1);
         };
-        const stderr = std.io.getStdErr().writer();
         keygenCommand(allocator, seed_hex, lifetime) catch |err| {
-            stderr.print("ZIG_MAIN_ERROR: keygenCommand failed with error {s}\n", .{@errorName(err)}) catch {};
+            log.print("ZIG_MAIN_ERROR: keygenCommand failed with error {s}\n", .{@errorName(err)});
             return err;
         };
     } else if (std.mem.eql(u8, args[1], "sign")) {
@@ -148,10 +148,26 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifet
         std.debug.print("✅ Seed saved to tmp/zig_seed.hex\n", .{});
     }
 
+    // Read active epochs from file (default to 256 if not found)
+    const num_active_epochs = blk: {
+        const active_epochs_file = std.fs.cwd().readFileAlloc(allocator, "tmp/zig_active_epochs.txt", 32) catch |err| {
+            if (err == error.FileNotFound) {
+                break :blk 256; // Default to 256 for backward compatibility
+            }
+            return err;
+        };
+        defer allocator.free(active_epochs_file);
+        // Remove trailing newline if present
+        var active_epochs_str = active_epochs_file;
+        if (active_epochs_str.len > 0 and active_epochs_str[active_epochs_str.len - 1] == '\n') {
+            active_epochs_str = active_epochs_str[0..active_epochs_str.len - 1];
+        }
+        break :blk try std.fmt.parseUnsigned(u32, active_epochs_str, 10);
+    };
+
     // Generate keypair
-    var keypair = scheme.keyGen(0, 256) catch |err| {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("ZIG_KEYGEN_ERROR: keyGen failed with error {s}\n", .{@errorName(err)}) catch {};
+    var keypair = scheme.keyGen(0, num_active_epochs) catch |err| {
+        log.print("ZIG_KEYGEN_ERROR: keyGen failed with error {s}\n", .{@errorName(err)});
         return err;
     };
     defer keypair.secret_key.deinit();
@@ -169,16 +185,15 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifet
     defer allocator.free(pk_json);
     
     // Debug: print parameter that will be written to public key file
-    const stderr_pk = std.io.getStdErr().writer();
-    stderr_pk.print("ZIG_KEYGEN_DEBUG: parameter to be written to public key file (canonical): ", .{}) catch {};
+    log.print("ZIG_KEYGEN_DEBUG: parameter to be written to public key file (canonical): ", .{});
     for (0..5) |i| {
-        stderr_pk.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toCanonical()}) catch {};
+        log.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toCanonical()});
     }
-    stderr_pk.print("(Montgomery: ", .{}) catch {};
+    log.print("(Montgomery: ", .{});
     for (0..5) |i| {
-        stderr_pk.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toMontgomery()}) catch {};
+        log.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toMontgomery()});
     }
-    stderr_pk.print(")\n", .{}) catch {};
+    log.print(")\n", .{});
     
     var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
     defer pk_file.close();
@@ -190,8 +205,6 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifet
 
 fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: KeyLifetime) !void {
     std.debug.print("Signing message: '{s}' (epoch: {})\n", .{ message, epoch });
-
-    const stderr = std.io.getStdErr().writer();
 
     // Prefer deterministic reconstruction from the original seed so that
     // signing follows the exact same path as in-memory key generation.
@@ -208,7 +221,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
 
         var seed: [32]u8 = undefined;
         if (hex_slice.len != 64) {
-            stderr.print("ZIG_SIGN_DEBUG: Invalid seed length in tmp/zig_seed.hex (got {}, expected 64)\n", .{hex_slice.len}) catch {};
+            log.print("ZIG_SIGN_DEBUG: Invalid seed length in tmp/zig_seed.hex (got {}, expected 64)\n", .{hex_slice.len});
             return error.InvalidSeed;
         }
         _ = try std.fmt.hexToBytes(&seed, hex_slice);
@@ -216,8 +229,25 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         // Rebuild scheme and keypair exactly as in keygenCommand
         scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, seed);
 
-        const kp = try scheme.keyGen(0, 256);
-        stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from seed (deterministic path)\n", .{}) catch {};
+        // Read active epochs from file (default to 256 if not found)
+        const num_active_epochs = blk2: {
+            const active_epochs_file = std.fs.cwd().readFileAlloc(allocator, "tmp/zig_active_epochs.txt", 32) catch |err| {
+                if (err == error.FileNotFound) {
+                    break :blk2 256; // Default to 256 for backward compatibility
+                }
+                return err;
+            };
+            defer allocator.free(active_epochs_file);
+            // Remove trailing newline if present
+            var active_epochs_str = active_epochs_file;
+            if (active_epochs_str.len > 0 and active_epochs_str[active_epochs_str.len - 1] == '\n') {
+                active_epochs_str = active_epochs_str[0..active_epochs_str.len - 1];
+            }
+            break :blk2 try std.fmt.parseUnsigned(u32, active_epochs_str, 10);
+        };
+
+        const kp = try scheme.keyGen(0, num_active_epochs);
+        log.print("ZIG_SIGN_DEBUG: Reconstructed keypair from seed (deterministic path)\n", .{});
         break :blk kp;
     } else blk: {
         // Fallback: use legacy deserialization path (PRF key + parameter).
@@ -231,7 +261,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, sk_data.prf_key);
 
         const kp = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key);
-        stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from PRF key + parameter (fallback path)\n", .{}) catch {};
+        log.print("ZIG_SIGN_DEBUG: Reconstructed keypair from PRF key + parameter (fallback path)\n", .{});
         break :blk kp;
     };
     
@@ -242,15 +272,15 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     const secret_key = keypair.secret_key;
     
     // CRITICAL DEBUG: Verify the secret key has the correct parameter
-    stderr.print("ZIG_SIGN_DEBUG_STEP4: Secret key parameter after keyGenWithParameter (canonical): ", .{}) catch {};
+    log.print("ZIG_SIGN_DEBUG_STEP4: Secret key parameter after keyGenWithParameter (canonical): ", .{});
     for (0..5) |i| {
-        stderr.print("0x{x:0>8} ", .{secret_key.getParameter()[i].toCanonical()}) catch {};
+        log.print("0x{x:0>8} ", .{secret_key.getParameter()[i].toCanonical()});
     }
-    stderr.print("(Montgomery: ", .{}) catch {};
+    log.print("(Montgomery: ", .{});
     for (0..5) |i| {
-        stderr.print("0x{x:0>8} ", .{secret_key.getParameter()[i].toMontgomery()}) catch {};
+        log.print("0x{x:0>8} ", .{secret_key.getParameter()[i].toMontgomery()});
     }
-    stderr.print(")\n", .{}) catch {};
+    log.print(")\n", .{});
 
     // Convert message to 32 bytes
     var msg_bytes: [32]u8 = undefined;
@@ -320,8 +350,7 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     std.debug.print("  Epoch: {}\n", .{epoch});
 
     // Debug: print file path to verify we're reading from the correct file
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("ZIG_VERIFY_DEBUG: Reading signature from file: {s}\n", .{sig_path}) catch {};
+    log.print("ZIG_VERIFY_DEBUG: Reading signature from file: {s}\n", .{sig_path});
 
     // Load signature from binary format (bincode)
     // Import bincode functions from remote_hash_tool
@@ -341,15 +370,14 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     
     // Debug: print rho from signature right after reading (before verify)
     const rho_after_read = signature.getRho();
-    stderr.print("ZIG_VERIFY_DEBUG: rho from signature.getRho() RIGHT AFTER READ (Montgomery): ", .{}) catch {};
+    log.print("ZIG_VERIFY_DEBUG: rho from signature.getRho() RIGHT AFTER READ (Montgomery): ", .{});
     for (0..rand_len) |i| {
-        stderr.print("0x{x:0>8} ", .{rho_after_read[i].toMontgomery()}) catch {};
+        log.print("0x{x:0>8} ", .{rho_after_read[i].toMontgomery()});
     }
-    stderr.print("\n", .{}) catch {};
+    log.print("\n", .{});
 
     // Debug: print which public key file we're reading from
-    const stderr_pk = std.io.getStdErr().writer();
-    stderr_pk.print("ZIG_VERIFY_DEBUG: Reading public key from file: {s}\n", .{pk_path}) catch {};
+    log.print("ZIG_VERIFY_DEBUG: Reading public key from file: {s}\n", .{pk_path});
     
     // Load public key from Rust
     const pk_json = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
@@ -357,15 +385,15 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     const public_key = try hash_zig.serialization.deserializePublicKey(pk_json);
     
     // Debug: print parameter from public key right after reading
-    stderr_pk.print("ZIG_VERIFY_DEBUG: parameter from public key file (canonical): ", .{}) catch {};
+    log.print("ZIG_VERIFY_DEBUG: parameter from public key file (canonical): ", .{});
     for (0..5) |i| {
-        stderr_pk.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()}) catch {};
+        log.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()});
     }
-    stderr_pk.print("(Montgomery: ", .{}) catch {};
+    log.print("(Montgomery: ", .{});
     for (0..5) |i| {
-        stderr_pk.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()}) catch {};
+        log.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()});
     }
-    stderr_pk.print(")\n", .{}) catch {};
+    log.print(")\n", .{});
 
     // Scheme already initialized above
 
