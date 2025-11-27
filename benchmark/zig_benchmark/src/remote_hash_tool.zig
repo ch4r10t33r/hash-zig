@@ -221,10 +221,8 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
         }
     }
 
-    var path_ptr = HashTreeOpening.init(allocator, path_nodes) catch |err| {
-        allocator.free(path_nodes);
-        return err;
-    };
+    // HashTreeOpening.init creates a copy of path_nodes, so we free the original
+    var path_ptr = try HashTreeOpening.init(allocator, path_nodes);
     allocator.free(path_nodes);
 
     // Read rho (7 u32 values in MONTGOMERY form, no length prefix for fixed array)
