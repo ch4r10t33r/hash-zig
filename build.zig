@@ -276,6 +276,24 @@ pub fn build(b: *std.Build) void {
     const keygen_benchmark_exe_step = b.step("benchmark-keygen", "Run key generation benchmarks");
     keygen_benchmark_exe_step.dependOn(&run_keygen_benchmark_exe.step);
 
+    // Parallel benchmark
+    const parallel_benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark_parallel.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    parallel_benchmark_module.addImport("hash-zig", hash_zig_module);
+
+    const parallel_benchmark_exe = b.addExecutable(.{
+        .name = "benchmark-parallel",
+        .root_module = parallel_benchmark_module,
+    });
+    b.installArtifact(parallel_benchmark_exe);
+
+    const run_parallel_benchmark_exe = b.addRunArtifact(parallel_benchmark_exe);
+    const parallel_benchmark_exe_step = b.step("benchmark-parallel", "Run parallel tree generation benchmark");
+    parallel_benchmark_exe_step.dependOn(&run_parallel_benchmark_exe.step);
+
     // Documentation generation
     if (enable_docs) {
         const docs = b.addInstallDirectory(.{
