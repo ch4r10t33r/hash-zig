@@ -148,8 +148,25 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifet
         std.debug.print("✅ Seed saved to tmp/zig_seed.hex\n", .{});
     }
 
+    // Read active epochs from file (default to 256 if not found)
+    const num_active_epochs = blk: {
+        const active_epochs_file = std.fs.cwd().readFileAlloc(allocator, "tmp/zig_active_epochs.txt", 32) catch |err| {
+            if (err == error.FileNotFound) {
+                break :blk 256; // Default to 256 for backward compatibility
+            }
+            return err;
+        };
+        defer allocator.free(active_epochs_file);
+        // Remove trailing newline if present
+        var active_epochs_str = active_epochs_file;
+        if (active_epochs_str.len > 0 and active_epochs_str[active_epochs_str.len - 1] == '\n') {
+            active_epochs_str = active_epochs_str[0..active_epochs_str.len - 1];
+        }
+        break :blk try std.fmt.parseUnsigned(u32, active_epochs_str, 10);
+    };
+
     // Generate keypair
-    var keypair = scheme.keyGen(0, 256) catch |err| {
+    var keypair = scheme.keyGen(0, num_active_epochs) catch |err| {
         const stderr = std.io.getStdErr().writer();
         stderr.print("ZIG_KEYGEN_ERROR: keyGen failed with error {s}\n", .{@errorName(err)}) catch {};
         return err;
@@ -216,7 +233,24 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         // Rebuild scheme and keypair exactly as in keygenCommand
         scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, seed);
 
-        const kp = try scheme.keyGen(0, 256);
+        // Read active epochs from file (default to 256 if not found)
+        const num_active_epochs = blk2: {
+            const active_epochs_file = std.fs.cwd().readFileAlloc(allocator, "tmp/zig_active_epochs.txt", 32) catch |err| {
+                if (err == error.FileNotFound) {
+                    break :blk2 256; // Default to 256 for backward compatibility
+                }
+                return err;
+            };
+            defer allocator.free(active_epochs_file);
+            // Remove trailing newline if present
+            var active_epochs_str = active_epochs_file;
+            if (active_epochs_str.len > 0 and active_epochs_str[active_epochs_str.len - 1] == '\n') {
+                active_epochs_str = active_epochs_str[0..active_epochs_str.len - 1];
+            }
+            break :blk2 try std.fmt.parseUnsigned(u32, active_epochs_str, 10);
+        };
+
+        const kp = try scheme.keyGen(0, num_active_epochs);
         stderr.print("ZIG_SIGN_DEBUG: Reconstructed keypair from seed (deterministic path)\n", .{}) catch {};
         break :blk kp;
     } else blk: {

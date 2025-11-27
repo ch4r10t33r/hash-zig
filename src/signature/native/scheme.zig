@@ -2,6 +2,8 @@
 //! This implementation matches Rust GeneralizedXMSSSignatureScheme exactly
 
 const std = @import("std");
+const process = std.process;
+const sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
 const log = @import("../../utils/log.zig");
 const FieldElement = @import("../../core/field.zig").FieldElement;
@@ -134,6 +136,264 @@ pub const HashSubTree = struct {
             return layers;
         }
         return null;
+    }
+};
+
+const CACHE_MAGIC = @as(u32, 0x42544331); // "BTC1"
+
+const BottomTreeCache = struct {
+    allocator: Allocator,
+    enabled: bool,
+    root_path: []u8,
+    mutex: std.Thread.Mutex,
+
+    const CacheError = error{
+        InvalidCacheFile,
+        CacheMismatch,
+    };
+
+    pub fn init(allocator: Allocator) !BottomTreeCache {
+        var enabled = true;
+        if (process.getEnvVarOwned(allocator, "HASH_ZIG_DISABLE_BT_CACHE")) |value| {
+            enabled = false;
+            allocator.free(value);
+        } else |err| switch (err) {
+            error.EnvironmentVariableNotFound => {},
+            else => return err,
+        }
+
+        const path_env = process.getEnvVarOwned(allocator, "HASH_ZIG_BT_CACHE_DIR") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        const default_path = "tmp/bottom_tree_cache";
+        const source_path = path_env orelse default_path;
+        const root_path = try allocator.dupe(u8, source_path);
+        if (path_env) |env| {
+            allocator.free(env);
+        }
+
+        if (enabled) {
+            std.fs.cwd().makePath(source_path) catch |err| {
+                log.print("ZIG_CACHE: disabling bottom tree cache (makePath failed: {s})\n", .{@errorName(err)});
+                enabled = false;
+            };
+        }
+
+        return BottomTreeCache{
+            .allocator = allocator,
+            .enabled = enabled,
+            .root_path = root_path,
+            .mutex = .{},
+        };
+    }
+
+    pub fn deinit(self: *BottomTreeCache) void {
+        self.allocator.free(self.root_path);
+    }
+
+    fn computeKey(
+        log_lifetime: usize,
+        bottom_tree_index: usize,
+        prf_key: [32]u8,
+        parameter: [5]FieldElement,
+    ) [64]u8 {
+        var hasher = sha256.init(.{});
+
+        var buf8: [8]u8 = undefined;
+        std.mem.writeInt(u64, &buf8, @as(u64, @intCast(log_lifetime)), .little);
+        hasher.update(&buf8);
+
+        std.mem.writeInt(u64, &buf8, @as(u64, bottom_tree_index), .little);
+        hasher.update(&buf8);
+
+        hasher.update(&prf_key);
+
+        for (parameter) |fe| {
+            var buf4: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf4, fe.toCanonical(), .little);
+            hasher.update(&buf4);
+        }
+
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+
+        var hex: [64]u8 = undefined;
+        _ = std.fmt.bufPrint(&hex, "{s}", .{std.fmt.fmtSliceHexLower(&digest)}) catch unreachable;
+        return hex;
+    }
+
+    fn writeFieldElement(writer: anytype, fe: FieldElement) !void {
+        var buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &buf, fe.toCanonical(), .little);
+        try writer.writeAll(&buf);
+    }
+
+    fn readFieldElement(reader: anytype) !FieldElement {
+        var buf: [4]u8 = undefined;
+        try reader.readNoEof(&buf);
+        const value = std.mem.readInt(u32, &buf, .little);
+        return FieldElement.fromCanonical(value);
+    }
+
+    fn openDir(self: *BottomTreeCache) !std.fs.Dir {
+        return std.fs.cwd().openDir(self.root_path, .{});
+    }
+
+    pub fn load(
+        self: *BottomTreeCache,
+        allocator: Allocator,
+        log_lifetime: usize,
+        prf_key: [32]u8,
+        parameter: [5]FieldElement,
+        bottom_tree_index: usize,
+    ) !?*HashSubTree {
+        if (!self.enabled) return null;
+
+        var filename_buf: [80]u8 = undefined;
+        const key = computeKey(log_lifetime, bottom_tree_index, prf_key, parameter);
+        const filename = std.fmt.bufPrint(&filename_buf, "{s}.bin", .{key}) catch {
+            return null;
+        };
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var dir = self.openDir() catch return null;
+        defer dir.close();
+
+        const file = dir.openFile(filename, .{ .mode = .read_only }) catch return null;
+        defer file.close();
+
+        var reader = file.reader();
+
+        const magic = try reader.readInt(u32, .little);
+        if (magic != CACHE_MAGIC) return CacheError.InvalidCacheFile;
+
+        const version = try reader.readByte();
+        if (version != 1) return CacheError.InvalidCacheFile;
+
+        const stored_log = try reader.readByte();
+        _ = try reader.readInt(u16, .little); // reserved
+        if (stored_log != log_lifetime) return CacheError.CacheMismatch;
+
+        const stored_index = try reader.readInt(u32, .little);
+        if (stored_index != bottom_tree_index) return CacheError.CacheMismatch;
+
+        var stored_prf: [32]u8 = undefined;
+        try reader.readNoEof(&stored_prf);
+        if (!std.mem.eql(u8, &stored_prf, &prf_key)) return CacheError.CacheMismatch;
+
+        for (parameter) |expected| {
+            const value = try readFieldElement(reader);
+            if (!value.eql(expected)) return CacheError.CacheMismatch;
+        }
+
+        var root_value: [8]FieldElement = undefined;
+        for (&root_value) |*dest| {
+            dest.* = try readFieldElement(reader);
+        }
+
+        const num_layers = try reader.readInt(u32, .little);
+        if (num_layers == 0) return CacheError.InvalidCacheFile;
+
+        const layers = try allocator.alloc(PaddedLayer, num_layers);
+        errdefer {
+            for (layers) |layer| {
+                allocator.free(layer.nodes);
+            }
+            allocator.free(layers);
+        }
+
+        for (layers, 0..) |*layer, layer_idx| {
+            _ = layer_idx;
+            const start_index_u64 = try reader.readInt(u64, .little);
+            const node_count = try reader.readInt(u32, .little);
+
+            const start_index = std.math.cast(usize, start_index_u64) orelse return CacheError.InvalidCacheFile;
+            var nodes = try allocator.alloc([8]FieldElement, node_count);
+            errdefer allocator.free(nodes);
+
+            for (0..node_count) |node_idx| {
+                for (0..8) |j| {
+                    nodes[node_idx][j] = try readFieldElement(reader);
+                }
+            }
+
+            layer.* = .{
+                .start_index = start_index,
+                .nodes = nodes,
+            };
+        }
+
+        return try HashSubTree.initWithLayers(allocator, root_value, layers);
+    }
+
+    pub fn store(
+        self: *BottomTreeCache,
+        log_lifetime: usize,
+        prf_key: [32]u8,
+        parameter: [5]FieldElement,
+        bottom_tree_index: usize,
+        root_value: [8]FieldElement,
+        layers: []const PaddedLayer,
+    ) void {
+        if (!self.enabled) return;
+
+        var filename_buf: [80]u8 = undefined;
+        const key = computeKey(log_lifetime, bottom_tree_index, prf_key, parameter);
+        const filename = std.fmt.bufPrint(&filename_buf, "{s}.bin", .{key}) catch {
+            log.print("ZIG_CACHE: failed to format cache filename for bottom tree {}\n", .{bottom_tree_index});
+            return;
+        };
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var dir = self.openDir() catch {
+            log.print("ZIG_CACHE: unable to open cache dir {s}\n", .{self.root_path});
+            return;
+        };
+        defer dir.close();
+
+        var atomic_file = dir.atomicFile(filename, .{}) catch {
+            log.print("ZIG_CACHE: unable to create cache file {s}\n", .{filename});
+            return;
+        };
+        defer atomic_file.deinit();
+
+        const writer = atomic_file.file.writer();
+
+        writer.writeInt(u32, CACHE_MAGIC, .little) catch return;
+        writer.writeByte(1) catch return;
+        writer.writeByte(@intCast(log_lifetime)) catch return;
+        writer.writeInt(u16, 0, .little) catch return;
+        writer.writeInt(u32, @intCast(bottom_tree_index), .little) catch return;
+        writer.writeAll(&prf_key) catch return;
+
+        for (parameter) |fe| {
+            writeFieldElement(writer, fe) catch return;
+        }
+
+        for (root_value) |fe| {
+            writeFieldElement(writer, fe) catch return;
+        }
+
+        writer.writeInt(u32, @intCast(layers.len), .little) catch return;
+
+        for (layers) |layer| {
+            writer.writeInt(u64, @intCast(layer.start_index), .little) catch return;
+            writer.writeInt(u32, @intCast(layer.nodes.len), .little) catch return;
+            for (layer.nodes) |node| {
+                for (node) |fe| {
+                    writeFieldElement(writer, fe) catch return;
+                }
+            }
+        }
+
+        if (atomic_file.finish()) |_| {} else |err| {
+            log.print("ZIG_CACHE: failed to finalize cache file {s}: {s}\n", .{ filename, @errorName(err) });
+        }
     }
 };
 
@@ -375,6 +635,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     rng: ChaCha12Rng,
     layer_cache: std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
     layer_cache_mutex: std.Thread.Mutex,
+    bottom_tree_cache: BottomTreeCache,
 
     pub fn init(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
@@ -386,6 +647,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
         };
 
+        const bottom_tree_cache = try BottomTreeCache.init(allocator);
         const self = try allocator.create(GeneralizedXMSSSignatureScheme);
         self.* = GeneralizedXMSSSignatureScheme{
             .lifetime_params = lifetime_params,
@@ -394,6 +656,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .rng = ChaCha12Rng.init(initDefaultSeed()),
             .layer_cache = std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
             .layer_cache_mutex = .{},
+            .bottom_tree_cache = bottom_tree_cache,
         };
 
         self.poseidon2.* = poseidon2;
@@ -409,6 +672,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .lifetime_2_18 => LIFETIME_2_18_PARAMS,
             .lifetime_2_32 => LIFETIME_2_32_HASHING_PARAMS,
         };
+        const bottom_tree_cache = try BottomTreeCache.init(allocator);
         const self = try allocator.create(GeneralizedXMSSSignatureScheme);
         self.* = GeneralizedXMSSSignatureScheme{
             .lifetime_params = lifetime_params,
@@ -417,6 +681,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .rng = ChaCha12Rng.init(seed),
             .layer_cache = std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
             .layer_cache_mutex = .{},
+            .bottom_tree_cache = bottom_tree_cache,
         };
         self.poseidon2.* = poseidon2;
         return self;
@@ -442,6 +707,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             entry.value_ptr.deinit();
         }
         self.layer_cache.deinit();
+        self.bottom_tree_cache.deinit();
 
         self.allocator.destroy(self.poseidon2);
         self.allocator.destroy(self);
@@ -524,6 +790,22 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     ) !*HashSubTree {
         const num_chains = self.lifetime_params.dimension;
         _ = self.lifetime_params.base; // chain_length unused for now
+
+        if (self.bottom_tree_cache.enabled) {
+            const cached = self.bottom_tree_cache.load(
+                self.allocator,
+                self.lifetime_params.log_lifetime,
+                prf_key,
+                parameter,
+                bottom_tree_index,
+            ) catch |err| blk: {
+                log.print("ZIG_CACHE: failed to load bottom tree {}: {s}\n", .{ bottom_tree_index, @errorName(err) });
+                break :blk null;
+            };
+            if (cached) |tree| {
+                return tree;
+            }
+        }
 
         // Calculate leaves per bottom tree
         const leafs_per_bottom_tree = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime / 2);
@@ -780,6 +1062,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         if (bottom_tree_index == 1) {
             log.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
+        }
+
+        if (self.bottom_tree_cache.enabled) {
+            self.bottom_tree_cache.store(
+                self.lifetime_params.log_lifetime,
+                prf_key,
+                parameter,
+                bottom_tree_index,
+                bottom_root,
+                bottom_layers,
+            );
         }
 
         // Store layers in HashSubTree so they can be reused during signing (major optimization!)
@@ -2686,16 +2979,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.print("\n", .{});
 
         // CRITICAL DEBUG: Print parameter BEFORE creating secret key
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{}) catch {};
+        log.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{parameter[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{parameter[i].toCanonical()});
         }
-        stderr.print("(Montgomery: ", .{}) catch {};
+        log.print("(Montgomery: ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{parameter[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{parameter[i].toMontgomery()});
         }
-        stderr.print(")\n", .{}) catch {};
+        log.print(")\n", .{});
 
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
@@ -2710,15 +3002,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         );
 
         // CRITICAL DEBUG: Verify the parameter is correctly stored in the secret key
-        stderr.print("ZIG_KEYGEN_DEBUG: Secret key parameter after init (canonical): ", .{}) catch {};
+        log.print("ZIG_KEYGEN_DEBUG: Secret key parameter after init (canonical): ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()}) catch {};
+            log.print("0x{x:0>8} ", .{secret_key.parameter[i].toCanonical()});
         }
-        stderr.print("(Montgomery: ", .{}) catch {};
+        log.print("(Montgomery: ", .{});
         for (0..5) |i| {
-            stderr.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
+            log.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()});
         }
-        stderr.print(")\n", .{}) catch {};
+        log.print(")\n", .{});
 
         return .{
             .public_key = public_key,

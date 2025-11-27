@@ -121,6 +121,8 @@ def parse_args() -> argparse.Namespace:
 def build_scenarios(lifetimes: list[str], seed_hex: str) -> list[ScenarioConfig]:
     scenarios: list[ScenarioConfig] = []
     for lifetime in lifetimes:
+        # Use 1024 active epochs for 2^32, 256 for others
+        num_active_epochs = 1024 if lifetime == "2^32" else 256
         scenarios.append(
             ScenarioConfig(
                 lifetime=lifetime,
@@ -128,7 +130,7 @@ def build_scenarios(lifetimes: list[str], seed_hex: str) -> list[ScenarioConfig]
                 message="Cross-language benchmark message",
                 epoch=0,
                 start_epoch=0,
-                num_active_epochs=256,
+                num_active_epochs=num_active_epochs,
                 seed_hex=seed_hex,
             )
         )
@@ -248,6 +250,9 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResul
     tmp_dir = RUST_PROJECT / "tmp"
     tmp_dir.mkdir(exist_ok=True)
     
+    # Save active epochs to file for the tool to read
+    (tmp_dir / "rust_active_epochs.txt").write_text(str(cfg.num_active_epochs))
+    
     # Generate keypair first
     start = time.perf_counter()
     keygen_result = run_command(
@@ -284,6 +289,9 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int)
     # Setup tmp directory in project root
     tmp_dir = REPO_ROOT / "tmp"
     tmp_dir.mkdir(exist_ok=True)
+    
+    # Save active epochs to file for the tool to read
+    (tmp_dir / "zig_active_epochs.txt").write_text(str(cfg.num_active_epochs))
     
     # Generate keypair first
     start = time.perf_counter()
