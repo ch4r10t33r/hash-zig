@@ -636,6 +636,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     layer_cache: std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
     layer_cache_mutex: std.Thread.Mutex,
     bottom_tree_cache: BottomTreeCache,
+    rng_mutex: std.Thread.Mutex, // Mutex for thread-safe RNG access during parallel tree generation
 
     pub fn init(allocator: Allocator, lifetime: @import("../../core/params_rust_compat.zig").KeyLifetime) !*GeneralizedXMSSSignatureScheme {
         const poseidon2 = try Poseidon2RustCompat.init(allocator);
@@ -657,6 +658,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .layer_cache = std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
             .layer_cache_mutex = .{},
             .bottom_tree_cache = bottom_tree_cache,
+            .rng_mutex = .{},
         };
 
         self.poseidon2.* = poseidon2;
@@ -682,6 +684,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             .layer_cache = std.HashMap(usize, poseidon_top_level.AllLayerInfoForBase, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
             .layer_cache_mutex = .{},
             .bottom_tree_cache = bottom_tree_cache,
+            .rng_mutex = .{},
         };
         self.poseidon2.* = poseidon2;
         return self;
@@ -2623,7 +2626,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Pad a layer to ensure it starts at an even index and ends at an odd index
     /// This matches the Rust HashTreeLayer::padded algorithm exactly
+    /// Thread-safe: uses mutex to protect RNG access
     fn padLayer(self: *GeneralizedXMSSSignatureScheme, nodes: [][8]FieldElement, start_index: usize) !PaddedLayer {
+        self.rng_mutex.lock();
+        defer self.rng_mutex.unlock();
         return self.padLayerWithRng(nodes, start_index, &self.rng.random());
     }
 
@@ -2878,36 +2884,138 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // correct time during the actual tree construction.
 
         // Generate bottom trees and collect their roots as arrays of 8 field elements
-        var roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);
+        // Note: Worker threads mutate this array, so we need a mutable reference
+        const roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);
         defer self.allocator.free(roots_of_bottom_trees);
 
-        log.print("DEBUG: Generating {} bottom trees\n", .{num_bottom_trees});
+        log.print("DEBUG: Generating {} bottom trees in parallel\n", .{num_bottom_trees});
         log.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
         // log.print("DEBUG: Parameter: {any}\n", .{parameter});
 
         log.print("DEBUG: Expansion result: start={}, end={}\n", .{ expansion_result.start, expansion_result.end });
 
-        // Generate left and right bottom trees (first two)
-        const left_bottom_tree_index = expansion_result.start;
-        const left_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, left_bottom_tree_index, parameter);
-        roots_of_bottom_trees[0] = left_bottom_tree.root();
-        log.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{left_bottom_tree_index});
-        for (roots_of_bottom_trees[0]) |fe| {
-            log.print("0x{x:0>8} ", .{fe.value});
+        // Parallel tree generation context
+        const TreeGenContext = struct {
+            scheme: *GeneralizedXMSSSignatureScheme,
+            prf_key: [32]u8,
+            parameter: [5]FieldElement,
+            roots: [][8]FieldElement,
+            tree_indices: []usize,
+            trees: []?*HashSubTree,
+            next_index: std.atomic.Value(usize),
+            error_flag: std.atomic.Value(bool),
+            error_mutex: std.Thread.Mutex,
+            stored_error: ?anyerror,
+        };
+
+        // Allocate storage for trees (we'll keep the first two, deinit the rest)
+        var trees = try self.allocator.alloc(?*HashSubTree, num_bottom_trees);
+        defer self.allocator.free(trees);
+        for (trees) |*t| t.* = null;
+
+        // Collect all tree indices
+        var tree_indices = try self.allocator.alloc(usize, num_bottom_trees);
+        defer self.allocator.free(tree_indices);
+        for (0..num_bottom_trees) |i| {
+            tree_indices[i] = expansion_result.start + i;
         }
-        log.print("\n", .{});
 
-        const right_bottom_tree_index = expansion_result.start + 1;
-        const right_bottom_tree = try self.bottomTreeFromPrfKey(prf_key, right_bottom_tree_index, parameter);
-        roots_of_bottom_trees[1] = right_bottom_tree.root();
-        // log.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ right_bottom_tree_index, roots_of_bottom_trees[1][0].value });
+        var ctx = TreeGenContext{
+            .scheme = self,
+            .prf_key = prf_key,
+            .parameter = parameter,
+            .roots = @constCast(roots_of_bottom_trees), // Worker threads mutate this
+            .tree_indices = tree_indices,
+            .trees = trees,
+            .next_index = std.atomic.Value(usize).init(0),
+            .error_flag = std.atomic.Value(bool).init(false),
+            .error_mutex = .{},
+            .stored_error = null,
+        };
 
-        // Generate remaining bottom trees
-        for (expansion_result.start + 2..expansion_result.end) |bottom_tree_index| {
-            const bottom_tree = try self.bottomTreeFromPrfKey(prf_key, bottom_tree_index, parameter);
-            roots_of_bottom_trees[bottom_tree_index - expansion_result.start] = bottom_tree.root();
-            // log.print("DEBUG: Bottom tree {} root: 0x{x}\n", .{ bottom_tree_index, bottom_tree.root()[0].value });
-            bottom_tree.deinit(); // Clean up individual trees
+        // Worker function for parallel tree generation
+        const treeWorker = struct {
+            fn worker(ctx_ptr: *TreeGenContext) void {
+                while (true) {
+                    const array_idx = ctx_ptr.next_index.fetchAdd(1, .monotonic);
+                    if (array_idx >= ctx_ptr.tree_indices.len) {
+                        break;
+                    }
+
+                    const tree_idx = ctx_ptr.tree_indices[array_idx];
+
+                    // Generate tree
+                    const tree = ctx_ptr.scheme.bottomTreeFromPrfKey(
+                        ctx_ptr.prf_key,
+                        tree_idx,
+                        ctx_ptr.parameter,
+                    ) catch |err| {
+                        // Store error
+                        ctx_ptr.error_mutex.lock();
+                        defer ctx_ptr.error_mutex.unlock();
+                        if (!ctx_ptr.error_flag.load(.monotonic)) {
+                            ctx_ptr.error_flag.store(true, .monotonic);
+                            ctx_ptr.stored_error = err;
+                        }
+                        return;
+                    };
+
+                    // Store tree and root
+                    ctx_ptr.trees[array_idx] = tree;
+                    ctx_ptr.roots[array_idx] = tree.root();
+                }
+            }
+        };
+
+        // Determine number of threads (use all CPUs, but cap at number of trees)
+        const num_cpus = std.Thread.getCpuCount() catch 1;
+        const num_threads = @min(num_cpus, num_bottom_trees);
+        log.print("DEBUG: Using {} threads for parallel tree generation\n", .{num_threads});
+
+        // Spawn worker threads
+        var threads = try self.allocator.alloc(std.Thread, num_threads);
+        defer self.allocator.free(threads);
+
+        for (0..num_threads) |t| {
+            threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
+        }
+
+        // Wait for all threads
+        for (threads) |thread| {
+            thread.join();
+        }
+
+        // Check for errors
+        if (ctx.error_flag.load(.monotonic)) {
+            ctx.error_mutex.lock();
+            defer ctx.error_mutex.unlock();
+            if (ctx.stored_error) |err| {
+                // Clean up any successfully generated trees
+                for (trees) |tree| {
+                    if (tree) |t| t.deinit();
+                }
+                return err;
+            }
+            return error.UnknownError;
+        }
+
+        // Log roots for first tree
+        if (num_bottom_trees > 0) {
+            log.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{tree_indices[0]});
+            for (roots_of_bottom_trees[0]) |fe| {
+                log.print("0x{x:0>8} ", .{fe.value});
+            }
+            log.print("\n", .{});
+        }
+
+        // Store first two trees (left and right) for secret key
+        const left_bottom_tree_index = expansion_result.start;
+        const left_bottom_tree = trees[0] orelse return error.InvalidBottomTree;
+        const right_bottom_tree = if (num_bottom_trees > 1) trees[1] orelse return error.InvalidBottomTree else return error.InsufficientBottomTrees;
+
+        // Clean up remaining trees (we only need the first two)
+        for (trees[2..]) |tree| {
+            if (tree) |t| t.deinit();
         }
 
         // Debug: log all roots before building top tree
