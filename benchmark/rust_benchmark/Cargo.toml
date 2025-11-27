@@ -8,9 +8,9 @@ default = []
 debug-tools = []
 
 [dependencies]
-leansig = { path = "../leansig-local" }
+leansig = { git = "https://github.com/leanEthereum/leanSig.git" }
 p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
-p3-poseidon2 = { path = "../p3-poseidon2-local" }
+p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
 p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
 
@@ -24,9 +24,6 @@ hex = "0.4"
 bincode = "1.3"
 num-bigint = "0.4"
 num-traits = "0.2"
-
-[patch."https://github.com/Plonky3/Plonky3.git"]
-p3-poseidon2 = { path = "../p3-poseidon2-local" }
 
 [[bin]]
 name = "cross_lang_rust_tool"
