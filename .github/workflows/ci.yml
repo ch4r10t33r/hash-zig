@@ -118,7 +118,7 @@ jobs:
       
       - name: Build library
         if: steps.check_changes.outputs.has_zig_changes == 'true'
-        run: zig build
+        run: zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
 
       - name: Run cross-language compatibility suite
         if: steps.check_changes.outputs.has_zig_changes == 'true'

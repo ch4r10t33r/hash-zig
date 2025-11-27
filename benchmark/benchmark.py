@@ -34,12 +34,22 @@ DEBUG_MARKERS = (
     "HASH_SIG_DEBUG:",
     "RUST_TREE_DEBUG:",
     "RUST_POSEIDON_CHAIN_DEBUG:",
+    "RUST_MAP_VERTEX_DEBUG:",
+    "RUST_VERIFY_DEBUG:",
+    "RUST_SPONGE_DEBUG:",
     "ZIG_SIGN_DEBUG:",
     "ZIG_ENCODING_DEBUG:",
     "ZIG_HYPERCUBE_DEBUG:",
+    "ZIG_VERIFY_DEBUG:",
+    "ZIG_READ_DEBUG:",
+    "ZIG_MAP_VERTEX_DEBUG:",
     "ZIG_POS_IN:",
     "ZIG_POS_OUT:",
     "ZIG_POS_CONTEXT",
+    "ZIG_POS_INPUTS:",
+    "ZIG_POS_INPUT_CANONICAL",
+    "ZIG_POS_OUTPUT_CANONICAL",
+    "ZIG_SPONGE_DEBUG:",
 )
 
 
@@ -200,7 +210,11 @@ def ensure_zig_binary() -> None:
     if ZIG_BIN.exists():
         return
     print("Building cross-lang-zig-tool (Zig)...")
-    result = run_command(["zig", "build", "install", "-Doptimize=ReleaseFast"], cwd=REPO_ROOT, timeout=600)
+    result = run_command(
+        ["zig", "build", "install", "-Doptimize=ReleaseFast", "-Ddebug-logs=false"],
+        cwd=REPO_ROOT,
+        timeout=600,
+    )
     if result.returncode != 0 or not ZIG_BIN.exists():
         raise RuntimeError("Failed to build cross-lang-zig-tool")
 
