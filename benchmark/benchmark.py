@@ -197,8 +197,6 @@ def zig_sign_timeout(cfg: ScenarioConfig, timeout_2_32: int) -> int:
 
 
 def ensure_rust_binary() -> None:
-    if RUST_BIN.exists():
-        return
     print("Building cross-lang-rust-tool (Rust)...")
     result = run_command(
         ["cargo", "build", "--release", "--bin", "cross_lang_rust_tool"],
@@ -210,8 +208,6 @@ def ensure_rust_binary() -> None:
 
 
 def ensure_zig_binary() -> None:
-    if ZIG_BIN.exists():
-        return
     print("Building cross-lang-zig-tool (Zig)...")
     result = run_command(
         ["zig", "build", "install", "-Doptimize=ReleaseFast", "-Ddebug-logs=false"],

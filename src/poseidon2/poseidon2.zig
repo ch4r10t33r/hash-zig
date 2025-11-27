@@ -101,53 +101,6 @@ pub fn apply_mat4(state: []F, start_idx: usize) void {
     x[2] = t01233.add(t23);
 }
 
-// KoalaBear internal layer parameters (exact from Plonky3)
-const KOALABEAR_INTERNAL_V_16: [16]u32 = .{
-    0x7f000000, // -2
-    0x00000001, // 1
-    0x00000002, // 2
-    0x3f800000, // 1/2
-    0x00000003, // 3
-    0x00000004, // 4
-    0xbf800000, // -1/2
-    0x7fffffff, // -3
-    0x7ffffffe, // -4
-    0x007f0000, // 1/2^8
-    0x3f000000, // 1/8
-    0x0000007f, // 1/2^24
-    0xff810000, // -1/2^8
-    0xbf000000, // -1/8
-    0xbf800000, // -1/16
-    0xff00007f, // -1/2^24
-};
-
-const KOALABEAR_INTERNAL_V_24: [24]u32 = .{
-    0x7f000000, // -2
-    0x00000001, // 1
-    0x00000002, // 2
-    0x3f800000, // 1/2
-    0x00000003, // 3
-    0x00000004, // 4
-    0xbf800000, // -1/2
-    0x7fffffff, // -3
-    0x7ffffffe, // -4
-    0x007f0000, // 1/2^8
-    0x3f000000, // 1/4
-    0x3f000000, // 1/8
-    0x3f800000, // 1/16
-    0x3fc00000, // 1/32
-    0x3fe00000, // 1/64
-    0x0000007f, // 1/2^24
-    0xff810000, // -1/2^8
-    0xbf000000, // -1/8
-    0xbf800000, // -1/16
-    0xbfc00000, // -1/32
-    0xbfe00000, // -1/64
-    0xff000000, // -1/2^7
-    0xfe000000, // -1/2^9
-    0xff00007f, // -1/2^24
-};
-
 // Apply internal layer (exact Plonky3 logic from KoalaBearInternalLayerParameters)
 pub fn apply_internal_layer_16(state: []F, rc: u32) void {
     // Add round constant to state[0]
