@@ -1873,13 +1873,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log capacity_value (in Montgomery form, print as canonical for comparison)
-        // Always print to stderr for comparison
-        const stderr_capacity = std.io.getStdErr().writer();
-        stderr_capacity.print("ZIG_SPONGE_DEBUG: Capacity value ({} elements, canonical): ", .{CAPACITY}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Capacity value ({} elements, canonical): ", .{CAPACITY});
         for (capacity_value_monty) |fe| {
-            stderr_capacity.print("0x{x:0>8} ", .{fe.toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{fe.toU32()});
         }
-        stderr_capacity.print("\n", .{}) catch {};
+        log.print("\n", .{});
         log.print("DEBUG: Sponge capacity_value ({} elements, Montgomery->canonical): ", .{CAPACITY});
         for (capacity_value_monty, 0..) |fe, i| {
             log.print("{}:0x{x}", .{ i, fe.toU32() });
@@ -1894,8 +1892,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const combined_input_len = self.lifetime_params.parameter_len + self.lifetime_params.tweak_len_fe + flattened_len;
 
         // Debug: print lengths
-        const stderr_len = std.io.getStdErr().writer();
-        stderr_len.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len }) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len });
 
         var combined_input_monty = try self.allocator.alloc(F, combined_input_len);
         defer self.allocator.free(combined_input_monty);
@@ -1922,13 +1919,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print first RATE elements of combined input (in canonical form for comparison)
-        // Always print to stderr for comparison
-        const stderr_combined = std.io.getStdErr().writer();
-        stderr_combined.print("ZIG_SPONGE_DEBUG: Combined input (first {} elements, canonical): ", .{@min(15, combined_input_monty.len)}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Combined input (first {} elements, canonical): ", .{@min(15, combined_input_monty.len)});
         for (0..@min(15, combined_input_monty.len)) |i| {
-            stderr_combined.print("0x{x:0>8} ", .{combined_input_monty[i].toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{combined_input_monty[i].toU32()});
         }
-        stderr_combined.print("\n", .{}) catch {};
+        log.print("\n", .{});
         log.print("DEBUG: Sponge combined_input head RATE ({}): ", .{15});
         for (0..@min(15, combined_input_monty.len)) |i| {
             log.print("{}:0x{x}", .{ i, combined_input_monty[i].toU32() });
@@ -1972,18 +1967,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: verify capacity placement immediately after initialization
-        const stderr_verify = std.io.getStdErr().writer();
-        stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() }) catch {};
-        stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[23] = capacity[8]: state[23]=0x{x:0>8} capacity[8]=0x{x:0>8}\n", .{ state[23].toU32(), capacity_value_monty[8].toU32() }) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() });
+        log.print("ZIG_SPONGE_DEBUG: Verify state[23] = capacity[8]: state[23]=0x{x:0>8} capacity[8]=0x{x:0>8}\n", .{ state[23].toU32(), capacity_value_monty[8].toU32() });
 
         // Debug: print initial state (after initialization, before absorption)
-        // Always print to stderr for comparison
-        const stderr_init = std.io.getStdErr().writer();
-        stderr_init.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
         for (0..WIDTH) |i| {
-            stderr_init.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{state[i].toU32()});
         }
-        stderr_init.print("\n", .{}) catch {};
+        log.print("\n", .{});
         log.print("ZIG_SPONGE_DEBUG: Initial state (canonical): ", .{});
         for (0..WIDTH) |i| {
             log.print("{}:0x{x}", .{ i, state[i].toU32() });
@@ -1997,8 +1989,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var chunk_start: usize = 0;
         var chunk_num: usize = 0;
         const total_chunks = (padded_input.len + RATE - 1) / RATE;
-        const stderr_abs = std.io.getStdErr().writer();
-        stderr_abs.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks});
 
         while (chunk_start < padded_input.len) {
             const chunk_end = @min(chunk_start + RATE, padded_input.len);
@@ -2006,11 +1997,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug: print input values for first few and last few chunks (in canonical form for comparison)
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
-                stderr_abs.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) }) catch {};
+                log.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) });
                 for (0..@min(8, actual_chunk_len)) |i| {
-                    stderr_abs.print("0x{x:0>8} ", .{padded_input[chunk_start + i].toU32()}) catch {};
+                    log.print("0x{x:0>8} ", .{padded_input[chunk_start + i].toU32()});
                 }
-                stderr_abs.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
 
             // Add chunk to rate part of state (state[0..RATE])
@@ -2020,13 +2011,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             // Debug: print state after adding chunk (before permutation) for first few and last few chunks
-            // Always print to stderr for comparison
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
-                stderr_abs.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm, first 8): ", .{chunk_num}) catch {};
+                log.print("ZIG_SPONGE_DEBUG: State after adding chunk {} (before perm, first 8): ", .{chunk_num});
                 for (0..@min(8, WIDTH)) |i| {
-                    stderr_abs.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+                    log.print("0x{x:0>8} ", .{state[i].toU32()});
                 }
-                stderr_abs.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
 
             // Permute state (matching Rust's perm.permute_mut(&mut state))
@@ -2037,13 +2027,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             Poseidon24.permutation(state[0..]);
 
             // Debug: print state after permutation for first few and last few chunks
-            // Always print to stderr for comparison
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
-                stderr_abs.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (first 8): ", .{chunk_num}) catch {};
+                log.print("ZIG_SPONGE_DEBUG: State after chunk {} perm (first 8): ", .{chunk_num});
                 for (0..@min(8, WIDTH)) |i| {
-                    stderr_abs.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+                    log.print("0x{x:0>8} ", .{state[i].toU32()});
                 }
-                stderr_abs.print("\n", .{}) catch {};
+                log.print("\n", .{});
             }
 
             chunk_start = chunk_end;
@@ -2051,13 +2040,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: print state after all absorptions (before squeeze)
-        // Always print to stderr for comparison
-        const stderr_final = std.io.getStdErr().writer();
-        stderr_final.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{}) catch {};
+        log.print("ZIG_SPONGE_DEBUG: State after all absorptions (canonical): ", .{});
         for (0..WIDTH) |i| {
-            stderr_final.print("0x{x:0>8} ", .{state[i].toU32()}) catch {};
+            log.print("0x{x:0>8} ", .{state[i].toU32()});
         }
-        stderr_final.print("\n", .{}) catch {};
+        log.print("\n", .{});
 
         // Squeeze: extract OUTPUT_LEN elements from rate part (matching Rust's squeeze exactly)
         // Rust's squeeze: while out.len() < OUT_LEN { out.extend_from_slice(&state[..rate]); perm.permute_mut(&mut state); }
