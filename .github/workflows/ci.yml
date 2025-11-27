@@ -125,8 +125,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Running benchmark/benchmark.py for cross-language compatibility"
-          python3 benchmark/benchmark.py
+          echo "Running benchmark/benchmark.py for cross-language compatibility (lifetime 2^8)"
+          python3 benchmark/benchmark.py --lifetime 2^8
 
       - name: Skip tests (no Zig changes)
         if: steps.check_changes.outputs.has_zig_changes == 'false'
