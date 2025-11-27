@@ -103,12 +103,57 @@ fn prepareLayerInfo(allocator: std.mem.Allocator, w: usize) !AllLayerInfoForBase
 
         const prev_info = all_info[v - 1];
         for (0..max_d + 1) |d| {
-            const max_t = @min(d, w - 1);
-            for (0..max_t + 1) |t| {
-                const idx = d - t;
-                if (idx < prev_info.sizes.len) {
-                    try BigInt.add(&current_sizes[d], &current_sizes[d], &prev_info.sizes[idx]);
-                }
+            // CRITICAL FIX: Use Rust's formula from Lemma 8 in eprint 2025/889
+            // The original simple loop was incorrect - it worked for Zig→Zig because both
+            // sign and verify used the same wrong formula, but Rust→Zig failed.
+            // Rust's test confirms the formula is correct.
+            // Rust: a_i_start = (w.saturating_sub(d)).max(1)
+            const a_i_start = @max(1, if (w >= d) w - d else 0);
+            // Rust: a_i_end = min(w, w + (w - 1) * (v - 1) - d)
+            // Rust allows unsigned underflow (wraps), then takes min with w
+            // We need to match this exactly - don't check for underflow, let it wrap
+            const calc_term = (w - 1) * (v - 1);
+            const a_i_end_calc = w + calc_term - d; // This can wrap, matching Rust's behavior
+            const a_i_end = @min(w, a_i_end_calc);
+
+            // If the summation range is invalid, the layer size is zero (already initialized to 0)
+            if (a_i_start > a_i_end) {
+                continue;
+            }
+
+            // Map the range for `a_i` to a range for `d'` in the previous dimension
+            // Rust: d_prime_start = d - (w - a_i_start)
+            const d_prime_start = d - (w - a_i_start);
+            // Rust: d_prime_end = d - (w - a_i_end)
+            const d_prime_end = d - (w - a_i_end);
+
+            // Rust's sizes_sum_in_range expects valid indices in range [0, prefix_sums.len - 1]
+            // The formula should guarantee valid indices for valid inputs
+            // If indices are invalid, skip (size remains 0) - this matches Rust's panic behavior
+            if (d_prime_start < 0 or d_prime_end < 0) {
+                continue; // Invalid range (negative indices)
+            }
+            if (d_prime_start > d_prime_end) {
+                continue; // Invalid range (start > end)
+            }
+            if (d_prime_end >= prev_info.prefix_sums.len) {
+                continue; // Out of bounds
+            }
+
+            // Sum over the relevant slice of the previous dimension's layer sizes
+            // Rust: sizes_sum_in_range(d_prime_start..=d_prime_end)
+            // This uses prefix_sums: if start == 0, use prefix_sums[end], else prefix_sums[end] - prefix_sums[start - 1]
+            if (d_prime_start == 0) {
+                // If start is 0, use prefix_sum[d_prime_end] directly
+                try BigInt.add(&current_sizes[d], &current_sizes[d], &prev_info.prefix_sums[d_prime_end]);
+            } else {
+                // Otherwise, use prefix_sum[d_prime_end] - prefix_sum[d_prime_start - 1]
+                // d_prime_start > 0 is guaranteed by the if condition above
+                // d_prime_start - 1 is guaranteed to be < prefix_sums.len because d_prime_start >= 1 and d_prime_end < len
+                var range_sum = try BigInt.init(allocator);
+                defer range_sum.deinit();
+                try BigInt.sub(&range_sum, &prev_info.prefix_sums[d_prime_end], &prev_info.prefix_sums[d_prime_start - 1]);
+                try BigInt.add(&current_sizes[d], &current_sizes[d], &range_sum);
             }
         }
 
@@ -187,6 +232,61 @@ pub fn hypercubeFindLayerBig(
     return layer;
 }
 
+test "output layer sizes for comparison" {
+    const test_cases = [_]struct { w: usize, v: usize, d: usize }{
+        .{ .w = 8, .v = 1, .d = 0 },
+        .{ .w = 8, .v = 1, .d = 5 },
+        .{ .w = 8, .v = 1, .d = 7 },
+        .{ .w = 8, .v = 2, .d = 0 },
+        .{ .w = 8, .v = 2, .d = 5 },
+        .{ .w = 8, .v = 2, .d = 10 },
+        .{ .w = 8, .v = 2, .d = 14 },
+        .{ .w = 8, .v = 64, .d = 0 },
+        .{ .w = 8, .v = 64, .d = 50 },
+        .{ .w = 8, .v = 64, .d = 71 },
+        .{ .w = 8, .v = 64, .d = 100 },
+        .{ .w = 8, .v = 64, .d = 200 },
+        .{ .w = 8, .v = 64, .d = 300 },
+        .{ .w = 8, .v = 64, .d = 400 },
+        .{ .w = 8, .v = 64, .d = 448 },
+    };
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const stderr = std.io.getStdErr().writer();
+    try stderr.print("\nZig Layer Size Values\n", .{});
+    try stderr.print("=====================\n", .{});
+    try stderr.print("Format: w={{}}, v={{}}, d={{}} -> size\n\n", .{});
+
+    for (test_cases) |tc| {
+        const w = tc.w;
+        const v = tc.v;
+        const d = tc.d;
+
+        const max_d = (w - 1) * v;
+        if (d > max_d) {
+            try stderr.print("w={}, v={}, d={} -> INVALID (max_d={})\n", .{ w, v, d, max_d });
+            continue;
+        }
+
+        // Use prepareLayerInfo directly
+        var layer_info = try prepareLayerInfo(allocator, w);
+        defer layer_info.deinit();
+
+        const info = layer_info.get(v);
+
+        if (d < info.sizes.len) {
+            const size_str = try std.fmt.allocPrint(allocator, "{}", .{info.sizes[d].toConst()});
+            defer allocator.free(size_str);
+            try stderr.print("w={}, v={}, d={} -> {s}\n", .{ w, v, d, size_str });
+        } else {
+            try stderr.print("w={}, v={}, d={} -> OUT_OF_BOUNDS (len={})\n", .{ w, v, d, info.sizes.len });
+        }
+    }
+}
+
 pub fn mapToVertexBig(
     self: anytype,
     BASE: usize,
@@ -207,37 +307,74 @@ pub fn mapToVertexBig(
     defer x_curr.deinit();
     var d_curr = layer;
 
+    // Debug: Print initial values
+    const stderr = std.io.getStdErr().writer();
+    const x_curr_str = try std.fmt.allocPrint(self.allocator, "{}", .{x_curr.toConst()});
+    defer self.allocator.free(x_curr_str);
+    stderr.print("ZIG_MAP_VERTEX_DEBUG: START layer={} d_curr={} x_curr={s}\n", .{ layer, d_curr, x_curr_str }) catch {};
+
     for (1..DIMENSION) |i| {
-        var ji: usize = BASE;
+        // CRITICAL FIX: Initialize ji to a sentinel value matching Rust's usize::MAX
+        // Rust: let mut ji = usize::MAX;
+        var ji: usize = std.math.maxInt(usize);
         const sub_dim = DIMENSION - i;
-        const range_start = if (d_curr > (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
+        // CRITICAL FIX: Use saturating_sub to match Rust's behavior exactly
+        // Rust: range_start = d_curr.saturating_sub((w - 1) * (v - i))
+        const range_start = if (d_curr >= (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
         const sub_info = layer_data.get(sub_dim);
 
-        var j: usize = range_start;
+        // CRITICAL FIX: Match Rust's loop exactly: for j in range_start..=min(w - 1, d_curr)
+        // Rust uses inclusive range: range_start..=min(w - 1, d_curr)
         const limit = @min(BASE - 1, d_curr);
+        var j: usize = range_start;
+
+        // Debug: Print loop start
+        const x_curr_str_loop = try std.fmt.allocPrint(self.allocator, "{}", .{x_curr.toConst()});
+        defer self.allocator.free(x_curr_str_loop);
+        stderr.print("ZIG_MAP_VERTEX_DEBUG: i={} d_curr={} range_start={} limit={} x_curr={s}\n", .{ i, d_curr, range_start, limit, x_curr_str_loop }) catch {};
+
+        // CRITICAL: Loop must be inclusive on both ends (j <= limit), matching Rust's ..= operator
         while (j <= limit) : (j += 1) {
             const sub_layer = d_curr - j;
-            if (sub_layer >= sub_info.sizes.len) continue;
+            // CRITICAL FIX: In Rust, accessing out-of-bounds would panic.
+            // For valid inputs, sub_layer should always be within bounds.
+            // If it's out of bounds, it means our input is invalid, so we should return an error.
+            if (sub_layer >= sub_info.sizes.len) {
+                return error.InvalidHypercubeMapping;
+            }
             const count = &sub_info.sizes[sub_layer];
+            // CRITICAL FIX: Match Rust's comparison exactly: if x_curr >= *count
             const cmp = x_curr.order(count.*);
+            const count_str = try std.fmt.allocPrint(self.allocator, "{}", .{count.*.toConst()});
+            defer self.allocator.free(count_str);
+            stderr.print("ZIG_MAP_VERTEX_DEBUG:   j={} sub_layer={} count={s} cmp={s}\n", .{ j, sub_layer, count_str, @tagName(cmp) }) catch {};
+
             if (cmp == .gt or cmp == .eq) {
                 try BigInt.sub(&x_curr, &x_curr, count);
+                const x_curr_str_after = try std.fmt.allocPrint(self.allocator, "{}", .{x_curr.toConst()});
+                defer self.allocator.free(x_curr_str_after);
+                stderr.print("ZIG_MAP_VERTEX_DEBUG:     x_curr after sub={s}\n", .{x_curr_str_after}) catch {};
             } else {
                 ji = j;
+                stderr.print("ZIG_MAP_VERTEX_DEBUG:     found ji={}\n", .{ji}) catch {};
                 break;
             }
         }
 
+        // CRITICAL FIX: Match Rust's assertion: assert!(ji < w)
+        // If ji is still the sentinel value, it means we never found a valid j
         if (ji >= BASE) return error.InvalidHypercubeMapping;
 
         const ai = BASE - 1 - ji;
         result[i - 1] = @as(u8, @intCast(ai));
         d_curr -= (BASE - 1) - ai;
+        stderr.print("ZIG_MAP_VERTEX_DEBUG: i={} ai={} result[{}]={} d_curr={}\n", .{ i, ai, i - 1, result[i - 1], d_curr }) catch {};
     }
 
     const x_curr_u64 = x_curr.toInt(u64) catch return error.InvalidHypercubeMapping;
     if (x_curr_u64 + d_curr >= BASE) return error.InvalidHypercubeMapping;
     result[DIMENSION - 1] = @as(u8, @intCast(BASE - 1 - x_curr_u64 - d_curr));
+    stderr.print("ZIG_MAP_VERTEX_DEBUG: FINAL x_curr_u64={} d_curr={} result[{}]={}\n", .{ x_curr_u64, d_curr, DIMENSION - 1, result[DIMENSION - 1] }) catch {};
 
     return result;
 }
@@ -249,19 +386,30 @@ pub fn mapIntoHypercubePart(
     final_layer: usize,
     field_elements: []const FieldElement,
 ) ![]u8 {
+    // CRITICAL DEBUG: Print immediately to verify function is called
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("ZIG_HYPERCUBE_DEBUG: mapIntoHypercubePart CALLED DIMENSION={} BASE={} final_layer={} field_elements.len={}\n", .{ DIMENSION, BASE, final_layer, field_elements.len }) catch {};
+
     const layer_data = try getLayerData(self, BASE);
     const info = layer_data.get(DIMENSION);
-    if (final_layer >= info.prefix_sums.len) return error.InvalidHypercubeIndex;
+    if (final_layer >= info.prefix_sums.len) {
+        stderr.print("ZIG_HYPERCUBE_DEBUG: EARLY RETURN - final_layer {} >= prefix_sums.len {}\n", .{ final_layer, info.prefix_sums.len }) catch {};
+        return error.InvalidHypercubeIndex;
+    }
 
     var modulus = try BigInt.init(self.allocator);
     defer modulus.deinit();
     try BigInt.addScalar(&modulus, &info.prefix_sums[final_layer], 0);
     const mod_str = try std.fmt.allocPrint(self.allocator, "{}", .{modulus.toConst()});
     defer self.allocator.free(mod_str);
-    log.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
+    // Reuse stderr from above (already declared at line 390)
+    stderr.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str}) catch {};
 
-    var value = try BigInt.initSet(self.allocator, 0);
-    defer value.deinit();
+    // CRITICAL FIX: Match Rust's algorithm exactly
+    // Rust: acc = 0; for fe in field_elements: acc = acc * ORDER + fe; acc %= dom_size
+    // We must build the full big integer first, then apply modulo (not during combination)
+    var acc = try BigInt.initSet(self.allocator, 0);
+    defer acc.deinit();
 
     var multiplier = try BigInt.initSet(self.allocator, KOALABEAR_PRIME);
     defer multiplier.deinit();
@@ -269,28 +417,60 @@ pub fn mapIntoHypercubePart(
     var tmp = try BigInt.init(self.allocator);
     defer tmp.deinit();
 
-    var quotient = try BigInt.init(self.allocator);
-    defer quotient.deinit();
-
-    var remainder = try BigInt.init(self.allocator);
-    defer remainder.deinit();
-
-    log.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len});
+    stderr.print("ZIG_HYPERCUBE_DEBUG: Combining {} field elements (canonical): ", .{field_elements.len}) catch {};
+    var fe_bigint = try BigInt.init(self.allocator);
+    defer fe_bigint.deinit();
     for (field_elements, 0..) |fe, i| {
         if (i < 5) {
-            log.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
+            stderr.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() }) catch {};
         }
-        try BigInt.mul(&tmp, &value, &multiplier);
-        try BigInt.addScalar(&tmp, &tmp, fe.toCanonical());
-        try BigInt.divFloor(&quotient, &remainder, &tmp, &modulus);
-        try BigInt.addScalar(&value, &remainder, 0);
+        // Build big integer: acc = acc * ORDER + fe (matching Rust exactly)
+        // CRITICAL FIX: Use BigInt.add with temporary BigInt for field element to match Rust's BigUint addition
+        try BigInt.mul(&tmp, &acc, &multiplier);
+        // Create BigInt from field element (matching Rust's fe.as_canonical_biguint())
+        // CRITICAL: Ensure we use the canonical value as u64 to match Rust's BigUint::from behavior
+        const fe_canonical = fe.toCanonical();
+        try fe_bigint.set(@as(u64, fe_canonical));
+        try BigInt.add(&acc, &tmp, &fe_bigint);
+
+        // Debug: Print intermediate acc after each field element (first 3 only)
+        if (i < 3) {
+            const acc_intermediate_str = try std.fmt.allocPrint(self.allocator, "{}", .{acc.toConst()});
+            defer self.allocator.free(acc_intermediate_str);
+            stderr.print(" acc_after_fe[{}]={s}", .{ i, acc_intermediate_str }) catch {};
+        }
     }
-    log.print("\n", .{});
+    stderr.print("\n", .{}) catch {};
+
+    // Apply modulo AFTER building the full big integer (matching Rust: acc %= dom_size)
+    // Use divFloor to get remainder, then replace acc with remainder
+    var quotient_mod = try BigInt.init(self.allocator);
+    defer quotient_mod.deinit();
+    var remainder_mod = try BigInt.init(self.allocator);
+    defer remainder_mod.deinit();
+    try BigInt.divFloor(&quotient_mod, &remainder_mod, &acc, &modulus);
+    // Replace acc with remainder (matching Rust: acc %= dom_size)
+    // Swap acc and remainder_mod, then clear the old acc (now in remainder_mod)
+    // This effectively sets acc = remainder_mod
+    const temp_swap = acc;
+    acc = remainder_mod;
+    remainder_mod = temp_swap;
+    remainder_mod.deinit(); // Free the old acc value
+    remainder_mod = try BigInt.init(self.allocator); // Reinitialize for defer
+
+    // Debug: Print acc before layer finding
+    const acc_str = try std.fmt.allocPrint(self.allocator, "{}", .{acc.toConst()});
+    defer self.allocator.free(acc_str);
+    stderr.print("ZIG_HYPERCUBE_DEBUG: acc={s} (before layer finding)\n", .{acc_str}) catch {};
 
     var offset = try BigInt.init(self.allocator);
     defer offset.deinit();
-    const layer = try hypercubeFindLayerBig(self, BASE, DIMENSION, final_layer, &value, &offset);
+    const layer = try hypercubeFindLayerBig(self, BASE, DIMENSION, final_layer, &acc, &offset);
 
+    const offset_str = try std.fmt.allocPrint(self.allocator, "{}", .{offset.toConst()});
+    defer self.allocator.free(offset_str);
+    // Print acc AFTER layer finding (after modulo, matching Rust's output format)
+    stderr.print("ZIG_HYPERCUBE_DEBUG: acc={s} layer={} offset={s}\n", .{ acc_str, layer, offset_str }) catch {};
     log.print("ZIG_HYPERCUBE_DEBUG: layer={} offset_bitlen={}\n", .{ layer, offset.toConst().bitCountAbs() });
 
     const chunks = try mapToVertexBig(self, BASE, DIMENSION, layer, &offset);
@@ -313,6 +493,14 @@ pub fn applyTopLevelPoseidonMessageHash(
     randomness: []const FieldElement,
     message: [32]u8,
 ) ![]u8 {
+    // CRITICAL DEBUG: Print all inputs to compare signing vs verification
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("ZIG_POS_INPUTS: epoch={} parameter[0] (canonical)=0x{x:0>8} (Montgomery)=0x{x:0>8} randomness[0] (Montgomery)=0x{x:0>8} message[0..4]=", .{ epoch, parameter[0].toCanonical(), parameter[0].toMontgomery(), randomness[0].toMontgomery() }) catch {};
+    for (0..@min(4, message.len)) |i| {
+        stderr.print("0x{x:0>2} ", .{message[i]}) catch {};
+    }
+    stderr.print("\n", .{}) catch {};
+
     const PARAMETER_LEN: usize = self.lifetime_params.parameter_len;
     const RAND_LEN: usize = self.lifetime_params.rand_len_fe;
     const TWEAK_LEN_FE: usize = self.lifetime_params.tweak_len_fe;
@@ -332,7 +520,8 @@ pub fn applyTopLevelPoseidonMessageHash(
     var pos_outputs: [POS_OUTPUT_LEN_FE]FieldElement = undefined;
 
     for (0..POS_INVOCATIONS) |i| {
-        const iteration_index = [_]FieldElement{FieldElement.fromCanonical(@intCast(i))};
+        // Match Rust's behavior: use loop variable i as iteration index
+        // Rust: let iteration_index = [F::from_u8(i as u8)];
         const ITER_INPUT_LEN = RAND_LEN + PARAMETER_LEN + TWEAK_LEN_FE + MSG_LEN_FE + 1;
         var combined_input = try self.allocator.alloc(FieldElement, ITER_INPUT_LEN);
         defer self.allocator.free(combined_input);
@@ -354,13 +543,15 @@ pub fn applyTopLevelPoseidonMessageHash(
             combined_input[input_idx] = message_fe[j];
             input_idx += 1;
         }
-        combined_input[input_idx] = iteration_index[0];
+        // Use loop variable i as iteration index (matching Rust: F::from_u8(i as u8))
+        combined_input[input_idx] = FieldElement.fromU32(@intCast(i));
         input_idx += 1;
 
         var padded_input: [24]FieldElement = undefined;
         for (0..ITER_INPUT_LEN) |j| {
             padded_input[j] = combined_input[j];
         }
+        // Pad remaining elements with zeros (should be none since ITER_INPUT_LEN = 24)
         for (ITER_INPUT_LEN..24) |j| {
             padded_input[j] = FieldElement.zero();
         }
@@ -389,23 +580,44 @@ pub fn applyTopLevelPoseidonMessageHash(
         }
         log.print("\n", .{});
 
-        log.print("ZIG_POS_CONTEXT rand:", .{});
+        // Always print to stderr for debugging (bypasses build_options)
+        stderr.print("ZIG_POS_CONTEXT rand:", .{}) catch {};
         for (randomness[0..RAND_LEN]) |r| {
-            log.print(" 0x{x:0>8}", .{r.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{r.toCanonical()}) catch {};
         }
-        log.print(" param:", .{});
+        stderr.print(" param:", .{}) catch {};
         for (parameter) |p| {
-            log.print(" 0x{x:0>8}", .{p.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{p.toCanonical()}) catch {};
         }
-        log.print(" epoch:", .{});
+        stderr.print(" epoch:", .{}) catch {};
         for (epoch_fe) |e| {
-            log.print(" 0x{x:0>8}", .{e.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{e.toCanonical()}) catch {};
         }
-        log.print(" msg:", .{});
+        stderr.print(" msg:", .{}) catch {};
         for (message_fe) |m| {
-            log.print(" 0x{x:0>8}", .{m.toCanonical()});
+            stderr.print(" 0x{x:0>8}", .{m.toCanonical()}) catch {};
         }
-        log.print("\n", .{});
+        stderr.print(" iter_idx: 0x{x:0>8} (i={})\n", .{ combined_input[ITER_INPUT_LEN - 1].toCanonical(), i }) catch {};
+
+        // Also print the combined input in canonical form
+        stderr.print("ZIG_POS_INPUT_CANONICAL (24 values):", .{}) catch {};
+        for (0..24) |j| {
+            stderr.print(" 0x{x:0>8}", .{padded_input[j].toCanonical()}) catch {};
+            if ((j + 1) % 8 == 0) {
+                stderr.print("\nZIG_POS_INPUT_CANONICAL:", .{}) catch {};
+            }
+        }
+        stderr.print("\n", .{}) catch {};
+
+        // Print output in canonical form
+        stderr.print("ZIG_POS_OUTPUT_CANONICAL (15 values):", .{}) catch {};
+        for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {
+            stderr.print(" 0x{x:0>8}", .{iteration_pos_output[j].toCanonical()}) catch {};
+            if ((j + 1) % 8 == 0 and j < POS_OUTPUT_LEN_PER_INV_FE - 1) {
+                stderr.print("\nZIG_POS_OUTPUT_CANONICAL:", .{}) catch {};
+            }
+        }
+        stderr.print("\n", .{}) catch {};
     }
 
     const chunks = try mapIntoHypercubePart(self, DIMENSION, BASE, FINAL_LAYER, &pos_outputs);

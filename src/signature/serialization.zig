@@ -14,9 +14,10 @@ fn fromMontgomeryValue(value: u32) FieldElement {
     return FieldElement.fromMontgomery(value);
 }
 
-/// Serialize a FieldElement to a decimal string (Montgomery residue)
+/// Serialize a FieldElement to a decimal string (canonical form matching Rust's serde implementation)
+/// Rust's serde serializes field elements as canonical values (as_canonical_u32())
 pub fn serializeFieldElement(allocator: Allocator, elem: FieldElement) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "{}", .{elem.toMontgomery()});
+    return try std.fmt.allocPrint(allocator, "{}", .{elem.toCanonical()});
 }
 
 /// Deserialize a FieldElement from a hex string
@@ -42,23 +43,25 @@ fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
             if (std.mem.startsWith(u8, s, "0x") or std.mem.startsWith(u8, s, "0X")) {
                 return deserializeFieldElement(s);
             }
-            // Interpret decimal or plain-hex strings as Montgomery values
+            // Interpret decimal or plain-hex strings as canonical values (Rust serializes as canonical)
             if (std.fmt.parseInt(u32, s, 10)) |dec| {
-                return FieldElement.fromMontgomery(dec);
+                return FieldElement.fromCanonical(dec);
             } else |_| {}
             const value = try std.fmt.parseInt(u32, s, 16);
-            return FieldElement.fromMontgomery(value);
+            return FieldElement.fromCanonical(value);
         },
         .integer => |i| {
             if (i < 0) return error.InvalidJsonFormat;
             const as_u64: u64 = @intCast(i);
             const as_u32: u32 = @intCast(@min(as_u64, @as(u64, std.math.maxInt(u32))));
-            return FieldElement.fromMontgomery(as_u32);
+            // JSON values are canonical (Rust serializes as canonical), convert to Montgomery
+            return FieldElement.fromCanonical(as_u32);
         },
         .float => |f| {
             const clamped: f64 = if (f < 0) 0 else f;
             const as_u32: u32 = @intFromFloat(@min(clamped, @as(f64, @floatFromInt(std.math.maxInt(u32)))));
-            return FieldElement.fromMontgomery(as_u32);
+            // JSON values are canonical (Rust serializes as canonical), convert to Montgomery
+            return FieldElement.fromCanonical(as_u32);
         },
         .object => |o| {
             if (o.get("value")) |inner| {
@@ -150,9 +153,11 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
     try result.appendSlice(hashes_slice);
 
     // Serialize path using controlled access as array of 8-element arrays
+    // Rust expects "co_path" field, but we serialize as "nodes" for Zig compatibility
+    // For cross-language compatibility, we'll use "co_path" to match Rust
     const path = signature.getPath();
     try result.appendSlice(",\"path\":{");
-    try result.appendSlice("\"nodes\":");
+    try result.appendSlice("\"co_path\":");
     var nodes_str = std.ArrayList(u8).init(allocator);
     defer nodes_str.deinit();
     try nodes_str.append('[');
@@ -215,7 +220,10 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
     if (path_obj != .object) return error.InvalidJsonFormat;
 
     var maybe_nodes: ?std.json.Value = null;
-    if (path_obj.object.get("nodes")) |n| {
+    // Try "co_path" first (Rust format), then "nodes" (Zig format)
+    if (path_obj.object.get("co_path")) |n| {
+        maybe_nodes = n;
+    } else if (path_obj.object.get("nodes")) |n| {
         maybe_nodes = n;
     } else {
         var it = path_obj.object.iterator();
@@ -293,25 +301,26 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
 }
 
 /// Serialize a GeneralizedXMSSPublicKey to JSON
+/// Matches Rust format: {"root": [...], "parameter": [...]}
 pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXMSSPublicKey) ![]u8 {
     var result = std.ArrayList(u8).init(allocator);
     defer result.deinit();
 
     try result.appendSlice("{");
 
-    // Serialize parameter using controlled access
-    try result.appendSlice("\"parameter\":");
+    // Serialize root first to match Rust format
+    try result.appendSlice("\"root\":");
+    const root = public_key.getRoot();
+    const root_json = try serializeFieldElementArray(allocator, &root);
+    defer allocator.free(root_json);
+    try result.appendSlice(root_json);
+
+    // Serialize parameter second to match Rust format
+    try result.appendSlice(",\"parameter\":");
     const parameter = public_key.getParameter();
     const param_json = try serializeFieldElementArray(allocator, &parameter);
     defer allocator.free(param_json);
     try result.appendSlice(param_json);
-
-    // Serialize root using controlled access (as array to match Rust)
-    const root = public_key.getRoot();
-    const root_json = try serializeFieldElementArray(allocator, &root);
-    defer allocator.free(root_json);
-    try result.appendSlice(",\"root\":");
-    try result.appendSlice(root_json);
 
     try result.appendSlice("}");
 
@@ -350,11 +359,14 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
     }
 
     // Parse parameter
+    // CRITICAL: serializeFieldElement uses toCanonical(), so the JSON file contains canonical values.
+    // We must read them as canonical and convert to Montgomery internally via parseFieldElementFromJsonValue.
     const param_array = obj.get("parameter") orelse return error.MissingParameterField;
     if (param_array != .array or param_array.array.items.len != 5) return error.InvalidJsonFormat;
 
     var parameter: [5]FieldElement = undefined;
     for (param_array.array.items, 0..) |item, i| {
+        // Read as canonical (matching serializeFieldElement which uses toCanonical())
         parameter[i] = try parseFieldElementFromJsonValue(item);
     }
 
@@ -370,7 +382,7 @@ pub fn serializeSecretKey(allocator: Allocator, secret_key: *const GeneralizedXM
 
     // Serialize PRF key using controlled access
     const prf_key = secret_key.getPrfKey();
-    const prf_key_hex = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    const prf_key_hex = try std.fmt.allocPrint(allocator, "\"0x{x:0>64}\"", .{std.fmt.fmtSliceHexLower(&prf_key)});
     defer allocator.free(prf_key_hex);
     try result.appendSlice("\"prf_key\":");
     try result.appendSlice(prf_key_hex);
@@ -398,6 +410,75 @@ pub fn serializeSecretKey(allocator: Allocator, secret_key: *const GeneralizedXM
     try result.appendSlice("}");
 
     return result.toOwnedSlice();
+}
+
+/// Deserialize secret key data from JSON (returns a struct with the deserialized data)
+/// Note: This doesn't reconstruct the full secret key (trees are not serialized),
+/// but provides the data needed to reconstruct it using keyGenFromSeed
+pub const DeserializedSecretKeyData = struct {
+    prf_key: [32]u8,
+    parameter: [5]FieldElement,
+    activation_epoch: usize,
+    num_active_epochs: usize,
+};
+
+pub fn deserializeSecretKeyData(allocator: Allocator, json_str: []const u8) !DeserializedSecretKeyData {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch |err| {
+        log.print("JSON parse error: {}\n", .{err});
+        return err;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value != .object) {
+        return error.InvalidJsonFormat;
+    }
+
+    const obj = parsed.value.object;
+
+    // Parse prf_key (hex string)
+    const prf_key_val = obj.get("prf_key") orelse return error.MissingPathField; // Reuse existing error
+    if (prf_key_val != .string) return error.InvalidJsonFormat;
+    const prf_key_hex = prf_key_val.string;
+    if (prf_key_hex.len < 2 or !std.mem.startsWith(u8, prf_key_hex, "0x")) {
+        return error.InvalidJsonFormat;
+    }
+    if (prf_key_hex.len != 66) return error.InvalidJsonFormat; // 0x + 64 hex chars = 66
+
+    var prf_key: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&prf_key, prf_key_hex[2..]);
+
+    // Parse activation_epoch
+    const activation_epoch_val = obj.get("activation_epoch") orelse return error.MissingPathField; // Reuse existing error
+    const activation_epoch: usize = switch (activation_epoch_val) {
+        .integer => |i| if (i < 0) return error.InvalidJsonFormat else @intCast(i),
+        else => return error.InvalidJsonFormat,
+    };
+
+    // Parse num_active_epochs
+    const num_active_epochs_val = obj.get("num_active_epochs") orelse return error.MissingPathField; // Reuse existing error
+    const num_active_epochs: usize = switch (num_active_epochs_val) {
+        .integer => |i| if (i < 0) return error.InvalidJsonFormat else @intCast(i),
+        else => return error.InvalidJsonFormat,
+    };
+
+    // Parse parameter
+    // CRITICAL: serializeFieldElement uses toCanonical(), so the JSON file contains canonical values.
+    // We must read them as canonical and convert to Montgomery internally via parseFieldElementFromJsonValue.
+    const param_array = obj.get("parameter") orelse return error.MissingParameterField;
+    if (param_array != .array or param_array.array.items.len != 5) return error.InvalidJsonFormat;
+
+    var parameter: [5]FieldElement = undefined;
+    for (param_array.array.items, 0..) |item, i| {
+        // Read as canonical (matching serializeFieldElement which uses toCanonical())
+        parameter[i] = try parseFieldElementFromJsonValue(item);
+    }
+
+    return DeserializedSecretKeyData{
+        .prf_key = prf_key,
+        .parameter = parameter,
+        .activation_epoch = activation_epoch,
+        .num_active_epochs = num_active_epochs,
+    };
 }
 
 // Test functions

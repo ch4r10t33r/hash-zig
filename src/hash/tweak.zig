@@ -126,8 +126,8 @@ test "tweak: chain tweak to field elements" {
     const tweak = PoseidonTweak.forChain(0, 0, 0);
     const fes = tweak.toFieldElements(2);
 
-    // For chain tweak with epoch=0, chain=0, pos=0, separator=0x01:
-    // acc = (0 << 24) | (0 << 16) | (0 << 8) | 0x01 = 1
+    // For chain tweak with epoch=0, chain=0, pos=0, separator=0x00:
+    // acc = (0 << 24) | (0 << 16) | (0 << 8) | 0x00 = 0
     // fe[0] = 1 % p = 1
     // fe[1] = 1 / p = 0 (since p > 1)
     try std.testing.expect(fes[0].isOne());

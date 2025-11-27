@@ -39,10 +39,14 @@ fn readLength(reader: anytype) !usize {
 }
 
 fn writeFieldElement(writer: anytype, value: FieldElement) !void {
+    // Write Montgomery form directly (matching internal representation)
+    // Both libraries use Montgomery internally, so wrappers should use Montgomery too
     try writer.writeInt(u32, value.toMontgomery(), .little);
 }
 
 fn readFieldElement(reader: anytype) !FieldElement {
+    // Read Montgomery form directly (matching internal representation)
+    // Both libraries use Montgomery internally, so wrappers should use Montgomery too
     const mont = try reader.readInt(u32, .little);
     return FieldElement.fromMontgomery(mont);
 }
@@ -117,42 +121,104 @@ fn readPublicKeyFromJson(path: []const u8, allocator: std.mem.Allocator) !hash_z
     return try hash_zig.serialization.deserializePublicKey(bytes);
 }
 
-fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.GeneralizedXMSSSignature, rand_len: usize, hash_len: usize) !void {
+/// Write signature in Rust bincode format (matching Rust's bincode::serialize)
+/// Format (Rust serializes Vec<[u32; N]> as Vec length + for each array: array length + elements):
+///   1. path_len: u64 (little endian) - length of Vec<[u32; 8]>
+///   2. path: for each node:
+///      - array_len: u64 = 8 (little endian)
+///      - 8 u32 values in canonical form
+///   3. rho: [u32; 7] - 7 u32 values in canonical form (fixed array, no length prefix)
+///   4. hashes_len: u64 (little endian) - length of Vec<[u32; 8]>
+///   5. hashes: for each hash:
+///      - array_len: u64 = 8 (little endian)
+///      - 8 u32 values in canonical form
+/// Note: Rust's bincode serializes field elements in canonical form, not Montgomery
+pub fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.GeneralizedXMSSSignature, rand_len: usize, hash_len: usize) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
 
     const writer = file.writer();
     const path_nodes = signature.getPath().getNodes();
+    
+    // Write path_len (u64) - Vec length
     try writeLength(writer, path_nodes.len);
+    
+    // Write path nodes (each as: 8 u32 values in canonical form, NO length prefix for fixed arrays)
+    // Rust's bincode serializes Vec<[T; N]> as: Vec length + elements directly (no per-array length)
     for (path_nodes) |node| {
-        try writeDomain(writer, node, hash_len);
+        // Write array elements in canonical form (fixed-size array, no length prefix)
+        for (node[0..hash_len]) |fe| {
+            try writer.writeInt(u32, fe.toCanonical(), .little);
+        }
     }
 
+    // Write rho (7 u32 values in MONTGOMERY form, no length prefix for fixed array)
+    // CRITICAL: p3_field::PrimeField32 serializes in MONTGOMERY form (default Serialize)
+    // FieldArray serializes in canonical form, but rho is [F; RAND_LEN] which uses p3_field's default
     const rho = signature.getRho();
     if (rand_len > rho.len) return BincodeError.InvalidRandLength;
+    // Debug: print rho values as written to file (for Zig→Zig debugging)
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("ZIG_WRITE_DEBUG: Writing rho to file (Montgomery): ", .{}) catch {};
     for (rho[0..rand_len]) |fe| {
-        try writeFieldElement(writer, fe);
+        const montgomery = fe.toMontgomery();
+        try writer.writeInt(u32, montgomery, .little);
+        stderr.print("0x{x:0>8} ", .{montgomery}) catch {};
     }
+    stderr.print("\n", .{}) catch {};
 
+    // Write hashes_len (u64) - Vec length
     const hashes = signature.getHashes();
     try writeLength(writer, hashes.len);
+    
+    // Write hashes (each as: 8 u32 values in canonical form, NO length prefix for fixed arrays)
+    // Rust's bincode serializes Vec<[T; N]> as: Vec length + elements directly (no per-array length)
+    // NOTE: Rust's bincode serializes field elements in CANONICAL form
     for (hashes) |domain| {
-        try writeDomain(writer, domain, hash_len);
+        // Write array elements in canonical form (fixed-size array, no length prefix)
+        for (domain[0..hash_len]) |fe| {
+            try writer.writeInt(u32, fe.toCanonical(), .little);
+        }
     }
 }
 
-fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len: usize, max_path_len: usize, hash_len: usize, max_hashes: usize) !*hash_zig.GeneralizedXMSSSignature {
+/// Read signature from Rust bincode format (matching Rust's bincode::deserialize)
+/// Format (Rust serializes Vec<[u32; N]> as Vec length + for each array: array length + elements):
+///   1. path_len: u64 (little endian) - length of Vec<[u32; 8]>
+///   2. path: for each node:
+///      - array_len: u64 = 8 (little endian)
+///      - 8 u32 values in canonical form
+///   3. rho: [u32; 7] - 7 u32 values in canonical form (fixed array, no length prefix)
+///   4. hashes_len: u64 (little endian) - length of Vec<[u32; 8]>
+///   5. hashes: for each hash:
+///      - array_len: u64 = 8 (little endian)
+///      - 8 u32 values in canonical form
+/// Note: Rust's bincode deserializes field elements in canonical form, converts to Montgomery internally
+pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len: usize, max_path_len: usize, hash_len: usize, max_hashes: usize) !*hash_zig.GeneralizedXMSSSignature {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
     const reader = file.reader();
 
+    // Read path_len (u64) - Vec length
     const path_len = try readLength(reader);
     if (path_len == 0 or path_len > max_path_len) return BincodeError.InvalidPathLength;
+    
+    // Read path nodes (each has: 8 u32 values in CANONICAL form, NO length prefix for fixed arrays)
+    // Rust's bincode serializes Vec<[T; N]> as: Vec length + elements directly (no per-array length)
+    // CRITICAL: FieldArray serializes using as_canonical_u32(), so path is in CANONICAL form
     var path_nodes = try allocator.alloc([8]FieldElement, path_len);
     errdefer allocator.free(path_nodes);
     for (0..path_len) |i| {
-        path_nodes[i] = try readDomain(reader, hash_len);
+        // Read array elements in canonical form (fixed-size array, no length prefix)
+        for (0..hash_len) |j| {
+            const canonical = try reader.readInt(u32, .little);
+            path_nodes[i][j] = FieldElement.fromCanonical(canonical);
+        }
+        // Pad remaining with zeros if hash_len < 8
+        for (hash_len..8) |j| {
+            path_nodes[i][j] = FieldElement.zero();
+        }
     }
 
     var path_ptr = HashTreeOpening.init(allocator, path_nodes) catch |err| {
@@ -161,32 +227,71 @@ fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand_len
     };
     allocator.free(path_nodes);
 
+    // Read rho (7 u32 values in MONTGOMERY form, no length prefix for fixed array)
+    // CRITICAL: Rust's bincode serializes field elements in MONTGOMERY form (internal representation)
+    // Rust deserializes and converts to canonical internally, but the file contains Montgomery form
+    // We need to read as Montgomery and the FieldElement will handle the conversion
     if (rand_len > 7) {
         path_ptr.deinit();
         return BincodeError.InvalidRandLength;
     }
     var rho = [_]FieldElement{FieldElement.zero()} ** 7;
+    // Debug: print rho values as read from file (for Zig→Zig debugging)
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("ZIG_READ_DEBUG: Reading rho from file (Montgomery): ", .{}) catch {};
     for (0..rand_len) |i| {
-        rho[i] = try readFieldElement(reader);
+        const montgomery = try reader.readInt(u32, .little);
+        rho[i] = FieldElement.fromMontgomery(montgomery);
+        stderr.print("0x{x:0>8} ", .{montgomery}) catch {};
     }
+    stderr.print("\n", .{}) catch {};
 
+    // Read hashes_len (u64) - Vec length
     const hashes_len = try readLength(reader);
     if (hashes_len == 0 or hashes_len > max_hashes) {
         path_ptr.deinit();
         return BincodeError.InvalidHashesLength;
     }
+    
+    // Read hashes (each has: 8 u32 values in CANONICAL form, NO length prefix for fixed arrays)
+    // Rust's bincode serializes Vec<[T; N]> as: Vec length + elements directly (no per-array length)
+    // CRITICAL: FieldArray serializes using as_canonical_u32(), so hashes are in CANONICAL form
     var hashes_tmp = try allocator.alloc([8]FieldElement, hashes_len);
     errdefer allocator.free(hashes_tmp);
     for (0..hashes_len) |i| {
-        hashes_tmp[i] = try readDomain(reader, hash_len);
+        // Read array elements in canonical form (fixed-size array, no length prefix)
+        for (0..hash_len) |j| {
+            const canonical = try reader.readInt(u32, .little);
+            hashes_tmp[i][j] = FieldElement.fromCanonical(canonical);
+        }
+        // Pad remaining with zeros if hash_len < 8
+        for (hash_len..8) |j| {
+            hashes_tmp[i][j] = FieldElement.zero();
+        }
     }
 
+    // Debug: print rho values before creating signature (for Zig→Zig debugging)
+    stderr.print("ZIG_READ_DEBUG: rho before signature creation (Montgomery): ", .{}) catch {};
+    for (0..rand_len) |i| {
+        stderr.print("0x{x:0>8} ", .{rho[i].toMontgomery()}) catch {};
+    }
+    stderr.print("\n", .{}) catch {};
+    
     const signature_ptr = hash_zig.GeneralizedXMSSSignature.initDeserialized(allocator, path_ptr, rho, hashes_tmp) catch |err| {
         allocator.free(hashes_tmp);
         path_ptr.deinit();
         return err;
     };
     allocator.free(hashes_tmp);
+    
+    // Debug: print rho values from signature after creation (for Zig→Zig debugging)
+    const rho_from_sig = signature_ptr.getRho();
+    stderr.print("ZIG_READ_DEBUG: rho from signature.getRho() (Montgomery): ", .{}) catch {};
+    for (0..rand_len) |i| {
+        stderr.print("0x{x:0>8} ", .{rho_from_sig[i].toMontgomery()}) catch {};
+    }
+    stderr.print("\n", .{}) catch {};
+    
     return signature_ptr;
 }
 
@@ -268,6 +373,15 @@ fn verifyCommand(
     defer signature_ptr.deinit();
 
     const msg_bytes = messageToBytes(message);
+    
+    // Debug: Print signature rho values
+    const rho = signature_ptr.getRho();
+    log.emit("ZIG_REMOTE_VERIFY_DEBUG: Signature rho (first {}): ", .{scheme.lifetime_params.rand_len_fe});
+    for (0..scheme.lifetime_params.rand_len_fe) |i| {
+        log.emit("0x{x:0>8} ", .{rho[i].toCanonical()});
+    }
+    log.emit("\n", .{});
+    
     const ok = try scheme.verify(&pk, epoch, msg_bytes, signature_ptr);
     log.emit("VERIFY_RESULT:{}\n", .{ok});
 }

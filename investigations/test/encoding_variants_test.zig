@@ -1,5 +1,5 @@
 //! Tests for different encoding variants matching Rust hash-sig instantiations
-//! Based on https://github.com/b-wagn/hash-sig instantiations
+//! Based on https://github.com/leanEthereum/leanSig instantiations
 
 const std = @import("std");
 const log = @import("hash-zig").utils.log;

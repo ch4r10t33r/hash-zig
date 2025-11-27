@@ -156,18 +156,10 @@ fn montyReduce(x: u64) u32 {
 }
 
 // Addition modulo P (exact from Plonky3)
+// Match Rust's add function exactly: sum = lhs + rhs, then if sum >= PRIME, subtract PRIME
 fn addMod(a: u32, b: u32) u32 {
-    const add_result = @addWithOverflow(a, b);
-    var sum = add_result[0];
-    const add_over = add_result[1];
-
-    // If addition overflowed, we need to subtract the overflow amount
-    if (add_over != 0) {
-        // Overflow means sum = a + b - 2^32
-        // We need to reduce modulo KOALABEAR_PRIME
-        sum = sum +% (0xffffffff - KOALABEAR_PRIME + 1);
-    }
-
+    // Rust's add: let mut sum = lhs + rhs; let (corr_sum, over) = sum.overflowing_sub(MP::PRIME); if !over { sum = corr_sum; } sum
+    var sum = a +% b; // Wrapping add (matches Rust's behavior with u32 overflow)
     const sub_result = @subWithOverflow(sum, KOALABEAR_PRIME);
     const corr_sum = sub_result[0];
     const over = sub_result[1];
