@@ -50,6 +50,7 @@ DEBUG_MARKERS = (
     "ZIG_POS_INPUT_CANONICAL",
     "ZIG_POS_OUTPUT_CANONICAL",
     "ZIG_SPONGE_DEBUG:",
+    "ZIG_SPONGE_DEBUG",  # Also match without colon for some messages
 )
 
 
