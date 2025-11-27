@@ -443,7 +443,7 @@ pub fn deserializeSecretKeyData(allocator: Allocator, json_str: []const u8) !Des
         return error.InvalidJsonFormat;
     }
     if (prf_key_hex.len != 66) return error.InvalidJsonFormat; // 0x + 64 hex chars = 66
-    
+
     var prf_key: [32]u8 = undefined;
     _ = try std.fmt.hexToBytes(&prf_key, prf_key_hex[2..]);
 

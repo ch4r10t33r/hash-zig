@@ -115,18 +115,18 @@ fn prepareLayerInfo(allocator: std.mem.Allocator, w: usize) !AllLayerInfoForBase
             const calc_term = (w - 1) * (v - 1);
             const a_i_end_calc = w + calc_term - d; // This can wrap, matching Rust's behavior
             const a_i_end = @min(w, a_i_end_calc);
-            
+
             // If the summation range is invalid, the layer size is zero (already initialized to 0)
             if (a_i_start > a_i_end) {
                 continue;
             }
-            
+
             // Map the range for `a_i` to a range for `d'` in the previous dimension
             // Rust: d_prime_start = d - (w - a_i_start)
             const d_prime_start = d - (w - a_i_start);
             // Rust: d_prime_end = d - (w - a_i_end)
             const d_prime_end = d - (w - a_i_end);
-            
+
             // Rust's sizes_sum_in_range expects valid indices in range [0, prefix_sums.len - 1]
             // The formula should guarantee valid indices for valid inputs
             // If indices are invalid, skip (size remains 0) - this matches Rust's panic behavior
@@ -139,7 +139,7 @@ fn prepareLayerInfo(allocator: std.mem.Allocator, w: usize) !AllLayerInfoForBase
             if (d_prime_end >= prev_info.prefix_sums.len) {
                 continue; // Out of bounds
             }
-            
+
             // Sum over the relevant slice of the previous dimension's layer sizes
             // Rust: sizes_sum_in_range(d_prime_start..=d_prime_end)
             // This uses prefix_sums: if start == 0, use prefix_sums[end], else prefix_sums[end] - prefix_sums[start - 1]
@@ -327,12 +327,12 @@ pub fn mapToVertexBig(
         // Rust uses inclusive range: range_start..=min(w - 1, d_curr)
         const limit = @min(BASE - 1, d_curr);
         var j: usize = range_start;
-        
+
         // Debug: Print loop start
         const x_curr_str_loop = try std.fmt.allocPrint(self.allocator, "{}", .{x_curr.toConst()});
         defer self.allocator.free(x_curr_str_loop);
         stderr.print("ZIG_MAP_VERTEX_DEBUG: i={} d_curr={} range_start={} limit={} x_curr={s}\n", .{ i, d_curr, range_start, limit, x_curr_str_loop }) catch {};
-        
+
         // CRITICAL: Loop must be inclusive on both ends (j <= limit), matching Rust's ..= operator
         while (j <= limit) : (j += 1) {
             const sub_layer = d_curr - j;
@@ -348,7 +348,7 @@ pub fn mapToVertexBig(
             const count_str = try std.fmt.allocPrint(self.allocator, "{}", .{count.*.toConst()});
             defer self.allocator.free(count_str);
             stderr.print("ZIG_MAP_VERTEX_DEBUG:   j={} sub_layer={} count={s} cmp={s}\n", .{ j, sub_layer, count_str, @tagName(cmp) }) catch {};
-            
+
             if (cmp == .gt or cmp == .eq) {
                 try BigInt.sub(&x_curr, &x_curr, count);
                 const x_curr_str_after = try std.fmt.allocPrint(self.allocator, "{}", .{x_curr.toConst()});
@@ -389,7 +389,7 @@ pub fn mapIntoHypercubePart(
     // CRITICAL DEBUG: Print immediately to verify function is called
     const stderr = std.io.getStdErr().writer();
     stderr.print("ZIG_HYPERCUBE_DEBUG: mapIntoHypercubePart CALLED DIMENSION={} BASE={} final_layer={} field_elements.len={}\n", .{ DIMENSION, BASE, final_layer, field_elements.len }) catch {};
-    
+
     const layer_data = try getLayerData(self, BASE);
     const info = layer_data.get(DIMENSION);
     if (final_layer >= info.prefix_sums.len) {
@@ -432,7 +432,7 @@ pub fn mapIntoHypercubePart(
         const fe_canonical = fe.toCanonical();
         try fe_bigint.set(@as(u64, fe_canonical));
         try BigInt.add(&acc, &tmp, &fe_bigint);
-        
+
         // Debug: Print intermediate acc after each field element (first 3 only)
         if (i < 3) {
             const acc_intermediate_str = try std.fmt.allocPrint(self.allocator, "{}", .{acc.toConst()});
@@ -500,7 +500,7 @@ pub fn applyTopLevelPoseidonMessageHash(
         stderr.print("0x{x:0>2} ", .{message[i]}) catch {};
     }
     stderr.print("\n", .{}) catch {};
-    
+
     const PARAMETER_LEN: usize = self.lifetime_params.parameter_len;
     const RAND_LEN: usize = self.lifetime_params.rand_len_fe;
     const TWEAK_LEN_FE: usize = self.lifetime_params.tweak_len_fe;
@@ -598,7 +598,7 @@ pub fn applyTopLevelPoseidonMessageHash(
             stderr.print(" 0x{x:0>8}", .{m.toCanonical()}) catch {};
         }
         stderr.print(" iter_idx: 0x{x:0>8} (i={})\n", .{ combined_input[ITER_INPUT_LEN - 1].toCanonical(), i }) catch {};
-        
+
         // Also print the combined input in canonical form
         stderr.print("ZIG_POS_INPUT_CANONICAL (24 values):", .{}) catch {};
         for (0..24) |j| {
@@ -608,7 +608,7 @@ pub fn applyTopLevelPoseidonMessageHash(
             }
         }
         stderr.print("\n", .{}) catch {};
-        
+
         // Print output in canonical form
         stderr.print("ZIG_POS_OUTPUT_CANONICAL (15 values):", .{}) catch {};
         for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {

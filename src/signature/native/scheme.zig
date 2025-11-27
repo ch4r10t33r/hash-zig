@@ -1599,11 +1599,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Chain ends are already in Montgomery form (from Poseidon2-16 compress)
         // Parameter and tweak need to be converted to Montgomery
         const combined_input_len = self.lifetime_params.parameter_len + self.lifetime_params.tweak_len_fe + flattened_len;
-        
+
         // Debug: print lengths
         const stderr_len = std.io.getStdErr().writer();
         stderr_len.print("ZIG_SPONGE_DEBUG: Lengths - parameter_len={}, tweak_len_fe={}, flattened_len={}, combined_input_len={}\n", .{ self.lifetime_params.parameter_len, self.lifetime_params.tweak_len_fe, flattened_len, combined_input_len }) catch {};
-        
+
         var combined_input_monty = try self.allocator.alloc(F, combined_input_len);
         defer self.allocator.free(combined_input_monty);
 
@@ -1677,7 +1677,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         for (0..CAPACITY) |i| {
             state[RATE + i] = capacity_value_monty[i]; // Already in Montgomery form
         }
-        
+
         // Debug: verify capacity placement immediately after initialization
         const stderr_verify = std.io.getStdErr().writer();
         stderr_verify.print("ZIG_SPONGE_DEBUG: Verify state[15] = capacity[0]: state[15]=0x{x:0>8} capacity[0]=0x{x:0>8}\n", .{ state[15].toU32(), capacity_value_monty[0].toU32() }) catch {};
@@ -1706,11 +1706,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const total_chunks = (padded_input.len + RATE - 1) / RATE;
         const stderr_abs = std.io.getStdErr().writer();
         stderr_abs.print("ZIG_SPONGE_DEBUG: Total chunks: {}\n", .{total_chunks}) catch {};
-        
+
         while (chunk_start < padded_input.len) {
             const chunk_end = @min(chunk_start + RATE, padded_input.len);
             const actual_chunk_len = chunk_end - chunk_start;
-            
+
             // Debug: print input values for first few and last few chunks (in canonical form for comparison)
             if (chunk_num < 3 or chunk_num >= total_chunks - 3) {
                 stderr_abs.print("ZIG_SPONGE_DEBUG: Input chunk {} (first {} elements, canonical): ", .{ chunk_num, @min(8, actual_chunk_len) }) catch {};
@@ -1719,7 +1719,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 }
                 stderr_abs.print("\n", .{}) catch {};
             }
-            
+
             // Add chunk to rate part of state (state[0..RATE])
             // Input is already in Montgomery form, so add directly (matching Rust's state[i] += chunk[i])
             for (0..actual_chunk_len) |i| {
@@ -2684,7 +2684,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             log.print("0x{x:0>8} ", .{fe.value});
         }
         log.print("\n", .{});
-        
+
         // CRITICAL DEBUG: Print parameter BEFORE creating secret key
         const stderr = std.io.getStdErr().writer();
         stderr.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{}) catch {};
@@ -2696,7 +2696,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             stderr.print("0x{x:0>8} ", .{parameter[i].toMontgomery()}) catch {};
         }
         stderr.print(")\n", .{}) catch {};
-        
+
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
             prf_key,
@@ -2872,7 +2872,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 stderr_param_before.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()}) catch {};
             }
             stderr_param_before.print(")\n", .{}) catch {};
-            
+
             // Try to encode with this randomness
             const encoding_result = self.deriveTargetSumEncoding(secret_key.parameter, epoch, rho_slice, message);
             if (encoding_result) |x_val| {
@@ -2970,7 +2970,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             stderr_sign.print("0x{x:0>8} ", .{rho_fixed[i].toMontgomery()}) catch {};
         }
         stderr_sign.print("\n", .{}) catch {};
-        
+
         // Create signature with proper error handling
         const signature = GeneralizedXMSSSignature.init(self.allocator, path, rho_fixed, hashes) catch |err| {
             // Clean up allocations if signature creation fails
@@ -3035,14 +3035,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Use parameter as-is (canonical); Poseidon handles Montgomery internally
         // Only use first rand_len_fe elements of rho (6 for lifetime 2^18, 7 for lifetime 2^8)
         const rho_slice = rho[0..rand_len];
-        
+
         // Debug: print rho_slice used for encoding (for Zig→Zig debugging)
         stderr.print("ZIG_VERIFY_DEBUG: rho_slice used for encoding (Montgomery): ", .{}) catch {};
         for (0..rand_len) |i| {
             stderr.print("0x{x:0>8} ", .{rho_slice[i].toMontgomery()}) catch {};
         }
         stderr.print("\n", .{}) catch {};
-        
+
         // Debug: print parameter used for encoding (for Zig→Zig debugging)
         stderr.print("ZIG_VERIFY_DEBUG: parameter used for encoding (canonical): ", .{}) catch {};
         for (0..5) |i| {
@@ -3053,7 +3053,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             stderr.print("0x{x:0>8} ", .{public_key.parameter[i].toMontgomery()}) catch {};
         }
         stderr.print(")\n", .{}) catch {};
-        
+
         const chunks = try self.applyTopLevelPoseidonMessageHash(public_key.parameter, epoch, rho_slice, message);
         defer self.allocator.free(chunks);
 

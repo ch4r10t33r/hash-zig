@@ -490,7 +490,7 @@ pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) vo
     if (apply_mds_light) {
         mds_light_permutation_24(state);
     }
-    
+
     // Initial external rounds (4 rounds)
     // CRITICAL: Rust's external_terminal_permute_state applies MDS light INSIDE each round
     // So each external round does: add_rc_and_sbox, then mds_light_permutation
