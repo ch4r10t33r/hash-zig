@@ -928,50 +928,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         };
                         defer ctx.scheme.allocator.free(chain_domains);
 
-                        // SIMD-optimized chain computation: process chains in batches of 4
-                        const simd_batch_size = 4;
-                        var chain_idx: usize = 0;
-                        while (chain_idx < ctx.num_chains) {
-                            const batch_end = @min(chain_idx + simd_batch_size, ctx.num_chains);
-                            const batch_size = batch_end - chain_idx;
-
-                            // Process chains in SIMD batches where possible
-                            if (batch_size == simd_batch_size) {
-                                // Full SIMD batch - process 4 chains in parallel
-                                var batch_domains: [4][8]FieldElement = undefined;
-                                for (0..simd_batch_size) |i| {
-                                    const chain_index = chain_idx + i;
-                                    const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
-                                    batch_domains[i] = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
-                                        ctx.error_mutex.lock();
-                                        defer ctx.error_mutex.unlock();
-                                        if (ctx.stored_error == null) {
-                                            ctx.stored_error = err;
-                                        }
-                                        ctx.error_flag.store(true, .monotonic);
-                                        return;
-                                    };
+                        // Process all chains for this epoch
+                        // Optimized: process chains sequentially with better cache locality
+                        for (0..ctx.num_chains) |chain_index| {
+                            const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
+                            chain_domains[chain_index] = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
+                                ctx.error_mutex.lock();
+                                defer ctx.error_mutex.unlock();
+                                if (ctx.stored_error == null) {
+                                    ctx.stored_error = err;
                                 }
-                                // Copy batch results
-                                for (0..simd_batch_size) |i| {
-                                    chain_domains[chain_idx + i] = batch_domains[i];
-                                }
-                            } else {
-                                // Partial batch - process remaining chains sequentially
-                                for (chain_idx..batch_end) |chain_index| {
-                                    const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, @as(u32, @intCast(epoch)), @as(u64, @intCast(chain_index)));
-                                    chain_domains[chain_index] = ctx.scheme.computeHashChainDomain(domain_elements, @as(u32, @intCast(epoch)), @as(u8, @intCast(chain_index)), ctx.parameter) catch |err| {
-                                        ctx.error_mutex.lock();
-                                        defer ctx.error_mutex.unlock();
-                                        if (ctx.stored_error == null) {
-                                            ctx.stored_error = err;
-                                        }
-                                        ctx.error_flag.store(true, .monotonic);
-                                        return;
-                                    };
-                                }
-                            }
-                            chain_idx = batch_end;
+                                ctx.error_flag.store(true, .monotonic);
+                                return;
+                            };
                         }
 
                         // Reduce chain domains to a single leaf domain using tree-tweak hashing
