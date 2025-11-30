@@ -18,16 +18,11 @@ pub const SIMD_WIDTH = blk: {
     break :blk 4; // Default to 4-wide for compatibility
 };
 
-// Packed field element type for SIMD operations
-// For KoalaBear (u32), we can pack 4 or 8 elements depending on SIMD width
-// NOTE: Currently hardcoded to 4-wide. 8-wide support requires significant refactoring.
-// TODO: Make this generic over SIMD_WIDTH when Zig supports comptime @Vector sizes
-pub const PackedF = struct {
-    // Using Zig's @Vector for SIMD operations
-    // For now, hardcode to 4-wide. 8-wide requires separate type or comptime generics
+// 4-wide PackedF for SSE4.1 (128-bit vectors)
+pub const PackedF4 = struct {
     values: @Vector(4, u32),
 
-    pub fn init(elements: [4]FieldElement) PackedF {
+    pub fn init(elements: [4]FieldElement) PackedF4 {
         return .{
             .values = .{
                 elements[0].value,
@@ -38,7 +33,7 @@ pub const PackedF = struct {
         };
     }
 
-    pub fn initFromSlice(elements: []const FieldElement) PackedF {
+    pub fn initFromSlice(elements: []const FieldElement) PackedF4 {
         var values: [4]u32 = undefined;
         for (0..4) |i| {
             values[i] = if (i < elements.len) elements[i].value else 0;
@@ -46,7 +41,7 @@ pub const PackedF = struct {
         return .{ .values = values };
     }
 
-    pub fn toArray(self: PackedF) [4]FieldElement {
+    pub fn toArray(self: PackedF4) [4]FieldElement {
         return .{
             FieldElement.fromMontgomery(self.values[0]),
             FieldElement.fromMontgomery(self.values[1]),
@@ -56,49 +51,86 @@ pub const PackedF = struct {
     }
 
     // SIMD operations on packed field elements
-    pub fn add(self: PackedF, other: PackedF) PackedF {
+    pub fn add(self: PackedF4, other: PackedF4) PackedF4 {
         return .{ .values = self.values + other.values };
     }
 
-    pub fn mul(self: PackedF, other: PackedF) PackedF {
+    pub fn mul(self: PackedF4, other: PackedF4) PackedF4 {
         // Note: This is element-wise multiplication, not field multiplication
-        // For proper field multiplication, we'd need to unpack, multiply, repack
         return .{ .values = self.values * other.values };
     }
 
     // SIMD-aware field addition (element-wise, assumes values are in Montgomery form)
-    pub fn addField(self: PackedF, other: PackedF) PackedF {
-        // Element-wise addition in Montgomery form
+    pub fn addField(self: PackedF4, other: PackedF4) PackedF4 {
         return .{ .values = self.values +% other.values };
     }
 
     // Broadcast a single field element to all lanes
-    pub fn broadcast(fe: FieldElement) PackedF {
+    pub fn broadcast(fe: FieldElement) PackedF4 {
         return .{ .values = @splat(fe.value) };
     }
 };
 
-// Pack 8 field elements into 2 SIMD vectors
+// 8-wide PackedF for AVX-512 (512-bit vectors)
 pub const PackedF8 = struct {
-    low: PackedF,
-    high: PackedF,
+    values: @Vector(8, u32),
 
     pub fn init(elements: [8]FieldElement) PackedF8 {
-        return .{
-            .low = PackedF.init(elements[0..4].*),
-            .high = PackedF.init(elements[4..8].*),
-        };
+        var values: [8]u32 = undefined;
+        for (0..8) |i| {
+            values[i] = elements[i].value;
+        }
+        return .{ .values = values };
+    }
+
+    pub fn initFromSlice(elements: []const FieldElement) PackedF8 {
+        var values: [8]u32 = undefined;
+        for (0..8) |i| {
+            values[i] = if (i < elements.len) elements[i].value else 0;
+        }
+        return .{ .values = values };
     }
 
     pub fn toArray(self: PackedF8) [8]FieldElement {
-        const low_arr = self.low.toArray();
-        const high_arr = self.high.toArray();
-        return .{
-            low_arr[0],  low_arr[1],  low_arr[2],  low_arr[3],
-            high_arr[0], high_arr[1], high_arr[2], high_arr[3],
-        };
+        var result: [8]FieldElement = undefined;
+        for (0..8) |i| {
+            result[i] = FieldElement.fromMontgomery(self.values[i]);
+        }
+        return result;
+    }
+
+    // SIMD operations on packed field elements
+    pub fn add(self: PackedF8, other: PackedF8) PackedF8 {
+        return .{ .values = self.values + other.values };
+    }
+
+    pub fn mul(self: PackedF8, other: PackedF8) PackedF8 {
+        return .{ .values = self.values * other.values };
+    }
+
+    // SIMD-aware field addition (element-wise, assumes values are in Montgomery form)
+    pub fn addField(self: PackedF8, other: PackedF8) PackedF8 {
+        return .{ .values = self.values +% other.values };
+    }
+
+    // Broadcast a single field element to all lanes
+    pub fn broadcast(fe: FieldElement) PackedF8 {
+        return .{ .values = @splat(fe.value) };
     }
 };
+
+// Type alias: Select PackedF based on SIMD_WIDTH
+// This allows the rest of the code to use PackedF without knowing the width
+pub const PackedF = blk: {
+    if (SIMD_WIDTH == 8) {
+        break :blk PackedF8;
+    } else {
+        break :blk PackedF4;
+    }
+};
+
+// Note: PackedF8Compat removed - not used in codebase
+// For 8-wide SIMD, use PackedF directly (which is PackedF8 when SIMD_WIDTH == 8)
 
 // SIMD-optimized batch processing of field element arrays
 // Processes multiple field elements in parallel using @Vector operations

@@ -837,13 +837,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const num_cpus = std.Thread.getCpuCount() catch 1;
         const min_parallel_leaves = 128; // Threshold for parallel leaf computation
 
-        // TEMPORARY FIX: Force scalar path for leaf domain computation to match signing
-        // This ensures consistency between tree building and signing
-        const force_scalar_leaf_computation = true;
-
-        log.print("ZIG_TREEBUILD_DEBUG: bottom_tree_index={}, force_scalar={}, using sequential path\n", .{ bottom_tree_index, force_scalar_leaf_computation });
-
-        if (leafs_per_bottom_tree < min_parallel_leaves or num_cpus <= 1 or force_scalar_leaf_computation) {
+        if (leafs_per_bottom_tree < min_parallel_leaves or num_cpus <= 1) {
             // Sequential processing for small workloads
             log.print("ZIG_TREEBUILD_DEBUG: Entering sequential path, epoch_range={}..{}\n", .{ epoch_range_start, epoch_range_end });
             for (epoch_range_start..epoch_range_end) |epoch| {
@@ -981,20 +975,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // OPTIMIZATION FIX 5: Process pre-assigned chunk without atomic operations
                     // This matches Rust's par_chunks_exact approach - more cache-friendly
                     var epoch_idx = chunk_start;
-                    while (epoch_idx < chunk_end) {
-                        const batch_end = @min(epoch_idx + SIMD_WIDTH, chunk_end);
+
+                    // Process complete SIMD-width batches
+                    while (epoch_idx + SIMD_WIDTH <= chunk_end) {
                         const batch_start_idx = epoch_idx;
+                        const batch_end = epoch_idx + SIMD_WIDTH;
+                        const actual_batch_size = SIMD_WIDTH; // Always SIMD_WIDTH for complete batches
 
-                        const actual_batch_size = batch_end - batch_start_idx;
-
-                        // Get batch of epochs
+                        // Get batch of epochs (complete batch, no padding needed)
                         var epoch_batch: [SIMD_WIDTH]u32 = undefined;
-                        for (0..actual_batch_size) |i| {
+                        for (0..SIMD_WIDTH) |i| {
                             epoch_batch[i] = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx + i));
-                        }
-                        // Pad remaining with zeros if batch is incomplete
-                        for (actual_batch_size..SIMD_WIDTH) |i| {
-                            epoch_batch[i] = 0;
                         }
                         const packed_epochs: @Vector(SIMD_WIDTH, u32) = epoch_batch;
 
@@ -1014,15 +1005,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         var packed_chains_stack: [64][8]simd_utils.PackedF = undefined;
 
                         // Generate and pack chain starting points for all epochs in batch
+                        // Note: actual_batch_size is always SIMD_WIDTH for complete batches
                         for (0..ctx.num_chains) |chain_idx| {
                             // Generate starting points for this chain across all epochs in batch
                             var starts: [SIMD_WIDTH][8]u32 = undefined;
-                            for (0..actual_batch_size) |lane| {
+                            for (0..SIMD_WIDTH) |lane| {
                                 starts[lane] = ctx.scheme.prfDomainElement(ctx.prf_key, epoch_batch[lane], @as(u64, @intCast(chain_idx)));
-                            }
-                            // Pad with zeros if batch is incomplete
-                            for (actual_batch_size..SIMD_WIDTH) |lane| {
-                                @memset(&starts[lane], 0);
                             }
 
                             // Transpose: [lane][element] -> [element][lane] for SIMD processing
@@ -1113,9 +1101,17 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                                 for (ctx.prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
                                 log.print(", parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ ctx.parameter[0].value, ctx.parameter[0].toCanonical() });
                                 // CRITICAL: Also compute chain domain directly to verify
-                                const direct_chain_domain = try ctx.scheme.computeHashChainDomain(prf_domain, 1, 0, ctx.parameter);
+                                const direct_chain_domain = ctx.scheme.computeHashChainDomain(prf_domain, 1, 0, ctx.parameter) catch |err| {
+                                    ctx.error_mutex.lock();
+                                    defer ctx.error_mutex.unlock();
+                                    if (ctx.stored_error == null) {
+                                        ctx.stored_error = err;
+                                    }
+                                    ctx.error_flag.store(true, .monotonic);
+                                    return;
+                                };
                                 log.print("ZIG_TREEBUILD_LEAF_EPOCH1: Direct chain domain computation: chain_domain[0]=0x{x:0>8}\n", .{direct_chain_domain[0].value});
-                                ctx.scheme.allocator.free(direct_chain_domain);
+                                // Note: computeHashChainDomain returns a fixed-size array, not allocated memory, so no free needed
                             }
                             const leaf_domain_slice = ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch) catch |err| {
                                 ctx.error_mutex.lock();
@@ -1148,6 +1144,53 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                         // Cleanup packed chains
                         // No cleanup needed - using stack allocation
+                    }
+
+                    // Handle remainder epochs with scalar code (matching Rust's approach)
+                    // Rust processes remainder separately to avoid padding issues
+                    while (epoch_idx < chunk_end) {
+                        const epoch = @as(u32, @intCast(ctx.epoch_range_start + epoch_idx));
+                        const local_idx = epoch_idx;
+
+                        // Process this epoch using scalar code (same as sequential path)
+                        var chain_domains_stack: [64][8]FieldElement = undefined;
+                        const chain_domains = chain_domains_stack[0..ctx.num_chains];
+
+                        // Compute chain domains for this epoch using scalar path
+                        for (0..ctx.num_chains) |chain_idx| {
+                            const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, epoch, @as(u64, @intCast(chain_idx)));
+                            chain_domains[chain_idx] = ctx.scheme.computeHashChainDomain(domain_elements, epoch, @as(u8, @intCast(chain_idx)), ctx.parameter) catch |err| {
+                                ctx.error_mutex.lock();
+                                defer ctx.error_mutex.unlock();
+                                if (ctx.stored_error == null) {
+                                    ctx.stored_error = err;
+                                }
+                                ctx.error_flag.store(true, .monotonic);
+                                return;
+                            };
+                        }
+
+                        // Reduce chain domains to leaf domain
+                        const leaf_domain_slice = ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch) catch |err| {
+                            ctx.error_mutex.lock();
+                            defer ctx.error_mutex.unlock();
+                            if (ctx.stored_error == null) {
+                                ctx.stored_error = err;
+                            }
+                            ctx.error_flag.store(true, .monotonic);
+                            return;
+                        };
+                        defer ctx.scheme.allocator.free(leaf_domain_slice);
+
+                        // Store leaf domain
+                        for (0..ctx.hash_len) |i| {
+                            ctx.leaf_domains[local_idx][i] = leaf_domain_slice[i];
+                        }
+                        for (ctx.hash_len..8) |i| {
+                            ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
+                        }
+
+                        epoch_idx += 1;
                     }
                 }
             };
@@ -1490,10 +1533,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         packed_parameter: [5]simd_utils.PackedF, // Parameter broadcast to all lanes
         packed_output: []simd_utils.PackedF, // NEW: Output buffer to avoid allocation
     ) !void {
-        const hash_len = self.lifetime_params.hash_len_fe;
         const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
         const field = @import("../../core/field.zig");
-        const CHAIN_COMPRESSION_WIDTH = 16; // 5 param + 2 tweak + 8 hash + 1 padding
 
         // Pre-compute tweaks for all lanes
         var tweak0_values: [SIMD_WIDTH]u32 = undefined;
@@ -1520,6 +1561,37 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             simd_utils.PackedF{ .values = tweak1_values },
         };
 
+        return self.applyPoseidonChainTweakHashSIMDWithTweaks(
+            simd_poseidon2,
+            packed_input,
+            packed_epochs,
+            chain_index,
+            pos_in_chain,
+            packed_parameter,
+            packed_tweaks,
+            packed_output,
+        );
+    }
+
+    /// Internal helper: Apply Poseidon2 chain tweak hash with pre-computed tweaks
+    /// This allows callers to pre-compute tweaks once and reuse them
+    inline fn applyPoseidonChainTweakHashSIMDWithTweaks(
+        self: *GeneralizedXMSSSignatureScheme,
+        simd_poseidon2: *poseidon2_simd.Poseidon2SIMD, // Reusable instance (passed from caller)
+        packed_input: []const simd_utils.PackedF, // SIMD-packed: [element][epoch]
+        packed_epochs: @Vector(simd_utils.SIMD_WIDTH, u32), // Epochs in batch
+        chain_index: u8,
+        pos_in_chain: u8,
+        packed_parameter: [5]simd_utils.PackedF, // Parameter broadcast to all lanes
+        packed_tweaks: [2]simd_utils.PackedF, // Pre-computed tweaks
+        packed_output: []simd_utils.PackedF, // Output buffer
+    ) !void {
+        _ = packed_epochs; // Used for debug logging only
+        _ = chain_index; // Used for debug logging only
+        _ = pos_in_chain; // Used for debug logging only
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const CHAIN_COMPRESSION_WIDTH = 16; // 5 param + 2 tweak + 8 hash + 1 padding
+
         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
         // This matches Rust's approach: let mut packed_input = [PackedF::ZERO; CHAIN_COMPRESSION_WIDTH];
         var packed_combined_input: [CHAIN_COMPRESSION_WIDTH]simd_utils.PackedF = undefined;
@@ -1543,7 +1615,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Walk chains for multiple epochs simultaneously using SIMD
-    fn walkChainsSIMD(
+    inline fn walkChainsSIMD(
         self: *GeneralizedXMSSSignatureScheme,
         simd_poseidon2: *poseidon2_simd.Poseidon2SIMD, // Reusable instance (passed from caller)
         packed_chains: [][]simd_utils.PackedF,
@@ -1553,24 +1625,61 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         packed_parameter: [5]simd_utils.PackedF,
     ) !void {
         const hash_len = self.lifetime_params.hash_len_fe;
+        const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
+        const field = @import("../../core/field.zig");
+
         // CRITICAL OPTIMIZATION: Use stack-allocated buffer for packed_next
         // hash_len is at most 8, so 8 PackedF = 128 bytes (safe for stack)
         // This avoids 64 chains × 7 steps = 448 allocations per batch!
         var packed_next_stack: [8]simd_utils.PackedF = undefined;
 
-        // Walk chain for chain_length - 1 steps
-        for (0..chain_length - 1) |step| {
+        // OPTIMIZATION: Pre-compute all tweaks for all steps once
+        // This avoids recomputing tweaks in applyPoseidonChainTweakHashSIMD for each step
+        // chain_length - 1 steps, each with 2 tweak values (tweak0, tweak1) × SIMD_WIDTH lanes
+        const num_steps = chain_length - 1;
+        // Max 256 steps × 2 tweaks × SIMD_WIDTH lanes (4 or 8) = 2-4KB (safe for stack)
+        // Use a comptime switch to select the correct array type based on SIMD_WIDTH
+        const PrecomputedTweaksType = if (SIMD_WIDTH == 8) [256][2][8]u32 else [256][2][4]u32;
+        var precomputed_tweaks: PrecomputedTweaksType = undefined;
+        const tweaks_slice = precomputed_tweaks[0..num_steps];
+
+        // Pre-compute tweaks for all steps and all lanes
+        // Note: All epochs in packed_epochs are valid (complete batches only)
+        for (0..num_steps) |step| {
             const pos_in_chain = @as(u8, @intCast(step + 1));
+            for (0..SIMD_WIDTH) |lane| {
+                const epoch = packed_epochs[lane];
+                // All epochs are valid in complete batches, so no need to check for padding
+                const tweak_encoding = (@as(u128, epoch) << 24) | (@as(u128, chain_index) << 16) | (@as(u128, pos_in_chain) << 8) | field.TWEAK_SEPARATOR_FOR_CHAIN_HASH;
+                const tweak = tweakToFieldElements(tweak_encoding);
+                tweaks_slice[step][0][lane] = tweak[0].value;
+                tweaks_slice[step][1][lane] = tweak[1].value;
+            }
+        }
+
+        // Walk chain for chain_length - 1 steps
+        for (0..num_steps) |step| {
+            const pos_in_chain = @as(u8, @intCast(step + 1));
+
+            // Use pre-computed tweaks
+            // Convert array to vector for PackedF initialization
+            const tweak0_vec: @Vector(SIMD_WIDTH, u32) = tweaks_slice[step][0];
+            const tweak1_vec: @Vector(SIMD_WIDTH, u32) = tweaks_slice[step][1];
+            const packed_tweaks = [2]simd_utils.PackedF{
+                simd_utils.PackedF{ .values = tweak0_vec },
+                simd_utils.PackedF{ .values = tweak1_vec },
+            };
 
             // Apply SIMD hash to advance chain for all epochs simultaneously
             // Write directly to stack buffer to avoid allocation
-            try self.applyPoseidonChainTweakHashSIMD(
+            try self.applyPoseidonChainTweakHashSIMDWithTweaks(
                 simd_poseidon2, // Pass reusable instance
                 packed_chains[chain_index],
                 packed_epochs,
                 @as(u8, @intCast(chain_index)),
                 pos_in_chain,
                 packed_parameter,
+                packed_tweaks, // Use pre-computed tweaks
                 packed_next_stack[0..hash_len], // Write to stack buffer
             );
 
@@ -1598,7 +1707,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
     /// Batch hash multiple tree node pairs together (reduces function call overhead)
     /// Processes pairs in batches of 4 for better SIMD utilization
-    fn batchHashTreePairs(
+    inline fn batchHashTreePairs(
         self: *GeneralizedXMSSSignatureScheme,
         nodes: [][8]FieldElement,
         parents: [][8]FieldElement,
@@ -1691,7 +1800,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Batch hash tree pairs using SIMD Poseidon2-24
-    fn batchHashTreePairsSIMD(
+    inline fn batchHashTreePairsSIMD(
         self: *GeneralizedXMSSSignatureScheme,
         nodes: [][8]FieldElement,
         parents: [][8]FieldElement,
@@ -2220,7 +2329,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Reduce 64 chain domains ([8] each) into a single leaf domain using Poseidon sponge
     /// This matches Rust's TH::apply when message.len() > 2 (sponge mode)
     /// Returns hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-    pub fn reduceChainDomainsToLeafDomain(
+    pub inline fn reduceChainDomainsToLeafDomain(
         self: *GeneralizedXMSSSignatureScheme,
         chain_domains_in: [][8]FieldElement,
         parameter: [5]FieldElement,
@@ -2564,9 +2673,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Start with the lowest layer, padded accordingly (matching Rust HashTreeLayer::padded)
-        // CRITICAL: Use real RNG for bottom trees (matching Rust implementation)
-        // Rust uses the real RNG for both bottom trees and top tree
-        const initial_padded = try self.padLayer(leaf_nodes, start_index);
+        // CRITICAL: Use dummy RNG for bottom trees (matching Rust implementation)
+        // Rust uses StdRng::seed_from_u64(0) for bottom trees because they're full and padding is removed
+        // This allows parallel building without affecting RNG determinism
+        var dummy_rng = std.Random.DefaultPrng.init(0);
+        const dummy_rng_random = dummy_rng.random();
+        const initial_padded = try self.padLayerWithRng(leaf_nodes, start_index, &dummy_rng_random);
 
         log.print("DEBUG: Initial padding: {} nodes (start_index: {})\n", .{ initial_padded.nodes.len, initial_padded.start_index });
 
@@ -2602,8 +2714,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             self.allocator.free(current_layer.nodes);
 
             // Add the new layer with padding so next iteration also has even start and length (matching Rust)
-            // Use real RNG for bottom trees (matching Rust implementation)
-            const new_layer = try self.padLayer(parents, parent_start);
+            // Use dummy RNG for bottom trees (matching Rust implementation)
+            const new_layer = try self.padLayerWithRng(parents, parent_start, &dummy_rng_random);
             self.allocator.free(parents);
 
             current_layer = new_layer;
@@ -2754,7 +2866,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             for (1..8) |j| leaf_nodes[i][j] = FieldElement{ .value = 0 };
         }
 
-        var current_layer = try self.padLayer(leaf_nodes, start_index);
+        // CRITICAL: Use dummy RNG for bottom trees (matching Rust implementation)
+        // Rust uses StdRng::seed_from_u64(0) for bottom trees because they're full and padding is removed
+        // This allows parallel building without affecting RNG determinism
+        var dummy_rng = std.Random.DefaultPrng.init(0);
+        const dummy_rng_random = dummy_rng.random();
+        var current_layer = try self.padLayerWithRng(leaf_nodes, start_index, &dummy_rng_random);
         try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
         @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
 
@@ -2770,7 +2887,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             const parents = try self.allocator.alloc([8]FieldElement, parents_len);
             try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
             self.allocator.free(current_layer.nodes);
-            const new_layer = try self.padLayer(parents, parent_start);
+            const new_layer = try self.padLayerWithRng(parents, parent_start, &dummy_rng_random);
             self.allocator.free(parents);
             current_layer = new_layer;
             try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
@@ -2782,7 +2899,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         return layers.toOwnedSlice();
     }
 
-    fn buildBottomTreeLayersFromLeafDomains(
+    inline fn buildBottomTreeLayersFromLeafDomains(
         self: *GeneralizedXMSSSignatureScheme,
         leaf_nodes_in: [][8]FieldElement,
         parameter: [5]FieldElement,
@@ -2801,9 +2918,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             layers.deinit();
         }
 
+        // CRITICAL: Use dummy RNG for bottom trees (matching Rust implementation)
+        // Rust uses StdRng::seed_from_u64(0) for bottom trees because they're full and padding is removed
+        // This allows parallel building without affecting RNG determinism
+        var dummy_rng = std.Random.DefaultPrng.init(0);
+        const dummy_rng_random = dummy_rng.random();
+
         // CRITICAL OPTIMIZATION: Pass leaf_nodes_in directly to padLayer
         // padLayer allocates its own array and copies the input, so we don't need an intermediate copy
-        var current_layer = try self.padLayer(leaf_nodes_in, start_index);
+        var current_layer = try self.padLayerWithRng(leaf_nodes_in, start_index, &dummy_rng_random);
         try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
         @memcpy(layers.items[layers.items.len - 1].nodes, current_layer.nodes);
 
@@ -2886,7 +3009,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             try self.processPairsInParallel(current_layer.nodes, parents, parent_start, current_level, parameter);
             self.allocator.free(current_layer.nodes);
-            const new_layer = try self.padLayerWithRng(parents, parent_start, &self.rng.random());
+            // Use padLayer (with mutex) for top tree to ensure deterministic RNG consumption
+            const new_layer = try self.padLayer(parents, parent_start);
             self.allocator.free(parents);
             current_layer = new_layer;
             try layers.append(.{ .nodes = try self.allocator.alloc([8]FieldElement, current_layer.nodes.len), .start_index = current_layer.start_index });
@@ -3405,15 +3529,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         };
 
         // Worker function for parallel tree generation
+        // Note: This worker only processes trees starting from index 2 (first 2 are built sequentially)
         const treeWorker = struct {
             fn worker(ctx_ptr: *TreeGenContext) void {
                 while (true) {
                     const array_idx = ctx_ptr.next_index.fetchAdd(1, .monotonic);
-                    if (array_idx >= ctx_ptr.tree_indices.len) {
+                    // Skip first 2 trees (indices 0 and 1) - they're built sequentially
+                    const actual_idx = array_idx + 2;
+                    if (actual_idx >= ctx_ptr.tree_indices.len) {
                         break;
                     }
 
-                    const tree_idx = ctx_ptr.tree_indices[array_idx];
+                    const tree_idx = ctx_ptr.tree_indices[actual_idx];
 
                     // Generate tree
                     const tree = ctx_ptr.scheme.bottomTreeFromPrfKey(
@@ -3431,45 +3558,41 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         return;
                     };
 
-                    // Store tree and root
-                    ctx_ptr.trees[array_idx] = tree;
-                    ctx_ptr.roots[array_idx] = tree.root();
+                    // Store tree and root (use actual_idx since we skipped first 2)
+                    ctx_ptr.trees[actual_idx] = tree;
+                    ctx_ptr.roots[actual_idx] = tree.root();
                 }
             }
         };
 
-        // CRITICAL: Tree building order must match between original keyGen() and regeneration.
-        // Parallel tree building uses a shared RNG with mutex protection, but the order of
-        // RNG consumption depends on thread scheduling, making it non-deterministic.
-        //
-        // The original keyGen() calls keyGenWithParameter() which uses parallel building.
-        // For deterministic regeneration, we MUST use the SAME building method.
-        //
-        // SOLUTION: Since parallel building is non-deterministic, we need to use sequential
-        // building for BOTH original and regeneration. However, this means we need to change
-        // the default behavior. For now, use sequential when rng_already_consumed is true
-        // (indicating regeneration), and parallel when false (indicating original keygen).
-        //
-        // Actually, that won't work either because both paths need to match. The real solution
-        // is to always use sequential building to ensure determinism.
-        // Always use sequential building to ensure deterministic RNG consumption order.
-        // This is critical for keypair regeneration during signing to match original keygen.
-        const use_sequential = true;
+        // Match Rust's behavior: first 2 trees sequential, rest in parallel
+        // This ensures the first two trees are available immediately for the secret key
+        // while the rest are built in parallel for performance
 
-        if (use_sequential) {
-            log.print("DEBUG: Using sequential tree generation for deterministic RNG consumption\n", .{});
-            // Build trees sequentially in deterministic order
-            for (0..num_bottom_trees) |i| {
-                const tree_idx = tree_indices[i];
-                const tree = try self.bottomTreeFromPrfKey(prf_key, tree_idx, parameter);
-                trees[i] = tree;
-                roots_of_bottom_trees[i] = tree.root();
-            }
-        } else {
-            // Use parallel tree generation for initial keygen (performance optimization)
+        // Build first 2 trees sequentially (matching Rust)
+        if (num_bottom_trees >= 1) {
+            const tree_idx_0 = tree_indices[0];
+            const tree_0 = try self.bottomTreeFromPrfKey(prf_key, tree_idx_0, parameter);
+            trees[0] = tree_0;
+            roots_of_bottom_trees[0] = tree_0.root();
+        }
+
+        if (num_bottom_trees >= 2) {
+            const tree_idx_1 = tree_indices[1];
+            const tree_1 = try self.bottomTreeFromPrfKey(prf_key, tree_idx_1, parameter);
+            trees[1] = tree_1;
+            roots_of_bottom_trees[1] = tree_1.root();
+        }
+
+        // Build remaining trees in parallel (matching Rust's into_par_iter approach)
+        if (num_bottom_trees > 2) {
             const num_cpus = std.Thread.getCpuCount() catch 1;
-            const num_threads = @min(num_cpus, num_bottom_trees);
-            log.print("DEBUG: Using {} threads for parallel tree generation\n", .{num_threads});
+            const num_remaining_trees = num_bottom_trees - 2;
+            const num_threads = @min(num_cpus, num_remaining_trees);
+            log.print("DEBUG: Using {} threads for parallel tree generation ({} remaining trees)\n", .{ num_threads, num_remaining_trees });
+
+            // Reset the atomic counter to 0 for remaining trees (indices 2+)
+            ctx.next_index.store(0, .monotonic);
 
             // Spawn worker threads
             var threads = try self.allocator.alloc(std.Thread, num_threads);
@@ -3482,6 +3605,36 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Wait for all threads
             for (threads) |thread| {
                 thread.join();
+            }
+
+            // CRITICAL: Verify all trees were built and roots stored
+            // This ensures we don't proceed with incomplete data
+            for (2..num_bottom_trees) |i| {
+                if (trees[i] == null) {
+                    log.print("ZIG_KEYGEN_ERROR: Tree at index {} was not built!\n", .{i});
+                    return error.TreeNotBuilt;
+                }
+                // Verify root was stored
+                var root_zero = true;
+                for (roots_of_bottom_trees[i]) |fe| {
+                    if (fe.value != 0) {
+                        root_zero = false;
+                        break;
+                    }
+                }
+                if (root_zero) {
+                    log.print("ZIG_KEYGEN_ERROR: Root at index {} is all zeros!\n", .{i});
+                    return error.RootNotStored;
+                }
+            }
+        } else if (num_bottom_trees > 2) {
+            // TEMPORARY: Build remaining trees sequentially for debugging
+            log.print("DEBUG: Building remaining {} trees sequentially (parallel disabled for debugging)\n", .{num_bottom_trees - 2});
+            for (2..num_bottom_trees) |i| {
+                const tree_idx = tree_indices[i];
+                const tree = try self.bottomTreeFromPrfKey(prf_key, tree_idx, parameter);
+                trees[i] = tree;
+                roots_of_bottom_trees[i] = tree.root();
             }
         }
 

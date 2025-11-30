@@ -51,29 +51,57 @@ pub const Poseidon2SIMD = struct {
         const USE_TRUE_SIMD = true; // Enabled - SIMD permutation verified
 
         if (USE_TRUE_SIMD) {
-            // True SIMD path (currently disabled due to internal layer complexity)
-            var packed_states: [WIDTH_16]@Vector(SIMD_WIDTH, u32) = undefined;
+            // True SIMD path - select 4-wide or 8-wide based on SIMD_WIDTH
+            if (SIMD_WIDTH == 8) {
+                // 8-wide SIMD path
+                var packed_states: [WIDTH_16]@Vector(8, u32) = undefined;
 
-            // Initialize state from packed input
-            for (0..WIDTH_16) |i| {
-                if (i < input_len) {
-                    packed_states[i] = packed_input[i].values;
-                } else {
-                    packed_states[i] = @splat(@as(u32, 0));
+                // Initialize state from packed input
+                for (0..WIDTH_16) |i| {
+                    if (i < input_len) {
+                        packed_states[i] = packed_input[i].values;
+                    } else {
+                        packed_states[i] = @splat(@as(u32, 0));
+                    }
                 }
-            }
 
-            const packed_input_states = packed_states;
-            permute16SIMD(self, &packed_states);
+                const packed_input_states = packed_states;
+                permute16SIMD8Impl(self, &packed_states);
 
-            // Feed-forward
-            for (0..WIDTH_16) |i| {
-                packed_states[i] = addSIMD(packed_states[i], packed_input_states[i]);
-            }
+                // Feed-forward
+                for (0..WIDTH_16) |i| {
+                    packed_states[i] = addSIMD8(packed_states[i], packed_input_states[i]);
+                }
 
-            // Write directly to output buffer (no allocation!)
-            for (0..out_len) |i| {
-                packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                // Write directly to output buffer (no allocation!)
+                for (0..out_len) |i| {
+                    packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                }
+            } else {
+                // 4-wide SIMD path
+                var packed_states: [WIDTH_16]@Vector(4, u32) = undefined;
+
+                // Initialize state from packed input
+                for (0..WIDTH_16) |i| {
+                    if (i < input_len) {
+                        packed_states[i] = packed_input[i].values;
+                    } else {
+                        packed_states[i] = @splat(@as(u32, 0));
+                    }
+                }
+
+                const packed_input_states = packed_states;
+                permute16SIMD4Impl(self, &packed_states);
+
+                // Feed-forward
+                for (0..WIDTH_16) |i| {
+                    packed_states[i] = addSIMD4(packed_states[i], packed_input_states[i]);
+                }
+
+                // Write directly to output buffer (no allocation!)
+                for (0..out_len) |i| {
+                    packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                }
             }
         } else {
             // Optimized batch processing path (maintains compatibility)
@@ -136,42 +164,59 @@ pub const Poseidon2SIMD = struct {
         const USE_TRUE_SIMD = true; // Enabled - SIMD permutation verified
 
         if (USE_TRUE_SIMD) {
-            // True SIMD path
-            var packed_states: [WIDTH_24]@Vector(SIMD_WIDTH, u32) = undefined;
+            // True SIMD path - select 4-wide or 8-wide based on SIMD_WIDTH
+            if (SIMD_WIDTH == 8) {
+                // 8-wide SIMD path
+                var packed_states: [WIDTH_24]@Vector(8, u32) = undefined;
 
-            // Initialize state from packed input
-            for (0..WIDTH_24) |i| {
-                if (i < input_len) {
-                    packed_states[i] = packed_input[i].values;
-                } else {
-                    packed_states[i] = @splat(@as(u32, 0));
+                for (0..WIDTH_24) |i| {
+                    if (i < input_len) {
+                        packed_states[i] = packed_input[i].values;
+                    } else {
+                        packed_states[i] = @splat(@as(u32, 0));
+                    }
                 }
-            }
 
-            // CRITICAL: Make a proper copy of the input states before permutation
-            // (assigning an array doesn't copy in Zig, so we need to explicitly copy)
-            var packed_input_states: [WIDTH_24]@Vector(SIMD_WIDTH, u32) = undefined;
-            for (0..WIDTH_24) |i| {
-                packed_input_states[i] = packed_states[i];
-            }
+                var packed_input_states: [WIDTH_24]@Vector(8, u32) = undefined;
+                for (0..WIDTH_24) |i| {
+                    packed_input_states[i] = packed_states[i];
+                }
 
-            permute24SIMD(self, &packed_states);
+                permute24SIMD8Impl(self, &packed_states);
 
-            // Debug output removed for performance
+                for (0..WIDTH_24) |i| {
+                    packed_states[i] = addSIMD8(packed_states[i], packed_input_states[i]);
+                }
 
-            // Feed-forward
-            for (0..WIDTH_24) |i| {
-                packed_states[i] = addSIMD(packed_states[i], packed_input_states[i]);
-            }
+                for (0..out_len) |i| {
+                    packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                }
+            } else {
+                // 4-wide SIMD path
+                var packed_states: [WIDTH_24]@Vector(4, u32) = undefined;
 
-            // Debug: Check result after feed-forward
-            if (input_len > 0 and out_len > 0) {
-                // Debug output removed for performance
-            }
+                for (0..WIDTH_24) |i| {
+                    if (i < input_len) {
+                        packed_states[i] = packed_input[i].values;
+                    } else {
+                        packed_states[i] = @splat(@as(u32, 0));
+                    }
+                }
 
-            // Write directly to output buffer (no allocation!)
-            for (0..out_len) |i| {
-                packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                var packed_input_states: [WIDTH_24]@Vector(4, u32) = undefined;
+                for (0..WIDTH_24) |i| {
+                    packed_input_states[i] = packed_states[i];
+                }
+
+                permute24SIMD4Impl(self, &packed_states);
+
+                for (0..WIDTH_24) |i| {
+                    packed_states[i] = addSIMD4(packed_states[i], packed_input_states[i]);
+                }
+
+                for (0..out_len) |i| {
+                    packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                }
             }
         } else {
             // Fallback to batch processing
@@ -211,17 +256,44 @@ pub const Poseidon2SIMD = struct {
         }
     }
 
-    /// SIMD-aware field addition (Montgomery form)
-    /// Adds two vectors of field elements element-wise
-    fn addSIMD(a: @Vector(SIMD_WIDTH, u32), b: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+    /// SIMD-aware field addition (Montgomery form) - 4-wide
+    fn addSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
         const KOALABEAR_PRIME: u32 = 0x7f000001;
         const sum = a +% b;
-        // Reduce mod prime if needed (simple check: if sum >= prime, subtract prime)
-        var result: @Vector(SIMD_WIDTH, u32) = undefined;
-        inline for (0..SIMD_WIDTH) |i| {
+        var result: @Vector(4, u32) = undefined;
+        inline for (0..4) |i| {
             result[i] = if (sum[i] >= KOALABEAR_PRIME) sum[i] -% KOALABEAR_PRIME else sum[i];
         }
         return result;
+    }
+
+    /// SIMD-aware field addition (Montgomery form) - 8-wide
+    fn addSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
+        const KOALABEAR_PRIME: u32 = 0x7f000001;
+        const sum = a +% b;
+        var result: @Vector(8, u32) = undefined;
+        inline for (0..8) |i| {
+            result[i] = if (sum[i] >= KOALABEAR_PRIME) sum[i] -% KOALABEAR_PRIME else sum[i];
+        }
+        return result;
+    }
+
+    /// SIMD-aware field addition (Montgomery form) - dispatches to 4-wide or 8-wide
+    /// This wrapper handles both 4-wide and 8-wide by casting appropriately
+    fn addSIMD(a: @Vector(SIMD_WIDTH, u32), b: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+        if (SIMD_WIDTH == 8) {
+            // Cast to 8-wide vectors
+            const a8: @Vector(8, u32) = a;
+            const b8: @Vector(8, u32) = b;
+            const result8 = addSIMD8(a8, b8);
+            return result8;
+        } else {
+            // Cast to 4-wide vectors
+            const a4: @Vector(4, u32) = a;
+            const b4: @Vector(4, u32) = b;
+            const result4 = addSIMD4(a4, b4);
+            return result4;
+        }
     }
 
     /// Convert u32 to Montgomery form (SIMD version of F.fromU32)
@@ -234,6 +306,52 @@ pub const Poseidon2SIMD = struct {
             // to_monty: (((x as u64) << MONTY_BITS) % PRIME as u64) as u32
             const shifted = @as(u64, x[i]) << KOALABEAR_MONTY_BITS;
             result[i] = @as(u32, @intCast(shifted % KOALABEAR_PRIME));
+        }
+        return result;
+    }
+
+    /// SIMD-aware field multiplication (Montgomery form) - 4-wide
+    fn mulSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
+        const KOALABEAR_PRIME: u64 = 0x7f000001;
+        const KOALABEAR_MONTY_MU: u32 = 0x81000001;
+        const KOALABEAR_MONTY_MASK: u32 = 0xffffffff;
+        const KOALABEAR_MONTY_BITS: u32 = 32;
+
+        var result: @Vector(4, u32) = undefined;
+        inline for (0..4) |i| {
+            // Montgomery reduction (matching plonky3_field.zig exactly)
+            const long_prod = @as(u64, a[i]) * @as(u64, b[i]);
+            const t = @as(u32, @truncate(long_prod)) *% KOALABEAR_MONTY_MU & KOALABEAR_MONTY_MASK;
+            const u = @as(u64, t) * KOALABEAR_PRIME;
+            const sub_result = @subWithOverflow(long_prod, u);
+            const x_sub_u = sub_result[0];
+            const over = sub_result[1];
+            const x_sub_u_hi = @as(u32, @intCast(x_sub_u >> KOALABEAR_MONTY_BITS));
+            const corr = if (over != 0) @as(u32, @truncate(KOALABEAR_PRIME)) else 0;
+            result[i] = x_sub_u_hi +% corr;
+        }
+        return result;
+    }
+
+    /// SIMD-aware field multiplication (Montgomery form) - 8-wide
+    fn mulSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
+        const KOALABEAR_PRIME: u64 = 0x7f000001;
+        const KOALABEAR_MONTY_MU: u32 = 0x81000001;
+        const KOALABEAR_MONTY_MASK: u32 = 0xffffffff;
+        const KOALABEAR_MONTY_BITS: u32 = 32;
+
+        var result: @Vector(8, u32) = undefined;
+        inline for (0..8) |i| {
+            // Montgomery reduction (matching plonky3_field.zig exactly)
+            const long_prod = @as(u64, a[i]) * @as(u64, b[i]);
+            const t = @as(u32, @truncate(long_prod)) *% KOALABEAR_MONTY_MU & KOALABEAR_MONTY_MASK;
+            const u = @as(u64, t) * KOALABEAR_PRIME;
+            const sub_result = @subWithOverflow(long_prod, u);
+            const x_sub_u = sub_result[0];
+            const over = sub_result[1];
+            const x_sub_u_hi = @as(u32, @intCast(x_sub_u >> KOALABEAR_MONTY_BITS));
+            const corr = if (over != 0) @as(u32, @truncate(KOALABEAR_PRIME)) else 0;
+            result[i] = x_sub_u_hi +% corr;
         }
         return result;
     }
@@ -262,13 +380,30 @@ pub const Poseidon2SIMD = struct {
         return result;
     }
 
+    /// SIMD-aware S-box (x^3 operation) - 4-wide
+    inline fn sboxSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
+        const x2 = mulSIMD4(x, x);
+        return mulSIMD4(x2, x);
+    }
+
+    /// SIMD-aware S-box (x^3 operation) - 8-wide
+    inline fn sboxSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
+        const x2 = mulSIMD8(x, x);
+        return mulSIMD8(x2, x);
+    }
+
     /// SIMD-aware S-box (x^3 operation)
     /// Applies x^3 to each element in the vector
     /// OPTIMIZATION: Inline to help compiler optimize
     inline fn sboxSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
         // x^3 = x * x * x (optimal: 2 multiplications)
-        const x2 = mulSIMD(x, x);
-        return mulSIMD(x2, x);
+        if (SIMD_WIDTH == 8) {
+            const x2 = mulSIMD8(x, x);
+            return mulSIMD8(x2, x);
+        } else {
+            const x2 = mulSIMD4(x, x);
+            return mulSIMD4(x2, x);
+        }
     }
 
     /// SIMD-aware round constant addition
@@ -285,6 +420,62 @@ pub const Poseidon2SIMD = struct {
         }
     }
 
+    /// SIMD-aware MDS matrix application (4x4 block) - 4-wide
+    inline fn applyMat4SIMD4Impl(
+        state: []@Vector(4, u32),
+        start_idx: usize,
+    ) void {
+        if (start_idx + 4 > state.len) return;
+
+        const x0 = state[start_idx + 0];
+        const x1 = state[start_idx + 1];
+        const x2 = state[start_idx + 2];
+        const x3 = state[start_idx + 3];
+
+        const t01 = addSIMD4(x0, x1);
+        const t23 = addSIMD4(x2, x3);
+        const t0123 = addSIMD4(t01, t23);
+        const t01123 = addSIMD4(t0123, x1);
+        const t01233 = addSIMD4(t0123, x3);
+
+        const x0_double = addSIMD4(x0, x0);
+        state[start_idx + 3] = addSIMD4(t01233, x0_double);
+
+        const x2_double = addSIMD4(x2, x2);
+        state[start_idx + 1] = addSIMD4(t01123, x2_double);
+
+        state[start_idx + 0] = addSIMD4(t01123, t01);
+        state[start_idx + 2] = addSIMD4(t01233, t23);
+    }
+
+    /// SIMD-aware MDS matrix application (4x4 block) - 8-wide
+    inline fn applyMat4SIMD8Impl(
+        state: []@Vector(8, u32),
+        start_idx: usize,
+    ) void {
+        if (start_idx + 4 > state.len) return;
+
+        const x0 = state[start_idx + 0];
+        const x1 = state[start_idx + 1];
+        const x2 = state[start_idx + 2];
+        const x3 = state[start_idx + 3];
+
+        const t01 = addSIMD8(x0, x1);
+        const t23 = addSIMD8(x2, x3);
+        const t0123 = addSIMD8(t01, t23);
+        const t01123 = addSIMD8(t0123, x1);
+        const t01233 = addSIMD8(t0123, x3);
+
+        const x0_double = addSIMD8(x0, x0);
+        state[start_idx + 3] = addSIMD8(t01233, x0_double);
+
+        const x2_double = addSIMD8(x2, x2);
+        state[start_idx + 1] = addSIMD8(t01123, x2_double);
+
+        state[start_idx + 0] = addSIMD8(t01123, t01);
+        state[start_idx + 2] = addSIMD8(t01233, t23);
+    }
+
     /// SIMD-aware MDS matrix application (4x4 block)
     /// Applies the MDS matrix to 4 elements across all SIMD lanes
     /// OPTIMIZATION: Inline to help compiler optimize
@@ -292,116 +483,142 @@ pub const Poseidon2SIMD = struct {
         state: []@Vector(SIMD_WIDTH, u32),
         start_idx: usize,
     ) void {
-        if (start_idx + 4 > state.len) return;
+        if (SIMD_WIDTH == 8) {
+            // Cast to 8-wide and call 8-wide implementation
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(state.ptr))[0..state.len];
+            applyMat4SIMD8Impl(state8, start_idx);
+        } else {
+            // Cast to 4-wide and call 4-wide implementation
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(state.ptr))[0..state.len];
+            applyMat4SIMD4Impl(state4, start_idx);
+        }
+    }
 
-        // Matrix: [ 2 3 1 1 ]
-        //         [ 1 2 3 1 ]
-        //         [ 1 1 2 3 ]
-        //         [ 3 1 1 2 ]
+    /// SIMD-aware MDS light permutation for 16-width - 4-wide
+    fn mdsLightPermutation16SIMD4Impl(packed_states: []@Vector(4, u32)) void {
+        const WIDTH = 16;
+        if (packed_states.len != WIDTH) return;
 
-        // Store original values
-        const x0 = state[start_idx + 0];
-        const x1 = state[start_idx + 1];
-        const x2 = state[start_idx + 2];
-        const x3 = state[start_idx + 3];
+        for (0..4) |i| {
+            applyMat4SIMD4Impl(packed_states, i * 4);
+        }
 
-        // t01 = x[0] + x[1]
-        const t01 = addSIMD(x0, x1);
+        var sums: [4]@Vector(4, u32) = undefined;
+        for (0..4) |k| {
+            sums[k] = @splat(@as(u32, 0));
+            var j: usize = 0;
+            while (j < WIDTH) : (j += 4) {
+                sums[k] = addSIMD4(sums[k], packed_states[j + k]);
+            }
+        }
 
-        // t23 = x[2] + x[3]
-        const t23 = addSIMD(x2, x3);
+        for (0..WIDTH) |i| {
+            packed_states[i] = addSIMD4(packed_states[i], sums[i % 4]);
+        }
+    }
 
-        // t0123 = t01 + t23
-        const t0123 = addSIMD(t01, t23);
+    /// SIMD-aware MDS light permutation for 16-width - 8-wide
+    fn mdsLightPermutation16SIMD8Impl(packed_states: []@Vector(8, u32)) void {
+        const WIDTH = 16;
+        if (packed_states.len != WIDTH) return;
 
-        // t01123 = t0123 + x[1]
-        const t01123 = addSIMD(t0123, x1);
+        for (0..4) |i| {
+            applyMat4SIMD8Impl(packed_states, i * 4);
+        }
 
-        // t01233 = t0123 + x[3]
-        const t01233 = addSIMD(t0123, x3);
+        var sums: [4]@Vector(8, u32) = undefined;
+        for (0..4) |k| {
+            sums[k] = @splat(@as(u32, 0));
+            var j: usize = 0;
+            while (j < WIDTH) : (j += 4) {
+                sums[k] = addSIMD8(sums[k], packed_states[j + k]);
+            }
+        }
 
-        // x[3] = t01233 + 2*x[0] = t01233 + x[0] + x[0]
-        const x0_double = addSIMD(x0, x0);
-        state[start_idx + 3] = addSIMD(t01233, x0_double);
-
-        // x[1] = t01123 + 2*x[2] = t01123 + x[2] + x[2]
-        const x2_double = addSIMD(x2, x2);
-        state[start_idx + 1] = addSIMD(t01123, x2_double);
-
-        // x[0] = t01123 + t01
-        state[start_idx + 0] = addSIMD(t01123, t01);
-
-        // x[2] = t01233 + t23
-        state[start_idx + 2] = addSIMD(t01233, t23);
+        for (0..WIDTH) |i| {
+            packed_states[i] = addSIMD8(packed_states[i], sums[i % 4]);
+        }
     }
 
     /// SIMD-aware MDS light permutation for 16-width
     /// Applies MDS light to all lanes simultaneously
     fn mdsLightPermutation16SIMD(packed_states: []@Vector(SIMD_WIDTH, u32)) void {
-        const WIDTH = 16;
+        if (SIMD_WIDTH == 8) {
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            mdsLightPermutation16SIMD8Impl(state8);
+        } else {
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            mdsLightPermutation16SIMD4Impl(state4);
+        }
+    }
+
+    /// SIMD-aware MDS light permutation for 24-width - 4-wide
+    fn mdsLightPermutation24SIMD4Impl(packed_states: []@Vector(4, u32)) void {
+        const WIDTH = 24;
         if (packed_states.len != WIDTH) return;
 
-        // First, apply M_4 to each consecutive four elements
-        for (0..4) |i| {
-            applyMat4SIMD(packed_states, i * 4);
+        for (0..6) |i| {
+            applyMat4SIMD4Impl(packed_states, i * 4);
         }
 
-        // Apply outer circulant matrix
-        var sums: [4]@Vector(SIMD_WIDTH, u32) = undefined;
+        var sums: [4]@Vector(4, u32) = undefined;
         for (0..4) |k| {
             sums[k] = @splat(@as(u32, 0));
             var j: usize = 0;
             while (j < WIDTH) : (j += 4) {
-                sums[k] = addSIMD(sums[k], packed_states[j + k]);
+                sums[k] = addSIMD4(sums[k], packed_states[j + k]);
             }
         }
 
-        // Add appropriate sum to each element
         for (0..WIDTH) |i| {
-            packed_states[i] = addSIMD(packed_states[i], sums[i % 4]);
+            packed_states[i] = addSIMD4(packed_states[i], sums[i % 4]);
+        }
+    }
+
+    /// SIMD-aware MDS light permutation for 24-width - 8-wide
+    fn mdsLightPermutation24SIMD8Impl(packed_states: []@Vector(8, u32)) void {
+        const WIDTH = 24;
+        if (packed_states.len != WIDTH) return;
+
+        for (0..6) |i| {
+            applyMat4SIMD8Impl(packed_states, i * 4);
+        }
+
+        var sums: [4]@Vector(8, u32) = undefined;
+        for (0..4) |k| {
+            sums[k] = @splat(@as(u32, 0));
+            var j: usize = 0;
+            while (j < WIDTH) : (j += 4) {
+                sums[k] = addSIMD8(sums[k], packed_states[j + k]);
+            }
+        }
+
+        for (0..WIDTH) |i| {
+            packed_states[i] = addSIMD8(packed_states[i], sums[i % 4]);
         }
     }
 
     /// SIMD-aware MDS light permutation for 24-width
     /// Applies MDS light to all lanes simultaneously
     fn mdsLightPermutation24SIMD(packed_states: []@Vector(SIMD_WIDTH, u32)) void {
-        const WIDTH = 24;
-        if (packed_states.len != WIDTH) return;
-
-        // First, apply M_4 to each consecutive four elements (6 blocks for 24-width)
-        for (0..6) |i| {
-            applyMat4SIMD(packed_states, i * 4);
-        }
-
-        // Apply outer circulant matrix
-        var sums: [4]@Vector(SIMD_WIDTH, u32) = undefined;
-        for (0..4) |k| {
-            sums[k] = @splat(@as(u32, 0));
-            var j: usize = 0;
-            while (j < WIDTH) : (j += 4) {
-                sums[k] = addSIMD(sums[k], packed_states[j + k]);
-            }
-        }
-
-        // Add appropriate sum to each element
-        for (0..WIDTH) |i| {
-            packed_states[i] = addSIMD(packed_states[i], sums[i % 4]);
+        if (SIMD_WIDTH == 8) {
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            mdsLightPermutation24SIMD8Impl(state8);
+        } else {
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            mdsLightPermutation24SIMD4Impl(state4);
         }
     }
 
-    /// SIMD-aware div2exp (division by power of 2)
-    /// Divides each element by 2^exponent in Montgomery form
-    fn div2expSIMD(x: @Vector(SIMD_WIDTH, u32), exponent: u32) @Vector(SIMD_WIDTH, u32) {
+    /// SIMD-aware div2exp (division by power of 2) - 4-wide
+    fn div2expSIMD4(x: @Vector(4, u32), exponent: u32) @Vector(4, u32) {
         const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001;
-
-        var result: @Vector(SIMD_WIDTH, u32) = undefined;
-        inline for (0..SIMD_WIDTH) |i| {
+        var result: @Vector(4, u32) = undefined;
+        inline for (0..4) |i| {
             if (exponent <= 32) {
-                // As the monty form of 2^{-exp} is 2^{32 - exp} mod P
                 const long_prod = @as(u64, x[i]) << @as(u6, @intCast(32 - exponent));
                 result[i] = montyReduceSIMD(long_prod);
             } else {
-                // For larger values, use repeated halving (simplified)
                 var val = x[i];
                 var exp = exponent;
                 while (exp > 0 and exp <= 32) : (exp -= 1) {
@@ -414,6 +631,38 @@ pub const Poseidon2SIMD = struct {
             }
         }
         return result;
+    }
+
+    /// SIMD-aware div2exp (division by power of 2) - 8-wide
+    fn div2expSIMD8(x: @Vector(8, u32), exponent: u32) @Vector(8, u32) {
+        const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001;
+        var result: @Vector(8, u32) = undefined;
+        inline for (0..8) |i| {
+            if (exponent <= 32) {
+                const long_prod = @as(u64, x[i]) << @as(u6, @intCast(32 - exponent));
+                result[i] = montyReduceSIMD(long_prod);
+            } else {
+                var val = x[i];
+                var exp = exponent;
+                while (exp > 0 and exp <= 32) : (exp -= 1) {
+                    const shr = val >> 1;
+                    const lo_bit = val & 1;
+                    const shr_corr = shr +% KOALABEAR_HALF_P_PLUS_1;
+                    val = if (lo_bit == 0) shr else shr_corr;
+                }
+                result[i] = val;
+            }
+        }
+        return result;
+    }
+
+    /// SIMD-aware div2exp (division by power of 2) - dispatches to 4-wide or 8-wide
+    fn div2expSIMD(x: @Vector(SIMD_WIDTH, u32), exponent: u32) @Vector(SIMD_WIDTH, u32) {
+        if (SIMD_WIDTH == 8) {
+            return div2expSIMD8(x, exponent);
+        } else {
+            return div2expSIMD4(x, exponent);
+        }
     }
 
     /// SIMD-aware Montgomery reduction
@@ -433,16 +682,30 @@ pub const Poseidon2SIMD = struct {
         return x_sub_u_hi +% corr;
     }
 
-    /// SIMD-aware double operation
-    fn doubleSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
-        return addSIMD(x, x);
+    /// SIMD-aware double operation - 4-wide
+    fn doubleSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
+        return addSIMD4(x, x);
     }
 
-    /// SIMD-aware halve operation
-    fn halveSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+    /// SIMD-aware double operation - 8-wide
+    fn doubleSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
+        return addSIMD8(x, x);
+    }
+
+    /// SIMD-aware double operation
+    fn doubleSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+        if (SIMD_WIDTH == 8) {
+            return doubleSIMD8(x);
+        } else {
+            return doubleSIMD4(x);
+        }
+    }
+
+    /// SIMD-aware halve operation - 4-wide
+    fn halveSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
         const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001;
-        var result: @Vector(SIMD_WIDTH, u32) = undefined;
-        inline for (0..SIMD_WIDTH) |i| {
+        var result: @Vector(4, u32) = undefined;
+        inline for (0..4) |i| {
             const shr = x[i] >> 1;
             const lo_bit = x[i] & 1;
             const shr_corr = shr +% KOALABEAR_HALF_P_PLUS_1;
@@ -451,84 +714,229 @@ pub const Poseidon2SIMD = struct {
         return result;
     }
 
+    /// SIMD-aware halve operation - 8-wide
+    fn halveSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
+        const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001;
+        var result: @Vector(8, u32) = undefined;
+        inline for (0..8) |i| {
+            const shr = x[i] >> 1;
+            const lo_bit = x[i] & 1;
+            const shr_corr = shr +% KOALABEAR_HALF_P_PLUS_1;
+            result[i] = if (lo_bit == 0) shr else shr_corr;
+        }
+        return result;
+    }
+
+    /// SIMD-aware halve operation
+    fn halveSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+        if (SIMD_WIDTH == 8) {
+            return halveSIMD8(x);
+        } else {
+            return halveSIMD4(x);
+        }
+    }
+
+    /// SIMD-aware internal layer for 16-width - 4-wide
+    fn applyInternalLayer16SIMD4Impl(
+        packed_states: []@Vector(4, u32),
+        rc: u32,
+    ) void {
+        const WIDTH = 16;
+        if (packed_states.len != WIDTH) return;
+
+        const rc_broadcast: @Vector(4, u32) = @splat(rc);
+        packed_states[0] = addSIMD4(packed_states[0], rc_broadcast);
+        packed_states[0] = sboxSIMD4(packed_states[0]);
+
+        var part_sum: @Vector(4, u32) = @splat(@as(u32, 0));
+        for (1..WIDTH) |i| {
+            part_sum = addSIMD4(part_sum, packed_states[i]);
+        }
+
+        const full_sum = addSIMD4(part_sum, packed_states[0]);
+        packed_states[0] = subSIMD4(part_sum, packed_states[0]);
+
+        packed_states[1] = addSIMD4(packed_states[1], full_sum);
+        packed_states[2] = addSIMD4(doubleSIMD4(packed_states[2]), full_sum);
+        packed_states[3] = addSIMD4(halveSIMD4(packed_states[3]), full_sum);
+        packed_states[4] = addSIMD4(addSIMD4(doubleSIMD4(packed_states[4]), packed_states[4]), full_sum);
+        packed_states[5] = addSIMD4(doubleSIMD4(doubleSIMD4(packed_states[5])), full_sum);
+        packed_states[6] = subSIMD4(full_sum, halveSIMD4(packed_states[6]));
+        packed_states[7] = subSIMD4(full_sum, addSIMD4(doubleSIMD4(packed_states[7]), packed_states[7]));
+        packed_states[8] = subSIMD4(full_sum, doubleSIMD4(doubleSIMD4(packed_states[8])));
+        packed_states[9] = addSIMD4(div2expSIMD4(packed_states[9], 8), full_sum);
+        packed_states[10] = addSIMD4(div2expSIMD4(packed_states[10], 3), full_sum);
+        packed_states[11] = addSIMD4(div2expSIMD4(packed_states[11], 24), full_sum);
+        packed_states[12] = div2expSIMD4(packed_states[12], 8);
+        packed_states[12] = subSIMD4(full_sum, packed_states[12]);
+        packed_states[13] = div2expSIMD4(packed_states[13], 3);
+        packed_states[13] = subSIMD4(full_sum, packed_states[13]);
+        packed_states[14] = div2expSIMD4(packed_states[14], 4);
+        packed_states[14] = subSIMD4(full_sum, packed_states[14]);
+        packed_states[15] = div2expSIMD4(packed_states[15], 24);
+        packed_states[15] = subSIMD4(full_sum, packed_states[15]);
+    }
+
+    /// SIMD-aware internal layer for 16-width - 8-wide
+    fn applyInternalLayer16SIMD8Impl(
+        packed_states: []@Vector(8, u32),
+        rc: u32,
+    ) void {
+        const WIDTH = 16;
+        if (packed_states.len != WIDTH) return;
+
+        const rc_broadcast: @Vector(8, u32) = @splat(rc);
+        packed_states[0] = addSIMD8(packed_states[0], rc_broadcast);
+        packed_states[0] = sboxSIMD8(packed_states[0]);
+
+        var part_sum: @Vector(8, u32) = @splat(@as(u32, 0));
+        for (1..WIDTH) |i| {
+            part_sum = addSIMD8(part_sum, packed_states[i]);
+        }
+
+        const full_sum = addSIMD8(part_sum, packed_states[0]);
+        packed_states[0] = subSIMD8(part_sum, packed_states[0]);
+
+        packed_states[1] = addSIMD8(packed_states[1], full_sum);
+        packed_states[2] = addSIMD8(doubleSIMD8(packed_states[2]), full_sum);
+        packed_states[3] = addSIMD8(halveSIMD8(packed_states[3]), full_sum);
+        packed_states[4] = addSIMD8(addSIMD8(doubleSIMD8(packed_states[4]), packed_states[4]), full_sum);
+        packed_states[5] = addSIMD8(doubleSIMD8(doubleSIMD8(packed_states[5])), full_sum);
+        packed_states[6] = subSIMD8(full_sum, halveSIMD8(packed_states[6]));
+        packed_states[7] = subSIMD8(full_sum, addSIMD8(doubleSIMD8(packed_states[7]), packed_states[7]));
+        packed_states[8] = subSIMD8(full_sum, doubleSIMD8(doubleSIMD8(packed_states[8])));
+        packed_states[9] = addSIMD8(div2expSIMD8(packed_states[9], 8), full_sum);
+        packed_states[10] = addSIMD8(div2expSIMD8(packed_states[10], 3), full_sum);
+        packed_states[11] = addSIMD8(div2expSIMD8(packed_states[11], 24), full_sum);
+        packed_states[12] = div2expSIMD8(packed_states[12], 8);
+        packed_states[12] = subSIMD8(full_sum, packed_states[12]);
+        packed_states[13] = div2expSIMD8(packed_states[13], 3);
+        packed_states[13] = subSIMD8(full_sum, packed_states[13]);
+        packed_states[14] = div2expSIMD8(packed_states[14], 4);
+        packed_states[14] = subSIMD8(full_sum, packed_states[14]);
+        packed_states[15] = div2expSIMD8(packed_states[15], 24);
+        packed_states[15] = subSIMD8(full_sum, packed_states[15]);
+    }
+
     /// SIMD-aware internal layer for 16-width
     /// Applies internal layer operations to all lanes simultaneously
     fn applyInternalLayer16SIMD(
         packed_states: []@Vector(SIMD_WIDTH, u32),
         rc: u32, // rc is already in Montgomery form (pre-computed at compile time)
     ) void {
-        const WIDTH = 16;
+        if (SIMD_WIDTH == 8) {
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            applyInternalLayer16SIMD8Impl(state8, rc);
+        } else {
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            applyInternalLayer16SIMD4Impl(state4, rc);
+        }
+    }
+
+    /// SIMD-aware internal layer for 24-width - 4-wide
+    fn applyInternalLayer24SIMD4Impl(
+        packed_states: []@Vector(4, u32),
+        rc: u32,
+    ) void {
+        const WIDTH = 24;
         if (packed_states.len != WIDTH) return;
 
-        const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(rc);
+        const rc_broadcast: @Vector(4, u32) = @splat(rc);
+        packed_states[0] = addSIMD4(packed_states[0], rc_broadcast);
+        packed_states[0] = sboxSIMD4(packed_states[0]);
 
-        // Add round constant to first element (rc is already in Montgomery form)
-        packed_states[0] = addSIMD(packed_states[0], rc_broadcast);
-
-        // Apply S-box to first element
-        packed_states[0] = sboxSIMD(packed_states[0]);
-
-        // Compute partial sum of state[1..]
-        var part_sum: @Vector(SIMD_WIDTH, u32) = @splat(@as(u32, 0));
+        var part_sum: @Vector(4, u32) = @splat(@as(u32, 0));
         for (1..WIDTH) |i| {
-            part_sum = addSIMD(part_sum, packed_states[i]);
+            part_sum = addSIMD4(part_sum, packed_states[i]);
         }
 
-        // Compute full sum
-        const full_sum = addSIMD(part_sum, packed_states[0]);
+        const full_sum = addSIMD4(part_sum, packed_states[0]);
+        packed_states[0] = subSIMD4(part_sum, packed_states[0]);
 
-        // Apply internal matrix: state[0] = part_sum - state[0]
-        packed_states[0] = subSIMD(part_sum, packed_states[0]);
+        packed_states[1] = addSIMD4(packed_states[1], full_sum);
+        packed_states[2] = addSIMD4(doubleSIMD4(packed_states[2]), full_sum);
+        packed_states[3] = addSIMD4(halveSIMD4(packed_states[3]), full_sum);
+        packed_states[4] = addSIMD4(addSIMD4(doubleSIMD4(packed_states[4]), packed_states[4]), full_sum);
+        packed_states[5] = addSIMD4(doubleSIMD4(doubleSIMD4(packed_states[5])), full_sum);
+        packed_states[6] = subSIMD4(full_sum, halveSIMD4(packed_states[6]));
+        packed_states[7] = subSIMD4(full_sum, addSIMD4(doubleSIMD4(packed_states[7]), packed_states[7]));
+        packed_states[8] = subSIMD4(full_sum, doubleSIMD4(doubleSIMD4(packed_states[8])));
+        packed_states[9] = addSIMD4(div2expSIMD4(packed_states[9], 8), full_sum);
+        packed_states[10] = addSIMD4(div2expSIMD4(packed_states[10], 2), full_sum);
+        packed_states[11] = addSIMD4(div2expSIMD4(packed_states[11], 3), full_sum);
+        packed_states[12] = addSIMD4(div2expSIMD4(packed_states[12], 4), full_sum);
+        packed_states[13] = addSIMD4(div2expSIMD4(packed_states[13], 5), full_sum);
+        packed_states[14] = addSIMD4(div2expSIMD4(packed_states[14], 6), full_sum);
+        packed_states[15] = addSIMD4(div2expSIMD4(packed_states[15], 24), full_sum);
+        packed_states[16] = div2expSIMD4(packed_states[16], 8);
+        packed_states[16] = subSIMD4(full_sum, packed_states[16]);
+        packed_states[17] = div2expSIMD4(packed_states[17], 3);
+        packed_states[17] = subSIMD4(full_sum, packed_states[17]);
+        packed_states[18] = div2expSIMD4(packed_states[18], 4);
+        packed_states[18] = subSIMD4(full_sum, packed_states[18]);
+        packed_states[19] = div2expSIMD4(packed_states[19], 5);
+        packed_states[19] = subSIMD4(full_sum, packed_states[19]);
+        packed_states[20] = div2expSIMD4(packed_states[20], 6);
+        packed_states[20] = subSIMD4(full_sum, packed_states[20]);
+        packed_states[21] = div2expSIMD4(packed_states[21], 7);
+        packed_states[21] = subSIMD4(full_sum, packed_states[21]);
+        packed_states[22] = div2expSIMD4(packed_states[22], 9);
+        packed_states[22] = subSIMD4(full_sum, packed_states[22]);
+        packed_states[23] = div2expSIMD4(packed_states[23], 24);
+        packed_states[23] = subSIMD4(full_sum, packed_states[23]);
+    }
 
-        // Apply V-based operations for i >= 1 (matching Plonky3 exactly)
-        // state[1] += sum
-        packed_states[1] = addSIMD(packed_states[1], full_sum);
+    /// SIMD-aware internal layer for 24-width - 8-wide
+    fn applyInternalLayer24SIMD8Impl(
+        packed_states: []@Vector(8, u32),
+        rc: u32,
+    ) void {
+        const WIDTH = 24;
+        if (packed_states.len != WIDTH) return;
 
-        // state[2] = state[2].double() + sum
-        packed_states[2] = addSIMD(doubleSIMD(packed_states[2]), full_sum);
+        const rc_broadcast: @Vector(8, u32) = @splat(rc);
+        packed_states[0] = addSIMD8(packed_states[0], rc_broadcast);
+        packed_states[0] = sboxSIMD8(packed_states[0]);
 
-        // state[3] = state[3].halve() + sum
-        packed_states[3] = addSIMD(halveSIMD(packed_states[3]), full_sum);
+        var part_sum: @Vector(8, u32) = @splat(@as(u32, 0));
+        for (1..WIDTH) |i| {
+            part_sum = addSIMD8(part_sum, packed_states[i]);
+        }
 
-        // state[4] = sum + state[4].double() + state[4]
-        packed_states[4] = addSIMD(addSIMD(doubleSIMD(packed_states[4]), packed_states[4]), full_sum);
+        const full_sum = addSIMD8(part_sum, packed_states[0]);
+        packed_states[0] = subSIMD8(part_sum, packed_states[0]);
 
-        // state[5] = sum + state[5].double().double()
-        packed_states[5] = addSIMD(doubleSIMD(doubleSIMD(packed_states[5])), full_sum);
-
-        // state[6] = sum - state[6].halve()
-        packed_states[6] = subSIMD(full_sum, halveSIMD(packed_states[6]));
-
-        // state[7] = sum - (state[7].double() + state[7])
-        packed_states[7] = subSIMD(full_sum, addSIMD(doubleSIMD(packed_states[7]), packed_states[7]));
-
-        // state[8] = sum - state[8].double().double()
-        packed_states[8] = subSIMD(full_sum, doubleSIMD(doubleSIMD(packed_states[8])));
-
-        // state[9] = state[9].div_2exp_u64(8) + sum
-        packed_states[9] = addSIMD(div2expSIMD(packed_states[9], 8), full_sum);
-
-        // state[10] = state[10].div_2exp_u64(3) + sum
-        packed_states[10] = addSIMD(div2expSIMD(packed_states[10], 3), full_sum);
-
-        // state[11] = state[11].div_2exp_u64(24) + sum
-        packed_states[11] = addSIMD(div2expSIMD(packed_states[11], 24), full_sum);
-
-        // state[12] = state[12].div_2exp_u64(8), then sum - state[12]
-        packed_states[12] = div2expSIMD(packed_states[12], 8);
-        packed_states[12] = subSIMD(full_sum, packed_states[12]);
-
-        // state[13] = state[13].div_2exp_u64(3), then sum - state[13]
-        packed_states[13] = div2expSIMD(packed_states[13], 3);
-        packed_states[13] = subSIMD(full_sum, packed_states[13]);
-
-        // state[14] = state[14].div_2exp_u64(4), then sum - state[14]
-        packed_states[14] = div2expSIMD(packed_states[14], 4);
-        packed_states[14] = subSIMD(full_sum, packed_states[14]);
-
-        // state[15] = state[15].div_2exp_u64(24), then sum - state[15]
-        packed_states[15] = div2expSIMD(packed_states[15], 24);
-        packed_states[15] = subSIMD(full_sum, packed_states[15]);
+        packed_states[1] = addSIMD8(packed_states[1], full_sum);
+        packed_states[2] = addSIMD8(doubleSIMD8(packed_states[2]), full_sum);
+        packed_states[3] = addSIMD8(halveSIMD8(packed_states[3]), full_sum);
+        packed_states[4] = addSIMD8(addSIMD8(doubleSIMD8(packed_states[4]), packed_states[4]), full_sum);
+        packed_states[5] = addSIMD8(doubleSIMD8(doubleSIMD8(packed_states[5])), full_sum);
+        packed_states[6] = subSIMD8(full_sum, halveSIMD8(packed_states[6]));
+        packed_states[7] = subSIMD8(full_sum, addSIMD8(doubleSIMD8(packed_states[7]), packed_states[7]));
+        packed_states[8] = subSIMD8(full_sum, doubleSIMD8(doubleSIMD8(packed_states[8])));
+        packed_states[9] = addSIMD8(div2expSIMD8(packed_states[9], 8), full_sum);
+        packed_states[10] = addSIMD8(div2expSIMD8(packed_states[10], 2), full_sum);
+        packed_states[11] = addSIMD8(div2expSIMD8(packed_states[11], 3), full_sum);
+        packed_states[12] = addSIMD8(div2expSIMD8(packed_states[12], 4), full_sum);
+        packed_states[13] = addSIMD8(div2expSIMD8(packed_states[13], 5), full_sum);
+        packed_states[14] = addSIMD8(div2expSIMD8(packed_states[14], 6), full_sum);
+        packed_states[15] = addSIMD8(div2expSIMD8(packed_states[15], 24), full_sum);
+        packed_states[16] = div2expSIMD8(packed_states[16], 8);
+        packed_states[16] = subSIMD8(full_sum, packed_states[16]);
+        packed_states[17] = div2expSIMD8(packed_states[17], 3);
+        packed_states[17] = subSIMD8(full_sum, packed_states[17]);
+        packed_states[18] = div2expSIMD8(packed_states[18], 4);
+        packed_states[18] = subSIMD8(full_sum, packed_states[18]);
+        packed_states[19] = div2expSIMD8(packed_states[19], 5);
+        packed_states[19] = subSIMD8(full_sum, packed_states[19]);
+        packed_states[20] = div2expSIMD8(packed_states[20], 6);
+        packed_states[20] = subSIMD8(full_sum, packed_states[20]);
+        packed_states[21] = div2expSIMD8(packed_states[21], 7);
+        packed_states[21] = subSIMD8(full_sum, packed_states[21]);
+        packed_states[22] = div2expSIMD8(packed_states[22], 9);
+        packed_states[22] = subSIMD8(full_sum, packed_states[22]);
+        packed_states[23] = div2expSIMD8(packed_states[23], 24);
+        packed_states[23] = subSIMD8(full_sum, packed_states[23]);
     }
 
     /// SIMD-aware internal layer for 24-width
@@ -537,114 +945,20 @@ pub const Poseidon2SIMD = struct {
         packed_states: []@Vector(SIMD_WIDTH, u32),
         rc: u32, // rc is already in Montgomery form (pre-computed at compile time)
     ) void {
-        const WIDTH = 24;
-        if (packed_states.len != WIDTH) return;
-
-        // Round constant is already in Montgomery form (pre-computed at compile time)
-        const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(rc);
-
-        // Add round constant to first element
-        packed_states[0] = addSIMD(packed_states[0], rc_broadcast);
-
-        // Apply S-box to first element
-        packed_states[0] = sboxSIMD(packed_states[0]);
-
-        // Compute partial sum of state[1..]
-        var part_sum: @Vector(SIMD_WIDTH, u32) = @splat(@as(u32, 0));
-        for (1..WIDTH) |i| {
-            part_sum = addSIMD(part_sum, packed_states[i]);
+        if (SIMD_WIDTH == 8) {
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            applyInternalLayer24SIMD8Impl(state8, rc);
+        } else {
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            applyInternalLayer24SIMD4Impl(state4, rc);
         }
-
-        // Compute full sum
-        const full_sum = addSIMD(part_sum, packed_states[0]);
-
-        // Apply internal matrix: state[0] = part_sum - state[0]
-        packed_states[0] = subSIMD(part_sum, packed_states[0]);
-
-        // Apply V-based operations for i >= 1 (matching Plonky3 exactly for 24-width)
-        // state[1] += sum
-        packed_states[1] = addSIMD(packed_states[1], full_sum);
-
-        // state[2] = state[2].double() + sum
-        packed_states[2] = addSIMD(doubleSIMD(packed_states[2]), full_sum);
-
-        // state[3] = state[3].halve() + sum
-        packed_states[3] = addSIMD(halveSIMD(packed_states[3]), full_sum);
-
-        // state[4] = sum + state[4].double() + state[4]
-        packed_states[4] = addSIMD(addSIMD(doubleSIMD(packed_states[4]), packed_states[4]), full_sum);
-
-        // state[5] = sum + state[5].double().double()
-        packed_states[5] = addSIMD(doubleSIMD(doubleSIMD(packed_states[5])), full_sum);
-
-        // state[6] = sum - state[6].halve()
-        packed_states[6] = subSIMD(full_sum, halveSIMD(packed_states[6]));
-
-        // state[7] = sum - (state[7].double() + state[7])
-        packed_states[7] = subSIMD(full_sum, addSIMD(doubleSIMD(packed_states[7]), packed_states[7]));
-
-        // state[8] = sum - state[8].double().double()
-        packed_states[8] = subSIMD(full_sum, doubleSIMD(doubleSIMD(packed_states[8])));
-
-        // state[9] = state[9].div_2exp_u64(8) + sum
-        packed_states[9] = addSIMD(div2expSIMD(packed_states[9], 8), full_sum);
-
-        // state[10] = state[10].div_2exp_u64(2) + sum
-        packed_states[10] = addSIMD(div2expSIMD(packed_states[10], 2), full_sum);
-
-        // state[11] = state[11].div_2exp_u64(3) + sum
-        packed_states[11] = addSIMD(div2expSIMD(packed_states[11], 3), full_sum);
-
-        // state[12] = state[12].div_2exp_u64(4) + sum
-        packed_states[12] = addSIMD(div2expSIMD(packed_states[12], 4), full_sum);
-
-        // state[13] = state[13].div_2exp_u64(5) + sum
-        packed_states[13] = addSIMD(div2expSIMD(packed_states[13], 5), full_sum);
-
-        // state[14] = state[14].div_2exp_u64(6) + sum
-        packed_states[14] = addSIMD(div2expSIMD(packed_states[14], 6), full_sum);
-
-        // state[15] = state[15].div_2exp_u64(24) + sum
-        packed_states[15] = addSIMD(div2expSIMD(packed_states[15], 24), full_sum);
-
-        // state[16] = state[16].div_2exp_u64(8), then sum - state[16]
-        packed_states[16] = div2expSIMD(packed_states[16], 8);
-        packed_states[16] = subSIMD(full_sum, packed_states[16]);
-
-        // state[17] = state[17].div_2exp_u64(3), then sum - state[17]
-        packed_states[17] = div2expSIMD(packed_states[17], 3);
-        packed_states[17] = subSIMD(full_sum, packed_states[17]);
-
-        // state[18] = state[18].div_2exp_u64(4), then sum - state[18]
-        packed_states[18] = div2expSIMD(packed_states[18], 4);
-        packed_states[18] = subSIMD(full_sum, packed_states[18]);
-
-        // state[19] = state[19].div_2exp_u64(5), then sum - state[19]
-        packed_states[19] = div2expSIMD(packed_states[19], 5);
-        packed_states[19] = subSIMD(full_sum, packed_states[19]);
-
-        // state[20] = state[20].div_2exp_u64(6), then sum - state[20]
-        packed_states[20] = div2expSIMD(packed_states[20], 6);
-        packed_states[20] = subSIMD(full_sum, packed_states[20]);
-
-        // state[21] = state[21].div_2exp_u64(7), then sum - state[21]
-        packed_states[21] = div2expSIMD(packed_states[21], 7);
-        packed_states[21] = subSIMD(full_sum, packed_states[21]);
-
-        // state[22] = state[22].div_2exp_u64(9), then sum - state[22]
-        packed_states[22] = div2expSIMD(packed_states[22], 9);
-        packed_states[22] = subSIMD(full_sum, packed_states[22]);
-
-        // state[23] = state[23].div_2exp_u64(24), then sum - state[23]
-        packed_states[23] = div2expSIMD(packed_states[23], 24);
-        packed_states[23] = subSIMD(full_sum, packed_states[23]);
     }
 
-    /// SIMD-aware subtraction (Montgomery form)
-    fn subSIMD(a: @Vector(SIMD_WIDTH, u32), b: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+    /// SIMD-aware subtraction (Montgomery form) - 4-wide
+    fn subSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
         const KOALABEAR_PRIME: u32 = 0x7f000001;
-        var result: @Vector(SIMD_WIDTH, u32) = undefined;
-        inline for (0..SIMD_WIDTH) |i| {
+        var result: @Vector(4, u32) = undefined;
+        inline for (0..4) |i| {
             const sub_result = @subWithOverflow(a[i], b[i]);
             const diff = sub_result[0];
             const over = sub_result[1];
@@ -654,9 +968,193 @@ pub const Poseidon2SIMD = struct {
         return result;
     }
 
+    /// SIMD-aware subtraction (Montgomery form) - 8-wide
+    fn subSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
+        const KOALABEAR_PRIME: u32 = 0x7f000001;
+        var result: @Vector(8, u32) = undefined;
+        inline for (0..8) |i| {
+            const sub_result = @subWithOverflow(a[i], b[i]);
+            const diff = sub_result[0];
+            const over = sub_result[1];
+            const corr = if (over != 0) KOALABEAR_PRIME else 0;
+            result[i] = diff +% corr;
+        }
+        return result;
+    }
+
+    /// SIMD-aware subtraction (Montgomery form)
+    fn subSIMD(a: @Vector(SIMD_WIDTH, u32), b: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+        if (SIMD_WIDTH == 8) {
+            return subSIMD8(a, b);
+        } else {
+            return subSIMD4(a, b);
+        }
+    }
+
+    /// True SIMD Poseidon2-16 permutation - 4-wide implementation
+    fn permute16SIMD4Impl(
+        self: *Poseidon2SIMD,
+        packed_states: []@Vector(4, u32),
+    ) void {
+        _ = self;
+        const WIDTH = 16;
+        if (packed_states.len != WIDTH) return;
+
+        const poseidon2_mod = @import("../poseidon2/poseidon2.zig");
+        const RC16_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL_MONTY;
+        const RC16_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL_MONTY;
+        const RC16_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_INTERNAL_MONTY;
+
+        // Initial MDS light transformation
+        mdsLightPermutation16SIMD4Impl(packed_states);
+
+        // Initial external rounds (4 rounds)
+        for (0..4) |round| {
+            for (0..WIDTH) |i| {
+                const rc_broadcast: @Vector(4, u32) = @splat(RC16_EXTERNAL_INITIAL[round][i]);
+                packed_states[i] = addSIMD4(packed_states[i], rc_broadcast);
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = sboxSIMD4(packed_states[i]);
+            }
+            for (0..4) |i| {
+                applyMat4SIMD4Impl(packed_states, i * 4);
+            }
+            var sums: [4]@Vector(4, u32) = undefined;
+            for (0..4) |k| {
+                sums[k] = @splat(@as(u32, 0));
+                var j: usize = 0;
+                while (j < WIDTH) : (j += 4) {
+                    sums[k] = addSIMD4(sums[k], packed_states[j + k]);
+                }
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = addSIMD4(packed_states[i], sums[i % 4]);
+            }
+        }
+
+        // Internal rounds (20 rounds)
+        for (0..20) |round| {
+            applyInternalLayer16SIMD4Impl(packed_states, RC16_INTERNAL[round]);
+        }
+
+        // Final external rounds (4 rounds)
+        for (0..4) |round| {
+            for (0..WIDTH) |i| {
+                const rc_broadcast: @Vector(4, u32) = @splat(RC16_EXTERNAL_FINAL[round][i]);
+                packed_states[i] = addSIMD4(packed_states[i], rc_broadcast);
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = sboxSIMD4(packed_states[i]);
+            }
+            for (0..4) |i| {
+                applyMat4SIMD4Impl(packed_states, i * 4);
+            }
+            var sums: [4]@Vector(4, u32) = undefined;
+            for (0..4) |k| {
+                sums[k] = @splat(@as(u32, 0));
+                var j: usize = 0;
+                while (j < WIDTH) : (j += 4) {
+                    sums[k] = addSIMD4(sums[k], packed_states[j + k]);
+                }
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = addSIMD4(packed_states[i], sums[i % 4]);
+            }
+        }
+    }
+
+    /// True SIMD Poseidon2-16 permutation - 8-wide implementation
+    fn permute16SIMD8Impl(
+        self: *Poseidon2SIMD,
+        packed_states: []@Vector(8, u32),
+    ) void {
+        _ = self;
+        const WIDTH = 16;
+        if (packed_states.len != WIDTH) return;
+
+        const poseidon2_mod = @import("../poseidon2/poseidon2.zig");
+        const RC16_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL_MONTY;
+        const RC16_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL_MONTY;
+        const RC16_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_INTERNAL_MONTY;
+
+        // Initial MDS light transformation
+        mdsLightPermutation16SIMD8Impl(packed_states);
+
+        // Initial external rounds (4 rounds)
+        for (0..4) |round| {
+            for (0..WIDTH) |i| {
+                const rc_broadcast: @Vector(8, u32) = @splat(RC16_EXTERNAL_INITIAL[round][i]);
+                packed_states[i] = addSIMD8(packed_states[i], rc_broadcast);
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = sboxSIMD8(packed_states[i]);
+            }
+            for (0..4) |i| {
+                applyMat4SIMD8Impl(packed_states, i * 4);
+            }
+            var sums: [4]@Vector(8, u32) = undefined;
+            for (0..4) |k| {
+                sums[k] = @splat(@as(u32, 0));
+                var j: usize = 0;
+                while (j < WIDTH) : (j += 4) {
+                    sums[k] = addSIMD8(sums[k], packed_states[j + k]);
+                }
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = addSIMD8(packed_states[i], sums[i % 4]);
+            }
+        }
+
+        // Internal rounds (20 rounds)
+        for (0..20) |round| {
+            applyInternalLayer16SIMD8Impl(packed_states, RC16_INTERNAL[round]);
+        }
+
+        // Final external rounds (4 rounds)
+        for (0..4) |round| {
+            for (0..WIDTH) |i| {
+                const rc_broadcast: @Vector(8, u32) = @splat(RC16_EXTERNAL_FINAL[round][i]);
+                packed_states[i] = addSIMD8(packed_states[i], rc_broadcast);
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = sboxSIMD8(packed_states[i]);
+            }
+            for (0..4) |i| {
+                applyMat4SIMD8Impl(packed_states, i * 4);
+            }
+            var sums: [4]@Vector(8, u32) = undefined;
+            for (0..4) |k| {
+                sums[k] = @splat(@as(u32, 0));
+                var j: usize = 0;
+                while (j < WIDTH) : (j += 4) {
+                    sums[k] = addSIMD8(sums[k], packed_states[j + k]);
+                }
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = addSIMD8(packed_states[i], sums[i % 4]);
+            }
+        }
+    }
+
     /// True SIMD Poseidon2-16 permutation
     /// Processes multiple states simultaneously using SIMD operations
+    /// Wrapper that dispatches to 4-wide or 8-wide based on SIMD_WIDTH
     fn permute16SIMD(
+        self: *Poseidon2SIMD,
+        packed_states: []@Vector(SIMD_WIDTH, u32),
+    ) void {
+        if (SIMD_WIDTH == 8) {
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            permute16SIMD8Impl(self, state8);
+        } else {
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            permute16SIMD4Impl(self, state4);
+        }
+    }
+
+    /// Legacy permute16SIMD implementation (kept for reference, now unused)
+    fn permute16SIMD_legacy(
         self: *Poseidon2SIMD,
         packed_states: []@Vector(SIMD_WIDTH, u32),
     ) void {
@@ -746,11 +1244,10 @@ pub const Poseidon2SIMD = struct {
         }
     }
 
-    /// True SIMD Poseidon2-24 permutation
-    /// Processes multiple states simultaneously using SIMD operations
-    fn permute24SIMD(
+    /// True SIMD Poseidon2-24 permutation - 4-wide implementation
+    fn permute24SIMD4Impl(
         self: *Poseidon2SIMD,
-        packed_states: []@Vector(SIMD_WIDTH, u32),
+        packed_states: []@Vector(4, u32),
     ) void {
         _ = self;
         const WIDTH = 24;
@@ -761,48 +1258,91 @@ pub const Poseidon2SIMD = struct {
         const RC24_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL_MONTY;
         const RC24_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_INTERNAL_MONTY;
 
-        // Initial MDS light transformation (before any rounds) - matching Rust
-        mdsLightPermutation24SIMD(packed_states);
+        mdsLightPermutation24SIMD4Impl(packed_states);
 
-        // Initial external rounds (4 rounds)
-        // Note: Rust applies MDS light INSIDE each round for 24-width
         for (0..4) |round| {
-            // Add round constants (already in Montgomery form - pre-computed at compile time)
             for (0..WIDTH) |i| {
-                const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
-                packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
+                const rc_broadcast: @Vector(4, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
+                packed_states[i] = addSIMD4(packed_states[i], rc_broadcast);
             }
-
-            // Apply S-box to all elements
             for (0..WIDTH) |i| {
-                packed_states[i] = sboxSIMD(packed_states[i]);
+                packed_states[i] = sboxSIMD4(packed_states[i]);
             }
-
-            // Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
-            mdsLightPermutation24SIMD(packed_states);
+            mdsLightPermutation24SIMD4Impl(packed_states);
         }
 
-        // Internal rounds (23 rounds)
         for (0..23) |round| {
-            applyInternalLayer24SIMD(packed_states, RC24_INTERNAL[round]);
+            applyInternalLayer24SIMD4Impl(packed_states, RC24_INTERNAL[round]);
         }
 
-        // Final external rounds (4 rounds)
-        // Note: Rust applies MDS light INSIDE each round for 24-width
         for (0..4) |round| {
-            // Add round constants (already in Montgomery form - pre-computed at compile time)
             for (0..WIDTH) |i| {
-                const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
-                packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
+                const rc_broadcast: @Vector(4, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
+                packed_states[i] = addSIMD4(packed_states[i], rc_broadcast);
             }
-
-            // Apply S-box to all elements
             for (0..WIDTH) |i| {
-                packed_states[i] = sboxSIMD(packed_states[i]);
+                packed_states[i] = sboxSIMD4(packed_states[i]);
             }
+            mdsLightPermutation24SIMD4Impl(packed_states);
+        }
+    }
 
-            // Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
-            mdsLightPermutation24SIMD(packed_states);
+    /// True SIMD Poseidon2-24 permutation - 8-wide implementation
+    fn permute24SIMD8Impl(
+        self: *Poseidon2SIMD,
+        packed_states: []@Vector(8, u32),
+    ) void {
+        _ = self;
+        const WIDTH = 24;
+        if (packed_states.len != WIDTH) return;
+
+        const poseidon2_mod = @import("../poseidon2/poseidon2.zig");
+        const RC24_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL_MONTY;
+        const RC24_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL_MONTY;
+        const RC24_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_INTERNAL_MONTY;
+
+        mdsLightPermutation24SIMD8Impl(packed_states);
+
+        for (0..4) |round| {
+            for (0..WIDTH) |i| {
+                const rc_broadcast: @Vector(8, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
+                packed_states[i] = addSIMD8(packed_states[i], rc_broadcast);
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = sboxSIMD8(packed_states[i]);
+            }
+            mdsLightPermutation24SIMD8Impl(packed_states);
+        }
+
+        for (0..23) |round| {
+            applyInternalLayer24SIMD8Impl(packed_states, RC24_INTERNAL[round]);
+        }
+
+        for (0..4) |round| {
+            for (0..WIDTH) |i| {
+                const rc_broadcast: @Vector(8, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
+                packed_states[i] = addSIMD8(packed_states[i], rc_broadcast);
+            }
+            for (0..WIDTH) |i| {
+                packed_states[i] = sboxSIMD8(packed_states[i]);
+            }
+            mdsLightPermutation24SIMD8Impl(packed_states);
+        }
+    }
+
+    /// True SIMD Poseidon2-24 permutation
+    /// Processes multiple states simultaneously using SIMD operations
+    /// Wrapper that dispatches to 4-wide or 8-wide based on SIMD_WIDTH
+    fn permute24SIMD(
+        self: *Poseidon2SIMD,
+        packed_states: []@Vector(SIMD_WIDTH, u32),
+    ) void {
+        if (SIMD_WIDTH == 8) {
+            const state8 = @as([*]@Vector(8, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            permute24SIMD8Impl(self, state8);
+        } else {
+            const state4 = @as([*]@Vector(4, u32), @ptrCast(packed_states.ptr))[0..packed_states.len];
+            permute24SIMD4Impl(self, state4);
         }
     }
 };
