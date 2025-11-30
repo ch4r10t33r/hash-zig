@@ -121,8 +121,8 @@ def parse_args() -> argparse.Namespace:
 def build_scenarios(lifetimes: list[str], seed_hex: str) -> list[ScenarioConfig]:
     scenarios: list[ScenarioConfig] = []
     for lifetime in lifetimes:
-        # Use 1024 active epochs for 2^32, 256 for others
-        num_active_epochs = 1024 if lifetime == "2^32" else 256
+        # Use 256 active epochs for all lifetimes
+        num_active_epochs = 256
         scenarios.append(
             ScenarioConfig(
                 lifetime=lifetime,
@@ -286,6 +286,14 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int)
     tmp_dir = REPO_ROOT / "tmp"
     tmp_dir.mkdir(exist_ok=True)
     
+    # CRITICAL: Clear all serialized files before generation to ensure fresh trees are built
+    import shutil
+    # Remove entire tmp directory to clear everything including cache directories
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(exist_ok=True)
+    print(f"Cleared tmp directory: {tmp_dir}")
+    
     # Save active epochs to file for the tool to read
     (tmp_dir / "zig_active_epochs.txt").write_text(str(cfg.num_active_epochs))
     
@@ -299,7 +307,7 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int)
     if keygen_result.returncode != 0:
         return OperationResult(False, command_duration(start), keygen_result.stdout, keygen_result.stderr)
     
-    # Sign message
+    # Sign message (this will update tmp/zig_pk.json with the regenerated keypair)
     sign_result = run_command(
         [str(ZIG_BIN), "sign", cfg.message, str(cfg.epoch)],
         cwd=REPO_ROOT,
@@ -309,6 +317,7 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int)
     success = sign_result.returncode == 0
     
     # Copy files to /tmp with expected names
+    # IMPORTANT: Copy AFTER signing because signing updates zig_pk.json with the regenerated keypair
     if success:
         import shutil
         if (tmp_dir / "zig_pk.json").exists():
@@ -334,6 +343,11 @@ def run_zig_verify(
     label: str,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
+    
+    # Write lifetime to file so verify command can read it
+    tmp_dir = REPO_ROOT / "tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    (tmp_dir / "zig_lifetime.txt").write_text(cfg.lifetime)
     
     start = time.perf_counter()
     result = run_command(

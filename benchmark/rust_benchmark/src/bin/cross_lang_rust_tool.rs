@@ -157,18 +157,18 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
             eprintln!("✅ Public key saved to tmp/rust_pk.json");
         }
         LifetimeTag::Pow32 => {
-            let mut rng = StdRng::from_seed(seed);
+    let mut rng = StdRng::from_seed(seed);
             let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime32Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
-            
-            // Serialize secret key to bincode JSON
-            let sk_json = serde_json::to_string_pretty(&secret_key)?;
-            fs::write("tmp/rust_sk.json", &sk_json)?;
-            eprintln!("✅ Secret key saved to tmp/rust_sk.json");
-            
-            // Serialize public key to bincode JSON
-            let pk_json = serde_json::to_string_pretty(&public_key)?;
-            fs::write("tmp/rust_pk.json", &pk_json)?;
-            eprintln!("✅ Public key saved to tmp/rust_pk.json");
+    
+    // Serialize secret key to bincode JSON
+    let sk_json = serde_json::to_string_pretty(&secret_key)?;
+    fs::write("tmp/rust_sk.json", &sk_json)?;
+    eprintln!("✅ Secret key saved to tmp/rust_sk.json");
+    
+    // Serialize public key to bincode JSON
+    let pk_json = serde_json::to_string_pretty(&public_key)?;
+    fs::write("tmp/rust_pk.json", &pk_json)?;
+    eprintln!("✅ Public key saved to tmp/rust_pk.json");
         }
     }
     
@@ -235,22 +235,22 @@ fn sign_command(message: &str, epoch: u32, lifetime: LifetimeTag) -> Result<(), 
             let sk_json = fs::read_to_string("tmp/rust_sk.json")?;
             type SkType = <SIGTopLevelTargetSumLifetime32Dim64Base8 as SignatureScheme>::SecretKey;
             let secret_key: SkType = serde_json::from_str(&sk_json)?;
-            
-            // Sign the message
+    
+    // Sign the message
             let signature = SIGTopLevelTargetSumLifetime32Dim64Base8::sign(&secret_key, epoch, &msg_bytes)?;
-            
-            // Serialize signature to bincode binary format (3116 bytes per leanSignature spec)
-            let mut sig_bytes = bincode::serialize(&signature)?;
-            
-            // Pad to exactly 3116 bytes as per leanSignature spec
-            const SIG_LEN: usize = 3116;
-            if sig_bytes.len() > SIG_LEN {
-                return Err(format!("Signature too large: {} bytes (max {})", sig_bytes.len(), SIG_LEN).into());
-            }
-            sig_bytes.resize(SIG_LEN, 0);
-            
-            fs::write("tmp/rust_sig.bin", &sig_bytes)?;
-            eprintln!("✅ Signature saved to tmp/rust_sig.bin ({} bytes)", sig_bytes.len());
+    
+    // Serialize signature to bincode binary format (3116 bytes per leanSignature spec)
+    let mut sig_bytes = bincode::serialize(&signature)?;
+    
+    // Pad to exactly 3116 bytes as per leanSignature spec
+    const SIG_LEN: usize = 3116;
+    if sig_bytes.len() > SIG_LEN {
+        return Err(format!("Signature too large: {} bytes (max {})", sig_bytes.len(), SIG_LEN).into());
+    }
+    sig_bytes.resize(SIG_LEN, 0);
+    
+    fs::write("tmp/rust_sig.bin", &sig_bytes)?;
+    eprintln!("✅ Signature saved to tmp/rust_sig.bin ({} bytes)", sig_bytes.len());
         }
     }
     
@@ -285,25 +285,25 @@ fn verify_command(sig_path: &str, pk_path: &str, message: &str, epoch: u32, life
     match lifetime {
         LifetimeTag::Pow8 => {
             let signature: <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::Signature = bincode::deserialize(sig_data)?;
-            
-            // Load public key from Zig
-            let pk_json = fs::read_to_string(pk_path)?;
-            let pk_value: serde_json::Value = serde_json::from_str(&pk_json)?;
-            
-            // Debug: Extract and print Poseidon inputs/outputs for comparison
-            eprintln!("RUST_VERIFY_DEBUG: About to call S::verify");
-            eprintln!("RUST_VERIFY_DEBUG: Public key parameter (first 3): {:?}", 
-                      pk_value.get("parameter").and_then(|p| p.as_array())
-                          .map(|arr| arr.iter().take(3).map(|v| v.as_u64()).collect::<Vec<_>>()));
-            
-            // Use fully qualified type to avoid ambiguity
+    
+    // Load public key from Zig
+    let pk_json = fs::read_to_string(pk_path)?;
+    let pk_value: serde_json::Value = serde_json::from_str(&pk_json)?;
+    
+    // Debug: Extract and print Poseidon inputs/outputs for comparison
+    eprintln!("RUST_VERIFY_DEBUG: About to call S::verify");
+    eprintln!("RUST_VERIFY_DEBUG: Public key parameter (first 3): {:?}", 
+              pk_value.get("parameter").and_then(|p| p.as_array())
+                  .map(|arr| arr.iter().take(3).map(|v| v.as_u64()).collect::<Vec<_>>()));
+    
+    // Use fully qualified type to avoid ambiguity
             type PkType = <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::PublicKey;
-            let public_key: PkType = serde_json::from_value(pk_value)?;
-            
-            eprintln!("RUST_VERIFY_DEBUG: Message: {:?}", &msg_bytes[..8]);
-            eprintln!("RUST_VERIFY_DEBUG: Epoch: {}", epoch);
-            
-            // Verify the signature
+    let public_key: PkType = serde_json::from_value(pk_value)?;
+    
+    eprintln!("RUST_VERIFY_DEBUG: Message: {:?}", &msg_bytes[..8]);
+    eprintln!("RUST_VERIFY_DEBUG: Epoch: {}", epoch);
+    
+    // Verify the signature
             let is_valid = SIGTopLevelTargetSumLifetime8Dim64Base8::verify(&public_key, epoch, &msg_bytes, &signature);
             
             if is_valid {
@@ -324,15 +324,15 @@ fn verify_command(sig_path: &str, pk_path: &str, message: &str, epoch: u32, life
             
             // Verify the signature
             let is_valid = SIGTopLevelTargetSumLifetime18Dim64Base8::verify(&public_key, epoch, &msg_bytes, &signature);
-            
-            if is_valid {
-                eprintln!("✅ Signature verification PASSED!");
-                Ok(())
-            } else {
-                eprintln!("❌ Signature verification FAILED!");
-                std::process::exit(1);
-            }
-        }
+    
+    if is_valid {
+        eprintln!("✅ Signature verification PASSED!");
+        Ok(())
+    } else {
+        eprintln!("❌ Signature verification FAILED!");
+        std::process::exit(1);
+    }
+}
         LifetimeTag::Pow32 => {
             let signature: <SIGTopLevelTargetSumLifetime32Dim64Base8 as SignatureScheme>::Signature = bincode::deserialize(sig_data)?;
             

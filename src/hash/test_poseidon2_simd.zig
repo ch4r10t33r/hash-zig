@@ -16,7 +16,7 @@ test "SIMD Poseidon2-16 matches scalar version" {
     // Initialize Poseidon2 instances
     var poseidon2_rust = try Poseidon2RustCompat.init(allocator);
     defer poseidon2_rust.deinit();
-    
+
     var simd_poseidon2 = poseidon2_simd.Poseidon2SIMD.init(allocator, &poseidon2_rust);
 
     // Test with multiple inputs
@@ -43,13 +43,14 @@ test "SIMD Poseidon2-16 matches scalar version" {
         }
 
         // Scalar version
-        const scalar_output = try poseidon2_rust.hashFieldElements16(allocator, input_fe);
+        // Test uses hash_len=8 (for lifetime 2^8)
+        const scalar_output = try poseidon2_rust.hashFieldElements16(allocator, input_fe, 8);
         defer allocator.free(scalar_output);
 
         // SIMD version - pack input for all lanes (same input in all lanes)
         var packed_input = try allocator.alloc(simd_utils.PackedF, test_case.input.len);
         defer allocator.free(packed_input);
-        
+
         for (0..test_case.input.len) |i| {
             const val = input_fe[i].value;
             packed_input[i] = simd_utils.PackedF{
@@ -71,4 +72,3 @@ test "SIMD Poseidon2-16 matches scalar version" {
         }
     }
 }
-

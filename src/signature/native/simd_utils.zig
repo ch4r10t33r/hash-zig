@@ -55,13 +55,13 @@ pub const PackedF = struct {
         // For proper field multiplication, we'd need to unpack, multiply, repack
         return .{ .values = self.values * other.values };
     }
-    
+
     // SIMD-aware field addition (element-wise, assumes values are in Montgomery form)
     pub fn addField(self: PackedF, other: PackedF) PackedF {
         // Element-wise addition in Montgomery form
         return .{ .values = self.values +% other.values };
     }
-    
+
     // Broadcast a single field element to all lanes
     pub fn broadcast(fe: FieldElement) PackedF {
         return .{ .values = @splat(fe.value) };
@@ -216,12 +216,12 @@ pub fn packEpochsVertically(
         for (packed_chains) |chain| allocator.free(chain);
         allocator.free(packed_chains);
     }
-    
+
     // For each chain, pack starting points across all epochs in batch
     for (0..num_chains) |chain_idx| {
         const packed_chain = try allocator.alloc(PackedF, hash_len);
         errdefer allocator.free(packed_chain);
-        
+
         // Generate starting points for this chain across all epochs
         var starts: [SIMD_WIDTH][8]u32 = undefined;
         for (0..SIMD_WIDTH) |lane| {
@@ -232,7 +232,7 @@ pub fn packEpochsVertically(
                 @memset(&starts[lane], 0);
             }
         }
-        
+
         // Transpose: [lane][element] -> [element][lane]
         // Each PackedF contains SIMD_WIDTH epochs for one hash element position
         for (0..hash_len) |h| {
@@ -242,10 +242,10 @@ pub fn packEpochsVertically(
             }
             packed_chain[h] = PackedF{ .values = values };
         }
-        
+
         packed_chains[chain_idx] = packed_chain;
     }
-    
+
     return packed_chains;
 }
 
@@ -263,11 +263,11 @@ pub fn unpackChainsFromSIMD(
         for (unpacked) |chain_domains| allocator.free(chain_domains);
         allocator.free(unpacked);
     }
-    
+
     for (0..simd_width) |lane| {
         const chain_domains = try allocator.alloc([8]FieldElement, num_chains);
         errdefer allocator.free(chain_domains);
-        
+
         for (0..num_chains) |chain_idx| {
             // Unpack this chain for this lane
             for (0..hash_len) |h| {
@@ -279,9 +279,9 @@ pub fn unpackChainsFromSIMD(
                 chain_domains[chain_idx][h] = FieldElement.zero();
             }
         }
-        
+
         unpacked[lane] = chain_domains;
     }
-    
+
     return unpacked;
 }

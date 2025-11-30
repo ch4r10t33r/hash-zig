@@ -132,6 +132,17 @@ fn readPublicKeyFromJson(path: []const u8, allocator: std.mem.Allocator) !hash_z
 ///   5. hashes: for each hash:
 ///      - array_len: u64 = 8 (little endian)
 ///      - 8 u32 values in canonical form
+/// 
+/// This function writes the signature in bincode format matching Rust's serialization.
+/// The output is then padded to exactly 3116 bytes to comply with leanSpec:
+/// https://github.com/leanEthereum/leanSpec/blob/main/src/lean_spec/subspecs/containers/signature.py
+/// 
+/// The leanSpec requires:
+///   1. Signature container: exactly 3116 bytes (Bytes3116)
+///   2. Signature data: bincode format at the beginning
+///   3. Can be sliced to scheme.config.SIGNATURE_LEN_BYTES if needed
+///   4. Format: XmssSignature.from_bytes (bincode deserialization)
+/// 
 /// Note: Rust's bincode serializes field elements in canonical form, not Montgomery
 pub fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.GeneralizedXMSSSignature, rand_len: usize, hash_len: usize) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
@@ -204,13 +215,17 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     const path_len = try readLength(reader);
     if (path_len == 0 or path_len > max_path_len) return BincodeError.InvalidPathLength;
     
-    // Read path nodes (each has: 8 u32 values in CANONICAL form, NO length prefix for fixed arrays)
-    // Rust's bincode serializes Vec<[T; N]> as: Vec length + elements directly (no per-array length)
-    // CRITICAL: FieldArray serializes using as_canonical_u32(), so path is in CANONICAL form
+    // Read path nodes (each has: HASH_LEN u32 values in CANONICAL form, NO length prefix for fixed arrays)
+    // Rust's bincode serializes Vec<FieldArray<N>> as: Vec length + elements directly (no per-array length)
+    // CRITICAL: Rust writes FieldArray<HASH_LEN> which serializes exactly HASH_LEN elements using as_canonical_u32()
+    // For lifetime 2^8/2^32: HASH_LEN=8, Rust writes 8 elements
+    // For lifetime 2^18: HASH_LEN=7, Rust writes 7 elements
+    // We must read exactly hash_len elements to match Rust's serialization
     var path_nodes = try allocator.alloc([8]FieldElement, path_len);
     errdefer allocator.free(path_nodes);
     for (0..path_len) |i| {
         // Read array elements in canonical form (fixed-size array, no length prefix)
+        // CRITICAL: Read exactly hash_len elements (matching Rust's FieldArray<HASH_LEN>)
         for (0..hash_len) |j| {
             const canonical = try reader.readInt(u32, .little);
             path_nodes[i][j] = FieldElement.fromCanonical(canonical);
@@ -225,10 +240,11 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     var path_ptr = try HashTreeOpening.init(allocator, path_nodes);
     allocator.free(path_nodes);
 
-    // Read rho (7 u32 values in MONTGOMERY form, no length prefix for fixed array)
+    // Read rho (rand_len u32 values in MONTGOMERY form, no length prefix for fixed array)
     // CRITICAL: Rust's bincode serializes field elements in MONTGOMERY form (internal representation)
     // Rust deserializes and converts to canonical internally, but the file contains Montgomery form
     // We need to read as Montgomery and the FieldElement will handle the conversion
+    // For lifetime 2^8/2^32: rand_len=7, for lifetime 2^18: rand_len=6
     if (rand_len > 7) {
         path_ptr.deinit();
         return BincodeError.InvalidRandLength;
@@ -236,7 +252,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     var rho = [_]FieldElement{FieldElement.zero()} ** 7;
     // Debug: print rho values as read from file (for Zig→Zig debugging)
     const stderr = std.io.getStdErr().writer();
-    stderr.print("ZIG_READ_DEBUG: Reading rho from file (Montgomery): ", .{}) catch {};
+    stderr.print("ZIG_READ_DEBUG: Reading rho from file (Montgomery, rand_len={}): ", .{rand_len}) catch {};
     for (0..rand_len) |i| {
         const montgomery = try reader.readInt(u32, .little);
         rho[i] = FieldElement.fromMontgomery(montgomery);
@@ -251,13 +267,17 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
         return BincodeError.InvalidHashesLength;
     }
     
-    // Read hashes (each has: 8 u32 values in CANONICAL form, NO length prefix for fixed arrays)
-    // Rust's bincode serializes Vec<[T; N]> as: Vec length + elements directly (no per-array length)
-    // CRITICAL: FieldArray serializes using as_canonical_u32(), so hashes are in CANONICAL form
+    // Read hashes (each has: HASH_LEN u32 values in CANONICAL form, NO length prefix for fixed arrays)
+    // Rust's bincode serializes Vec<FieldArray<N>> as: Vec length + elements directly (no per-array length)
+    // CRITICAL: Rust writes FieldArray<HASH_LEN> which serializes exactly HASH_LEN elements using as_canonical_u32()
+    // For lifetime 2^8/2^32: HASH_LEN=8, Rust writes 8 elements
+    // For lifetime 2^18: HASH_LEN=7, Rust writes 7 elements
+    // We must read exactly hash_len elements to match Rust's serialization
     var hashes_tmp = try allocator.alloc([8]FieldElement, hashes_len);
     errdefer allocator.free(hashes_tmp);
     for (0..hashes_len) |i| {
         // Read array elements in canonical form (fixed-size array, no length prefix)
+        // CRITICAL: Read exactly hash_len elements (matching Rust's FieldArray<HASH_LEN>)
         for (0..hash_len) |j| {
             const canonical = try reader.readInt(u32, .little);
             hashes_tmp[i][j] = FieldElement.fromCanonical(canonical);
@@ -274,7 +294,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
         stderr.print("0x{x:0>8} ", .{rho[i].toMontgomery()}) catch {};
     }
     stderr.print("\n", .{}) catch {};
-    
+
     const signature_ptr = hash_zig.GeneralizedXMSSSignature.initDeserialized(allocator, path_ptr, rho, hashes_tmp) catch |err| {
         allocator.free(hashes_tmp);
         path_ptr.deinit();

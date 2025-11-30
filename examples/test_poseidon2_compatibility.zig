@@ -61,7 +61,7 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = 50 },
     };
 
-    const output_16 = try poseidon2_rust.hashFieldElements16(allocator, &input_16);
+    const output_16 = try poseidon2_rust.hashFieldElements16(allocator, &input_16, 8);
     defer allocator.free(output_16);
 
     log.print("Input (5 elements): ", .{});
