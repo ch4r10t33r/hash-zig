@@ -36,7 +36,7 @@ pub const Poseidon2SIMD = struct {
     ///
     /// Input: packed_input is [element][lane] format (vertical packing)
     /// Output: packed_output is [element][lane] format
-    /// 
+    ///
     /// CRITICAL OPTIMIZATION: Writes to pre-allocated output buffer instead of allocating.
     /// This matches Rust's approach of returning fixed-size stack arrays, eliminating
     /// 114,688 allocations in chain walking (64 chains × 7 steps × 256 batches).
@@ -121,7 +121,7 @@ pub const Poseidon2SIMD = struct {
     ///
     /// Input: packed_input is [element][lane] format (vertical packing)
     /// Output: packed_output is [element][lane] format
-    /// 
+    ///
     /// CRITICAL OPTIMIZATION: Writes to pre-allocated output buffer instead of allocating.
     /// This matches Rust's approach of returning fixed-size stack arrays.
     pub fn compress24SIMD(
@@ -154,16 +154,16 @@ pub const Poseidon2SIMD = struct {
             for (0..WIDTH_24) |i| {
                 packed_input_states[i] = packed_states[i];
             }
-            
+
             permute24SIMD(self, &packed_states);
-            
+
             // Debug output removed for performance
 
             // Feed-forward
             for (0..WIDTH_24) |i| {
                 packed_states[i] = addSIMD(packed_states[i], packed_input_states[i]);
             }
-            
+
             // Debug: Check result after feed-forward
             if (input_len > 0 and out_len > 0) {
                 // Debug output removed for performance
@@ -264,8 +264,9 @@ pub const Poseidon2SIMD = struct {
 
     /// SIMD-aware S-box (x^3 operation)
     /// Applies x^3 to each element in the vector
-    fn sboxSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
-        // x^3 = x * x * x
+    /// OPTIMIZATION: Inline to help compiler optimize
+    inline fn sboxSIMD(x: @Vector(SIMD_WIDTH, u32)) @Vector(SIMD_WIDTH, u32) {
+        // x^3 = x * x * x (optimal: 2 multiplications)
         const x2 = mulSIMD(x, x);
         return mulSIMD(x2, x);
     }
@@ -286,7 +287,8 @@ pub const Poseidon2SIMD = struct {
 
     /// SIMD-aware MDS matrix application (4x4 block)
     /// Applies the MDS matrix to 4 elements across all SIMD lanes
-    fn applyMat4SIMD(
+    /// OPTIMIZATION: Inline to help compiler optimize
+    inline fn applyMat4SIMD(
         state: []@Vector(SIMD_WIDTH, u32),
         start_idx: usize,
     ) void {
@@ -453,14 +455,14 @@ pub const Poseidon2SIMD = struct {
     /// Applies internal layer operations to all lanes simultaneously
     fn applyInternalLayer16SIMD(
         packed_states: []@Vector(SIMD_WIDTH, u32),
-        rc: u32,
+        rc: u32, // rc is already in Montgomery form (pre-computed at compile time)
     ) void {
         const WIDTH = 16;
         if (packed_states.len != WIDTH) return;
 
         const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(rc);
 
-        // Add round constant to first element
+        // Add round constant to first element (rc is already in Montgomery form)
         packed_states[0] = addSIMD(packed_states[0], rc_broadcast);
 
         // Apply S-box to first element
@@ -533,17 +535,16 @@ pub const Poseidon2SIMD = struct {
     /// Applies internal layer operations to all lanes simultaneously
     fn applyInternalLayer24SIMD(
         packed_states: []@Vector(SIMD_WIDTH, u32),
-        rc: u32,
+        rc: u32, // rc is already in Montgomery form (pre-computed at compile time)
     ) void {
         const WIDTH = 24;
         if (packed_states.len != WIDTH) return;
 
-        // CRITICAL: Convert round constant to Montgomery form first, matching F.fromU32
-        const rc_canonical: @Vector(SIMD_WIDTH, u32) = @splat(rc);
-        const rc_monty = toMontySIMD(rc_canonical);
+        // Round constant is already in Montgomery form (pre-computed at compile time)
+        const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(rc);
 
         // Add round constant to first element
-        packed_states[0] = addSIMD(packed_states[0], rc_monty);
+        packed_states[0] = addSIMD(packed_states[0], rc_broadcast);
 
         // Apply S-box to first element
         packed_states[0] = sboxSIMD(packed_states[0]);
@@ -664,16 +665,16 @@ pub const Poseidon2SIMD = struct {
         if (packed_states.len != WIDTH) return;
 
         const poseidon2_mod = @import("../poseidon2/poseidon2.zig");
-        const RC16_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL;
-        const RC16_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL;
-        const RC16_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_INTERNAL;
+        const RC16_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL_MONTY;
+        const RC16_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL_MONTY;
+        const RC16_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC16_INTERNAL_MONTY;
 
         // Initial MDS light transformation (before any rounds)
         mdsLightPermutation16SIMD(packed_states);
 
         // Initial external rounds (4 rounds)
         for (0..4) |round| {
-            // Add round constants
+            // Add round constants (already in Montgomery form - pre-computed at compile time)
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC16_EXTERNAL_INITIAL[round][i]);
                 packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
@@ -712,7 +713,7 @@ pub const Poseidon2SIMD = struct {
 
         // Final external rounds (4 rounds)
         for (0..4) |round| {
-            // Add round constants
+            // Add round constants (already in Montgomery form - pre-computed at compile time)
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC16_EXTERNAL_FINAL[round][i]);
                 packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
@@ -756,9 +757,9 @@ pub const Poseidon2SIMD = struct {
         if (packed_states.len != WIDTH) return;
 
         const poseidon2_mod = @import("../poseidon2/poseidon2.zig");
-        const RC24_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL;
-        const RC24_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL;
-        const RC24_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_INTERNAL;
+        const RC24_EXTERNAL_INITIAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL_MONTY;
+        const RC24_EXTERNAL_FINAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL_MONTY;
+        const RC24_INTERNAL = poseidon2_mod.PLONKY3_KOALABEAR_RC24_INTERNAL_MONTY;
 
         // Initial MDS light transformation (before any rounds) - matching Rust
         mdsLightPermutation24SIMD(packed_states);
@@ -766,11 +767,10 @@ pub const Poseidon2SIMD = struct {
         // Initial external rounds (4 rounds)
         // Note: Rust applies MDS light INSIDE each round for 24-width
         for (0..4) |round| {
-            // Add round constants (CRITICAL: Convert to Montgomery form first, matching F.fromU32)
+            // Add round constants (already in Montgomery form - pre-computed at compile time)
             for (0..WIDTH) |i| {
-                const rc_canonical: @Vector(SIMD_WIDTH, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
-                const rc_monty = toMontySIMD(rc_canonical);
-                packed_states[i] = addSIMD(packed_states[i], rc_monty);
+                const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
+                packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
             }
 
             // Apply S-box to all elements
@@ -790,11 +790,10 @@ pub const Poseidon2SIMD = struct {
         // Final external rounds (4 rounds)
         // Note: Rust applies MDS light INSIDE each round for 24-width
         for (0..4) |round| {
-            // Add round constants (CRITICAL: Convert to Montgomery form first, matching F.fromU32)
+            // Add round constants (already in Montgomery form - pre-computed at compile time)
             for (0..WIDTH) |i| {
-                const rc_canonical: @Vector(SIMD_WIDTH, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
-                const rc_monty = toMontySIMD(rc_canonical);
-                packed_states[i] = addSIMD(packed_states[i], rc_monty);
+                const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
+                packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
             }
 
             // Apply S-box to all elements

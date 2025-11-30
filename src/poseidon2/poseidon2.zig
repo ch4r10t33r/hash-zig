@@ -5,13 +5,46 @@ const log = @import("../utils/log.zig");
 // Plonky3-exact Poseidon2 implementation for KoalaBear field
 // This implements the exact same MDS matrix and internal layer operations as Plonky3
 
+// Helper function to convert canonical u32 to Montgomery form (comptime)
+fn toMontyComptime(x: u32) u32 {
+    const KOALABEAR_PRIME: u64 = 0x7f000001;
+    const KOALABEAR_MONTY_BITS: u32 = 32;
+    const shifted = @as(u64, x) << KOALABEAR_MONTY_BITS;
+    return @as(u32, @intCast(shifted % KOALABEAR_PRIME));
+}
+
+// Helper to convert array of round constants to Montgomery form at comptime
+fn convertRC16ExternalInitial(comptime canonical: [4][16]u32) [4][16]u32 {
+    var result: [4][16]u32 = undefined;
+    inline for (0..4) |round| {
+        inline for (0..16) |i| {
+            result[round][i] = toMontyComptime(canonical[round][i]);
+        }
+    }
+    return result;
+}
+
 // External round constants from Plonky3 KoalaBear (8 rounds total: 4 initial + 4 final)
+// Keep canonical form for scalar version (which uses F.fromU32 to convert)
 pub const PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL: [4][16]u32 = .{
     .{ 2128964168, 288780357, 316938561, 2126233899, 426817493, 1714118888, 1045008582, 1738510837, 889721787, 8866516, 681576474, 419059826, 1596305521, 1583176088, 1584387047, 1529751136 },
     .{ 1863858111, 1072044075, 517831365, 1464274176, 1138001621, 428001039, 245709561, 1641420379, 1365482496, 770454828, 693167409, 757905735, 136670447, 436275702, 525466355, 1559174242 },
     .{ 1030087950, 869864998, 322787870, 267688717, 948964561, 740478015, 679816114, 113662466, 2066544572, 1744924186, 367094720, 1380455578, 1842483872, 416711434, 1342291586, 1692058446 },
     .{ 1493348999, 1113949088, 210900530, 1071655077, 610242121, 1136339326, 2020858841, 1019840479, 678147278, 1678413261, 1361743414, 61132629, 1209546658, 64412292, 1936878279, 1980661727 },
 };
+
+// Pre-computed Montgomery form for SIMD (avoids conversion overhead in hot loop)
+pub const PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL_MONTY: [4][16]u32 = convertRC16ExternalInitial(PLONKY3_KOALABEAR_RC16_EXTERNAL_INITIAL);
+
+fn convertRC16ExternalFinal(comptime canonical: [4][16]u32) [4][16]u32 {
+    var result: [4][16]u32 = undefined;
+    inline for (0..4) |round| {
+        inline for (0..16) |i| {
+            result[round][i] = toMontyComptime(canonical[round][i]);
+        }
+    }
+    return result;
+}
 
 pub const PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL: [4][16]u32 = .{
     .{ 1423960925, 2101391318, 1915532054, 275400051, 1168624859, 1141248885, 356546469, 1165250474, 1320543726, 932505663, 1204226364, 1452576828, 1774936729, 926808140, 1184948056, 1186493834 },
@@ -20,12 +53,36 @@ pub const PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL: [4][16]u32 = .{
     .{ 150757557, 884787840, 619710451, 1651711087, 505263814, 212076987, 1482432120, 1458130652, 382871348, 417404007, 2066495280, 1996518884, 902934924, 582892981, 1337064375, 1199354861 },
 };
 
+// Pre-computed Montgomery form for SIMD
+pub const PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL_MONTY: [4][16]u32 = convertRC16ExternalFinal(PLONKY3_KOALABEAR_RC16_EXTERNAL_FINAL);
+
+fn convertRC16Internal(comptime canonical: [20]u32) [20]u32 {
+    var result: [20]u32 = undefined;
+    inline for (0..20) |i| {
+        result[i] = toMontyComptime(canonical[i]);
+    }
+    return result;
+}
+
 // Internal round constants from Plonky3 KoalaBear (20 rounds)
 pub const PLONKY3_KOALABEAR_RC16_INTERNAL: [20]u32 = .{
     2102596038, 1533193853, 1436311464, 2012303432, 839997195,  1225781098, 2011967775, 575084315,
     1309329169, 786393545,  995788880,  1702925345, 1444525226, 908073383,  1811535085, 1531002367,
     1635653662, 1585100155, 867006515,  879151050,
 };
+
+// Pre-computed Montgomery form for SIMD
+pub const PLONKY3_KOALABEAR_RC16_INTERNAL_MONTY: [20]u32 = convertRC16Internal(PLONKY3_KOALABEAR_RC16_INTERNAL);
+
+fn convertRC24ExternalInitial(comptime canonical: [4][24]u32) [4][24]u32 {
+    var result: [4][24]u32 = undefined;
+    inline for (0..4) |round| {
+        inline for (0..24) |i| {
+            result[round][i] = toMontyComptime(canonical[round][i]);
+        }
+    }
+    return result;
+}
 
 // External round constants for 24-width from Plonky3
 pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL: [4][24]u32 = .{
@@ -35,6 +92,19 @@ pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL: [4][24]u32 = .{
     .{ 162985276, 1943496073, 1469312688, 703013107, 1979485151, 1278193166, 548674995, 2118718736, 749596440, 1476142294, 1293606474, 918523452, 890353212, 1691895663, 1932240646, 1180911992, 86098300, 1592168978, 895077289, 724819849, 1697986774, 1608418116, 1083269213, 691256798 },
 };
 
+// Pre-computed Montgomery form for SIMD
+pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL_MONTY: [4][24]u32 = convertRC24ExternalInitial(PLONKY3_KOALABEAR_RC24_EXTERNAL_INITIAL);
+
+fn convertRC24ExternalFinal(comptime canonical: [4][24]u32) [4][24]u32 {
+    var result: [4][24]u32 = undefined;
+    inline for (0..4) |round| {
+        inline for (0..24) |i| {
+            result[round][i] = toMontyComptime(canonical[round][i]);
+        }
+    }
+    return result;
+}
+
 pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL: [4][24]u32 = .{
     .{ 328586442, 1572520009, 1375479591, 322991001, 967600467, 1172861548, 1973891356, 1503625929, 1881993531, 40601941, 1155570620, 571547775, 1361622243, 1495024047, 1733254248, 964808915, 763558040, 1887228519, 994888261, 718330940, 213359415, 603124968, 1038411577, 2099454809 },
     .{ 949846777, 630926956, 1168723439, 222917504, 1527025973, 1009157017, 2029957881, 805977836, 1347511739, 540019059, 589807745, 440771316, 1530063406, 761076336, 87974206, 1412686751, 1230318064, 514464425, 1469011754, 1770970737, 1510972858, 965357206, 209398053, 778802532 },
@@ -42,12 +112,26 @@ pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL: [4][24]u32 = .{
     .{ 958294793, 1582225556, 1781487858, 1570246000, 1067748446, 526608119, 1666453343, 1786918381, 348203640, 1860035017, 1489902626, 1904576699, 860033965, 1954077639, 1685771567, 971513929, 1877873770, 137113380, 520695829, 806829080, 1408699405, 1613277964, 793223662, 648443918 },
 };
 
+// Pre-computed Montgomery form for SIMD
+pub const PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL_MONTY: [4][24]u32 = convertRC24ExternalFinal(PLONKY3_KOALABEAR_RC24_EXTERNAL_FINAL);
+
+fn convertRC24Internal(comptime canonical: [23]u32) [23]u32 {
+    var result: [23]u32 = undefined;
+    inline for (0..23) |i| {
+        result[i] = toMontyComptime(canonical[i]);
+    }
+    return result;
+}
+
 // Internal round constants for 24-width from Plonky3
 pub const PLONKY3_KOALABEAR_RC24_INTERNAL: [23]u32 = .{
     893435011,  403879071,  1363789863, 1662900517, 2043370,    2109755796, 931751726, 2091644718,
     606977583,  185050397,  946157136,  1350065230, 1625860064, 122045240,  880989921, 145137438,
     1059782436, 1477755661, 335465138,  1640704282, 1757946479, 1551204074, 681266718,
 };
+
+// Pre-computed Montgomery form for SIMD
+pub const PLONKY3_KOALABEAR_RC24_INTERNAL_MONTY: [23]u32 = convertRC24Internal(PLONKY3_KOALABEAR_RC24_INTERNAL);
 
 // KoalaBear field operations (using our Plonky3-compatible field)
 const F = plonky3_field.KoalaBearField;

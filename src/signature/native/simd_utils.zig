@@ -8,13 +8,23 @@
 const std = @import("std");
 const FieldElement = @import("../../core/field.zig").FieldElement;
 
+// SIMD width constant
+// Can be overridden via build option -Dsimd-width=8 for AVX-512 support
+pub const SIMD_WIDTH = blk: {
+    const build_opts = @import("build_options");
+    if (@hasDecl(build_opts, "simd_width")) {
+        break :blk build_opts.simd_width;
+    }
+    break :blk 4; // Default to 4-wide for compatibility
+};
+
 // Packed field element type for SIMD operations
 // For KoalaBear (u32), we can pack 4 or 8 elements depending on SIMD width
+// NOTE: Currently hardcoded to 4-wide. 8-wide support requires significant refactoring.
+// TODO: Make this generic over SIMD_WIDTH when Zig supports comptime @Vector sizes
 pub const PackedF = struct {
     // Using Zig's @Vector for SIMD operations
-    // For AVX2/AVX-512, we can pack 8 u32s
-    // For SSE4.1, we can pack 4 u32s
-    // We'll use 4 as a safe default that works on most architectures
+    // For now, hardcode to 4-wide. 8-wide requires separate type or comptime generics
     values: @Vector(4, u32),
 
     pub fn init(elements: [4]FieldElement) PackedF {
@@ -104,16 +114,25 @@ pub fn batchProcessFieldElementsSIMD(
 // SIMD-optimized field element array operations
 // Uses @Vector for parallel operations on multiple field elements
 pub fn simdAddFieldElements(a: []const FieldElement, b: []const FieldElement, result: []FieldElement) void {
-    const simd_width = 4;
+    const simd_width = SIMD_WIDTH;
     var i: usize = 0;
     while (i + simd_width <= a.len and i + simd_width <= b.len and i + simd_width <= result.len) : (i += simd_width) {
-        const a_vec: @Vector(4, u32) = .{ a[i].value, a[i + 1].value, a[i + 2].value, a[i + 3].value };
-        const b_vec: @Vector(4, u32) = .{ b[i].value, b[i + 1].value, b[i + 2].value, b[i + 3].value };
-        const sum_vec = a_vec + b_vec;
-        result[i] = FieldElement.fromMontgomery(sum_vec[0]);
-        result[i + 1] = FieldElement.fromMontgomery(sum_vec[1]);
-        result[i + 2] = FieldElement.fromMontgomery(sum_vec[2]);
-        result[i + 3] = FieldElement.fromMontgomery(sum_vec[3]);
+        // For now, handle 4-wide. 8-wide would require different logic
+        if (simd_width == 4) {
+            const a_vec: @Vector(4, u32) = .{ a[i].value, a[i + 1].value, a[i + 2].value, a[i + 3].value };
+            const b_vec: @Vector(4, u32) = .{ b[i].value, b[i + 1].value, b[i + 2].value, b[i + 3].value };
+            const sum_vec = a_vec + b_vec;
+            result[i] = FieldElement.fromMontgomery(sum_vec[0]);
+            result[i + 1] = FieldElement.fromMontgomery(sum_vec[1]);
+            result[i + 2] = FieldElement.fromMontgomery(sum_vec[2]);
+            result[i + 3] = FieldElement.fromMontgomery(sum_vec[3]);
+        } else {
+            // For 8-wide, would need different implementation
+            // TODO: Implement 8-wide SIMD operations
+            for (0..simd_width) |j| {
+                result[i + j] = FieldElement.fromMontgomery(a[i + j].value +% b[i + j].value);
+            }
+        }
     }
     // Handle remaining elements sequentially
     while (i < a.len and i < b.len and i < result.len) : (i += 1) {
@@ -197,8 +216,7 @@ pub fn batchProcessFieldElements(
     return results.toOwnedSlice();
 }
 
-// SIMD width constant
-pub const SIMD_WIDTH = 4; // Start with 4, can extend to 8 for AVX-512
+// Note: SIMD_WIDTH is now defined above with PackedF
 
 // Vertical packing: transpose from [epoch][chain] to [chain][epoch] for SIMD processing
 // This matches Rust's pack_array function from simd_utils.rs
