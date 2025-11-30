@@ -121,8 +121,8 @@ def parse_args() -> argparse.Namespace:
 def build_scenarios(lifetimes: list[str], seed_hex: str) -> list[ScenarioConfig]:
     scenarios: list[ScenarioConfig] = []
     for lifetime in lifetimes:
-        # Use 256 active epochs for all lifetimes
-        num_active_epochs = 256
+        # Use 1024 active epochs for 2^32 lifetime, 256 for others
+        num_active_epochs = 1024 if lifetime == "2^32" else 256
         scenarios.append(
             ScenarioConfig(
                 lifetime=lifetime,

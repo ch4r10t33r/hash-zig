@@ -58,8 +58,9 @@ test "SIMD Poseidon2-16 matches scalar version" {
             };
         }
 
-        const simd_output = try simd_poseidon2.compress16SIMD(packed_input, 8);
-        defer allocator.free(simd_output);
+        var simd_output_stack: [8]simd_utils.PackedF = undefined;
+        try simd_poseidon2.compress16SIMD(packed_input, 8, simd_output_stack[0..8]);
+        const simd_output = simd_output_stack[0..8];
 
         // Compare results - all lanes should match scalar output
         for (0..8) |i| {

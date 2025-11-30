@@ -36,11 +36,17 @@ pub const Poseidon2SIMD = struct {
     ///
     /// Input: packed_input is [element][lane] format (vertical packing)
     /// Output: packed_output is [element][lane] format
+    /// 
+    /// CRITICAL OPTIMIZATION: Writes to pre-allocated output buffer instead of allocating.
+    /// This matches Rust's approach of returning fixed-size stack arrays, eliminating
+    /// 114,688 allocations in chain walking (64 chains × 7 steps × 256 batches).
     pub fn compress16SIMD(
         self: *Poseidon2SIMD,
         packed_input: []const simd_utils.PackedF,
         out_len: usize,
-    ) ![]simd_utils.PackedF {
+        packed_output: []simd_utils.PackedF, // Pre-allocated output buffer (must be at least out_len)
+    ) !void {
+        std.debug.assert(packed_output.len >= out_len);
         const input_len = packed_input.len;
         const USE_TRUE_SIMD = true; // Enabled - SIMD permutation verified
 
@@ -65,19 +71,12 @@ pub const Poseidon2SIMD = struct {
                 packed_states[i] = addSIMD(packed_states[i], packed_input_states[i]);
             }
 
-            var packed_output = try self.allocator.alloc(simd_utils.PackedF, out_len);
-            errdefer self.allocator.free(packed_output);
-
+            // Write directly to output buffer (no allocation!)
             for (0..out_len) |i| {
                 packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
             }
-
-            return packed_output;
         } else {
             // Optimized batch processing path (maintains compatibility)
-            var packed_output = try self.allocator.alloc(simd_utils.PackedF, out_len);
-            errdefer self.allocator.free(packed_output);
-
             // Process all lanes in batch for better cache locality
             var lane_states: [SIMD_WIDTH][WIDTH_16]FieldElement = undefined;
             var lane_outputs: [SIMD_WIDTH][]FieldElement = undefined;
@@ -104,7 +103,7 @@ pub const Poseidon2SIMD = struct {
                 lane_outputs[lane] = try self.poseidon2.hashFieldElements16(self.allocator, lane_states[lane][0..WIDTH_16], out_len);
             }
 
-            // Pack outputs back into SIMD format
+            // Pack outputs back into SIMD format and write to output buffer
             for (0..out_len) |i| {
                 const values: @Vector(SIMD_WIDTH, u32) = .{
                     if (i < lane_outputs[0].len) lane_outputs[0][i].value else 0,
@@ -114,8 +113,6 @@ pub const Poseidon2SIMD = struct {
                 };
                 packed_output[i] = simd_utils.PackedF{ .values = values };
             }
-
-            return packed_output;
         }
     }
 
@@ -124,11 +121,16 @@ pub const Poseidon2SIMD = struct {
     ///
     /// Input: packed_input is [element][lane] format (vertical packing)
     /// Output: packed_output is [element][lane] format
+    /// 
+    /// CRITICAL OPTIMIZATION: Writes to pre-allocated output buffer instead of allocating.
+    /// This matches Rust's approach of returning fixed-size stack arrays.
     pub fn compress24SIMD(
         self: *Poseidon2SIMD,
         packed_input: []const simd_utils.PackedF,
         out_len: usize,
-    ) ![]simd_utils.PackedF {
+        packed_output: []simd_utils.PackedF, // Pre-allocated output buffer (must be at least out_len)
+    ) !void {
+        std.debug.assert(packed_output.len >= out_len);
         const WIDTH_24 = 24;
         const input_len = packed_input.len;
         const USE_TRUE_SIMD = true; // Enabled - SIMD permutation verified
@@ -153,27 +155,9 @@ pub const Poseidon2SIMD = struct {
                 packed_input_states[i] = packed_states[i];
             }
             
-            // Debug: Verify copy worked (check first element of first state)
-            if (input_len > 0) {
-                std.io.getStdErr().writer().print("ZIG_SIMD_COMPRESS_DEBUG: Before perm: state[0][0]=0x{x:0>8}, input_copy[0][0]=0x{x:0>8}\n", .{ packed_states[0][0], packed_input_states[0][0] }) catch {};
-            }
-            
             permute24SIMD(self, &packed_states);
             
-            // Debug: Verify permutation modified state but not input_copy
-            // Also compare with what scalar permutation would produce
-            if (input_len > 0) {
-                std.io.getStdErr().writer().print("ZIG_SIMD_COMPRESS_DEBUG: After perm: state[0][0]=0x{x:0>8}, input_copy[0][0]=0x{x:0>8}\n", .{ packed_states[0][0], packed_input_states[0][0] }) catch {};
-                
-                // Test scalar permutation on same input for comparison
-                const F = Poseidon2KoalaBear24.Field;
-                var scalar_state: [WIDTH_24]F = undefined;
-                for (0..WIDTH_24) |i| {
-                    scalar_state[i] = F{ .value = packed_input_states[i][0] }; // Use lane 0
-                }
-                Poseidon2KoalaBear24.permutation(scalar_state[0..]);
-                std.io.getStdErr().writer().print("ZIG_SIMD_COMPRESS_DEBUG: Scalar perm result[0]=0x{x:0>8}, SIMD perm result[0]=0x{x:0>8}, match={}\n", .{ scalar_state[0].value, packed_states[0][0], scalar_state[0].value == packed_states[0][0] }) catch {};
-            }
+            // Debug output removed for performance
 
             // Feed-forward
             for (0..WIDTH_24) |i| {
@@ -182,22 +166,15 @@ pub const Poseidon2SIMD = struct {
             
             // Debug: Check result after feed-forward
             if (input_len > 0 and out_len > 0) {
-                std.io.getStdErr().writer().print("ZIG_SIMD_COMPRESS_DEBUG: After feed-forward: state[0][0]=0x{x:0>8}\n", .{packed_states[0][0]}) catch {};
+                // Debug output removed for performance
             }
 
-            var packed_output = try self.allocator.alloc(simd_utils.PackedF, out_len);
-            errdefer self.allocator.free(packed_output);
-
+            // Write directly to output buffer (no allocation!)
             for (0..out_len) |i| {
                 packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
             }
-
-            return packed_output;
         } else {
             // Fallback to batch processing
-            var packed_output = try self.allocator.alloc(simd_utils.PackedF, out_len);
-            errdefer self.allocator.free(packed_output);
-
             var lane_states: [SIMD_WIDTH][WIDTH_24]FieldElement = undefined;
             var lane_outputs: [SIMD_WIDTH][]FieldElement = undefined;
             defer {
@@ -221,7 +198,7 @@ pub const Poseidon2SIMD = struct {
                 lane_outputs[lane] = try self.poseidon2.hashFieldElements(self.allocator, lane_states[lane][0..WIDTH_24]);
             }
 
-            // Pack outputs back into SIMD format
+            // Pack outputs back into SIMD format and write to output buffer
             for (0..out_len) |i| {
                 const values: @Vector(SIMD_WIDTH, u32) = .{
                     if (i < lane_outputs[0].len) lane_outputs[0][i].value else 0,
@@ -231,8 +208,6 @@ pub const Poseidon2SIMD = struct {
                 };
                 packed_output[i] = simd_utils.PackedF{ .values = values };
             }
-
-            return packed_output;
         }
     }
 

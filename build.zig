@@ -276,6 +276,25 @@ pub fn build(b: *std.Build) void {
     const keygen_benchmark_exe_step = b.step("benchmark-keygen", "Run key generation benchmarks");
     keygen_benchmark_exe_step.dependOn(&run_keygen_benchmark_exe.step);
 
+    // Hash function benchmark
+    const hash_function_benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark_hash_function.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hash_function_benchmark_module.addImport("hash-zig", hash_zig_module);
+    hash_function_benchmark_module.addOptions("build_options", build_options);
+
+    const hash_function_benchmark_exe = b.addExecutable(.{
+        .name = "benchmark-hash-function",
+        .root_module = hash_function_benchmark_module,
+    });
+    b.installArtifact(hash_function_benchmark_exe);
+
+    const run_hash_function_benchmark_exe = b.addRunArtifact(hash_function_benchmark_exe);
+    const hash_function_benchmark_exe_step = b.step("benchmark-hash-function", "Run hash function benchmarks");
+    hash_function_benchmark_exe_step.dependOn(&run_hash_function_benchmark_exe.step);
+
     // Parallel benchmark
     const parallel_benchmark_module = b.createModule(.{
         .root_source_file = b.path("scripts/benchmark_parallel.zig"),
