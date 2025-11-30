@@ -363,7 +363,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     // Compute chain domain for epoch 1, chain 0 with the secret key's PRF key and parameter
     const test_prf_domain = scheme.prfDomainElement(secret_key.prf_key, 1, 0);
     const test_chain_domain = scheme.computeHashChainDomain(test_prf_domain, 1, 0, secret_key.parameter) catch |err| {
-        std.debug.print("ZIG_SIGN_ERROR: Failed to compute chain domain: {}\n", .{err});
+        log.debugPrint("ZIG_SIGN_ERROR: Failed to compute chain domain: {}\n", .{err});
         return err;
     };
     
@@ -396,7 +396,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     var root_match = true;
     for (0..8) |i| {
         if (!top_tree_root[i].eql(keypair.public_key.root[i])) {
-            std.debug.print("ZIG_SIGN_ERROR: Top tree root[{}] mismatch: computed=0x{x:0>8} (canonical) / 0x{x:0>8} (monty) expected=0x{x:0>8} (canonical) / 0x{x:0>8} (monty)\n", .{ 
+            log.debugPrint("ZIG_SIGN_ERROR: Top tree root[{}] mismatch: computed=0x{x:0>8} (canonical) / 0x{x:0>8} (monty) expected=0x{x:0>8} (canonical) / 0x{x:0>8} (monty)\n", .{ 
                 i, 
                 top_tree_root[i].toCanonical(), 
                 top_tree_root[i].toMontgomery(),
@@ -407,11 +407,11 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         }
     }
     if (!root_match) {
-        std.debug.print("ZIG_SIGN_ERROR: Top tree root does not match public key root! This indicates the regenerated keypair is inconsistent.\n", .{});
-        std.debug.print("ZIG_SIGN_ERROR: This will cause verification to fail. The signature will be generated with trees that don't match the public key.\n", .{});
+        log.debugPrint("ZIG_SIGN_ERROR: Top tree root does not match public key root! This indicates the regenerated keypair is inconsistent.\n", .{});
+        log.debugPrint("ZIG_SIGN_ERROR: This will cause verification to fail. The signature will be generated with trees that don't match the public key.\n", .{});
         // Continue anyway to see the full error
     } else {
-        std.debug.print("ZIG_SIGN_DEBUG: Top tree root matches public key root ✓\n", .{});
+        log.debugPrint("ZIG_SIGN_DEBUG: Top tree root matches public key root ✓\n", .{});
     }
     
     // CRITICAL DEBUG: Verify the secret key has the correct parameter
@@ -447,12 +447,12 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     var param_match = true;
     for (0..5) |i| {
         if (!secret_key.getParameter()[i].eql(keypair.public_key.parameter[i])) {
-            std.debug.print("ZIG_SIGN_ERROR: Parameter mismatch at index {}!\n", .{i});
+            log.debugPrint("ZIG_SIGN_ERROR: Parameter mismatch at index {}!\n", .{i});
             param_match = false;
         }
     }
     if (!param_match) {
-        std.debug.print("ZIG_SIGN_ERROR: secret_key.parameter does not match public_key.parameter!\n", .{});
+        log.debugPrint("ZIG_SIGN_ERROR: secret_key.parameter does not match public_key.parameter!\n", .{});
         return error.ParameterMismatch;
     }
     std.debug.print("ZIG_SIGN_DEBUG: Parameters match ✓\n", .{});
@@ -465,12 +465,12 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     // Debug: Print stored hash from signature before verification
     const stored_hashes = signature.getHashes();
     if (stored_hashes.len > 0) {
-        std.debug.print("ZIG_SIGN_DEBUG: Stored hash[0] before verification (Montgomery): ", .{});
+        log.debugPrint("ZIG_SIGN_DEBUG: Stored hash[0] before verification (Montgomery): ", .{});
         for (0..@min(8, stored_hashes[0].len)) |h| {
             std.debug.print("0x{x:0>8} ", .{stored_hashes[0][h].value});
         }
         std.debug.print("\n", .{});
-        std.debug.print("ZIG_SIGN_DEBUG: Stored hash[0] before verification (Canonical): ", .{});
+        log.debugPrint("ZIG_SIGN_DEBUG: Stored hash[0] before verification (Canonical): ", .{});
         for (0..@min(8, stored_hashes[0].len)) |h| {
             std.debug.print("0x{x:0>8} ", .{stored_hashes[0][h].toCanonical()});
         }
@@ -478,9 +478,9 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     }
     const in_memory_valid = try scheme.verify(&keypair.public_key, epoch, msg_bytes, signature);
     if (in_memory_valid) {
-        std.debug.print("ZIG_SIGN_DEBUG: In-memory sign→verify PASSED for epoch {}\n", .{epoch});
+        log.debugPrint("ZIG_SIGN_DEBUG: In-memory sign→verify PASSED for epoch {}\n", .{epoch});
     } else {
-        std.debug.print("ZIG_SIGN_DEBUG: In-memory sign→verify FAILED for epoch {}\n", .{epoch});
+        log.debugPrint("ZIG_SIGN_DEBUG: In-memory sign→verify FAILED for epoch {}\n", .{epoch});
     }
 
     // IMPORTANT: Also update the public key JSON to match the regenerated keypair.
