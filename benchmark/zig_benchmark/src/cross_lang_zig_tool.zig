@@ -359,27 +359,6 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     
     const secret_key = keypair.secret_key;
     
-    // CRITICAL: Verify PRF key and parameter match what was used during tree building
-    // Compute chain domain for epoch 1, chain 0 with the secret key's PRF key and parameter
-    const test_prf_domain = scheme.prfDomainElement(secret_key.prf_key, 1, 0);
-    const test_chain_domain = scheme.computeHashChainDomain(test_prf_domain, 1, 0, secret_key.parameter) catch |err| {
-        log.debugPrint("ZIG_SIGN_ERROR: Failed to compute chain domain: {}\n", .{err});
-        return err;
-    };
-    
-    // Write comparison to stderr for debugging (always visible)
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("ZIG_SIGN_VERIFY: Chain domain for epoch 1, chain 0 using secret_key: chain_domain[0]=0x{x:0>8}\n", .{test_chain_domain[0].value}) catch {};
-    stderr.print("ZIG_SIGN_VERIFY: Expected from tree building: 0x0599043e, got: 0x{x:0>8}\n", .{test_chain_domain[0].value}) catch {};
-    stderr.print("ZIG_SIGN_VERIFY: secret_key.prf_key[0..8]=", .{}) catch {};
-    for (secret_key.prf_key[0..8]) |b| stderr.print("{x:0>2}", .{b}) catch {};
-    stderr.print(", parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ secret_key.parameter[0].value, secret_key.parameter[0].toCanonical() }) catch {};
-    if (test_chain_domain[0].value != 0x0599043e) {
-        stderr.print("ZIG_SIGN_ERROR: Chain domain mismatch! PRF key or parameter may be different.\n", .{}) catch {};
-    } else {
-        stderr.print("ZIG_SIGN_VERIFY: Chain domain matches! ✓\n", .{}) catch {};
-    }
-    
     // CRITICAL DEBUG: Verify the secret key's top tree root matches the public key root
     const top_tree_root = secret_key.top_tree.root();
     log.print("ZIG_SIGN_DEBUG: Top tree root from secret key (canonical): ", .{});

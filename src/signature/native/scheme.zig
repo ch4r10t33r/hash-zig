@@ -488,19 +488,26 @@ pub const GeneralizedXMSSSignature = struct {
 // Public key structure matching Rust exactly
 pub const GeneralizedXMSSPublicKey = struct {
     // Private fields - not directly accessible from outside
-    root: [8]FieldElement, // Root should be an array of 8 field elements to match Rust
+    root: [8]FieldElement, // Root stored as 8 field elements (last element may be padding)
     parameter: [5]FieldElement, // TH::Parameter
+    /// Active hash length in field elements (7 for lifetime 2^18, 8 for 2^8/2^32)
+    hash_len_fe: usize,
 
-    pub fn init(root: [8]FieldElement, parameter: [5]FieldElement) GeneralizedXMSSPublicKey {
+    pub fn init(root: [8]FieldElement, parameter: [5]FieldElement, hash_len_fe: usize) GeneralizedXMSSPublicKey {
         return GeneralizedXMSSPublicKey{
             .root = root,
             .parameter = parameter,
+            .hash_len_fe = hash_len_fe,
         };
     }
 
     // Controlled access methods for private fields
     pub fn getRoot(self: *const GeneralizedXMSSPublicKey) [8]FieldElement {
         return self.root;
+    }
+
+    pub fn getHashLenFe(self: *const GeneralizedXMSSPublicKey) usize {
+        return self.hash_len_fe;
     }
 
     pub fn getParameter(self: *const GeneralizedXMSSPublicKey) [5]FieldElement {
@@ -4004,7 +4011,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         top_layers = top_layers[0..0];
 
         // Create public and secret keys (store root in Montgomery form to match Rust)
-        const public_key = GeneralizedXMSSPublicKey.init(root_monty, parameter);
+        const public_key = GeneralizedXMSSPublicKey.init(root_monty, parameter, self.lifetime_params.hash_len_fe);
 
         // Debug: log the public key root and parameter (only when debug logs enabled)
         if (build_opts.enable_debug_logs) {
@@ -4448,33 +4455,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 // Don't return error - the chain domains match during keygen and signing, so this is expected
             }
 
-            // Compute leaf domain for epoch 1 to verify the first path node
-            var epoch1_chain_domains = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
-            defer self.allocator.free(epoch1_chain_domains);
-            for (0..self.lifetime_params.dimension) |chain_idx| {
-                const epoch1_domain_elements = self.prfDomainElement(secret_key.prf_key, 1, @as(u64, @intCast(chain_idx)));
-                if (chain_idx == 0) {
-                    log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1, chain 0: prf_key[0..8]=", .{});
-                    for (secret_key.prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
-                    log.print(", epoch=1, chain_index=0, domain_elements[0]=0x{x:0>8}, parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ epoch1_domain_elements[0], secret_key.parameter[0].value, secret_key.parameter[0].toCanonical() });
-                    // Also compute first step manually to compare
-                    var current: [8]FieldElement = undefined;
-                    for (0..8) |i| {
-                        current[i] = FieldElement{ .value = epoch1_domain_elements[i] };
-                    }
-                    const first_step = try self.applyPoseidonChainTweakHash(current, 1, 0, 1, secret_key.parameter);
-                    log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1 chain 0 after first step (pos=1): first_step[0]=0x{x:0>8}\n", .{first_step[0].value});
-                }
-                epoch1_chain_domains[chain_idx] = try self.computeHashChainDomain(epoch1_domain_elements, 1, @as(u8, @intCast(chain_idx)), secret_key.parameter);
-                if (chain_idx == 0) {
-                    log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1, chain 0 result: chain_domains[0][0]=0x{x:0>8}\n", .{epoch1_chain_domains[0][0].value});
-                }
-            }
-            log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1 chain_domains[0][0]=0x{x:0>8}\n", .{epoch1_chain_domains[0][0].value});
-            var epoch1_leaf_buffer: [8]FieldElement = undefined;
-            try self.reduceChainDomainsToLeafDomain(epoch1_chain_domains, secret_key.parameter, 1, &epoch1_leaf_buffer);
-            const epoch1_leaf = epoch1_leaf_buffer[0..self.lifetime_params.hash_len_fe];
-            log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1 leaf domain[0]=0x{x:0>8}\n", .{epoch1_leaf[0].value});
+            // (Previously: detailed ZIG_SIGN_PATH_VERIFY logs for epoch 1 chain/path debugging)
+            // These logs have been removed as they were only useful during manual investigations.
         }
 
         // CRITICAL VERIFICATION: For epoch 0, compute leaf domain from scratch and compare with what verification would produce
