@@ -129,41 +129,6 @@ const keypair = try scheme.keyGen(0, 256);
 
 > **Performance Note**: For lifetimes `2^18` and `2^32`, always compile with `zig build -Doptimize=ReleaseFast` for acceptable performance. Debug builds will be extremely slow for larger lifetimes.
 
-## Cross-Language Compatibility Tests
-
-**Cross-language compatibility status:**
-
-- ✅ **Lifetime `2^8`**: All combinations pass (Rust sign → Rust/Zig verify, Zig sign → Zig/Rust verify).
-- ⚠️ **Lifetime `2^18`**: Rust sign → Rust/Zig verify and Zig sign → Zig verify pass; **Zig sign → Rust verify currently fails** due to a mismatch in the 2^18 instantiation on the Rust side.
-- ✅ **Lifetime `2^32`**: All combinations pass (Rust sign → Rust/Zig verify, Zig sign → Zig/Rust verify).
-
-### Quick Start
-
-```bash
-# Run all supported lifetimes
-python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32"
-
-# Run specific lifetime
-python3 benchmark/benchmark.py --lifetime 2^32
-
-# Enable verbose debug logs
-BENCHMARK_DEBUG_LOGS=1 python3 benchmark/benchmark.py --lifetime 2^8
-```
-
-The script automatically builds both implementations and runs comprehensive cross-language tests (Rust ↔ Zig signing and verification).
-
-### Test Results
-
-**Lifetime 2^32 (256 active epochs):**
-- ✅ Rust keygen: ~2.0s, Zig keygen: ~1.3s
-- ✅ All verification tests pass
-
-**Lifetime 2^32 (1024 active epochs):**
-- ✅ Zig keygen: ~51.7s (46.5% faster with parallel optimization)
-- ✅ All verification tests pass
-
-See [Performance Benchmarks](#performance-benchmarks) for detailed timing information.
-
 ## Performance Benchmarks
 
 Performance measurements are taken using ReleaseFast builds with debug logging disabled. For lifetime `2^32` with 1024 active epochs, key generation time is measured using the dedicated profiler:
