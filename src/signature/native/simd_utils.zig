@@ -8,7 +8,7 @@
 const std = @import("std");
 const FieldElement = @import("../../core/field.zig").FieldElement;
 
-// SIMD width constant
+// SIMD width constant (compile-time, for type system)
 // Can be overridden via build option -Dsimd-width=8 for AVX-512 support
 pub const SIMD_WIDTH = blk: {
     const build_opts = @import("build_options");
@@ -17,6 +17,21 @@ pub const SIMD_WIDTH = blk: {
     }
     break :blk 4; // Default to 4-wide for compatibility
 };
+
+// Runtime-effective SIMD width (detected from CPU features)
+// This is the actual width we can use at runtime, which may differ from SIMD_WIDTH
+// if the CPU doesn't support the compile-time width
+const simd_cpu = @import("simd_cpu.zig");
+
+/// Gets the effective SIMD width to use at runtime
+/// This detects CPU features and returns the optimal width (4 or 8)
+/// Falls back to compile-time SIMD_WIDTH if detection fails
+pub fn getEffectiveSIMDWidth() u32 {
+    const detected = simd_cpu.getSIMDWidth();
+    // Use the minimum of detected width and compile-time width
+    // This ensures we don't try to use 8-wide if we compiled for 4-wide
+    return @min(detected, SIMD_WIDTH);
+}
 
 // 4-wide PackedF for SSE4.1 (128-bit vectors)
 pub const PackedF4 = struct {

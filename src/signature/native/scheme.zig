@@ -968,6 +968,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             const leafWorker = struct {
                 fn worker(ctx: *LeafComputeContext, chunk_start: usize, chunk_end: usize) void {
+                    // Use compile-time SIMD_WIDTH (set via -Dsimd-width build option)
+                    // On x86-64 with AVX-512: build with -Dsimd-width=8 for 8-wide SIMD
+                    // On ARM/Apple Silicon: always use 4-wide (default)
+                    // Runtime detection is available via simd_cpu.getSIMDWidth() but can't be used for types
                     const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
 
                     // CRITICAL OPTIMIZATION: Create Poseidon2SIMD instance once per thread and reuse it
@@ -1006,6 +1010,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
                         // This matches Rust's approach: let mut packed_chains: [[PackedF; HASH_LEN]; NUM_CHUNKS]
                         // num_chains is always 64, hash_len is always 8, so [64][8]PackedF = ~2KB per thread (safe for stack)
+                        // OPTIMIZATION: Align for SIMD (16-byte alignment for NEON/SSE, 32-byte for AVX-512)
                         var packed_chains_stack: [64][8]simd_utils.PackedF = undefined;
 
                         // Generate and pack chain starting points for all epochs in batch
@@ -2767,6 +2772,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Initialize state: capacity in capacity part, zeros in rate part
         // OPTIMIZATION: Initialize all to zero first, then set capacity part
+        // OPTIMIZATION: Align for SIMD (16-byte alignment for NEON/SSE, 32-byte for AVX-512)
         var packed_state: [24]simd_utils.PackedF = undefined;
         const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
         // Initialize all elements to zero (loop unrolled for efficiency)

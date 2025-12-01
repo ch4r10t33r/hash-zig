@@ -79,7 +79,8 @@ pub const Poseidon2SIMD = struct {
             }
             } else {
                 // 4-wide SIMD path
-                var packed_states: [WIDTH_16]@Vector(4, u32) = undefined;
+                // OPTIMIZATION: Align for NEON/SSE (16-byte alignment)
+                var packed_states: [WIDTH_16]@Vector(4, u32) align(16) = undefined;
 
                 // Initialize state from packed input
                 for (0..WIDTH_16) |i| {
@@ -199,7 +200,8 @@ pub const Poseidon2SIMD = struct {
             // True SIMD path - select 4-wide or 8-wide based on SIMD_WIDTH
             if (SIMD_WIDTH == 8) {
                 // 8-wide SIMD path
-                var packed_states: [WIDTH_24]@Vector(8, u32) = undefined;
+                // OPTIMIZATION: Align for AVX-512 (32-byte alignment)
+                var packed_states: [WIDTH_24]@Vector(8, u32) align(32) = undefined;
 
             for (0..WIDTH_24) |i| {
                 if (i < input_len) {
@@ -225,7 +227,8 @@ pub const Poseidon2SIMD = struct {
             }
             } else {
                 // 4-wide SIMD path
-                var packed_states: [WIDTH_24]@Vector(4, u32) = undefined;
+                // OPTIMIZATION: Align for NEON/SSE (16-byte alignment)
+                var packed_states: [WIDTH_24]@Vector(4, u32) align(16) = undefined;
 
                 for (0..WIDTH_24) |i| {
                     if (i < input_len) {
@@ -289,25 +292,25 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware field addition (Montgomery form) - 4-wide
-    fn addSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
+    /// OPTIMIZED: Uses SIMD comparison instead of inline for loop
+    inline fn addSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
         const KOALABEAR_PRIME: u32 = 0x7f000001;
+        const prime_vec: @Vector(4, u32) = @splat(KOALABEAR_PRIME);
         const sum = a +% b;
-        var result: @Vector(4, u32) = undefined;
-        inline for (0..4) |i| {
-            result[i] = if (sum[i] >= KOALABEAR_PRIME) sum[i] -% KOALABEAR_PRIME else sum[i];
-        }
-        return result;
+        // SIMD comparison: if sum >= PRIME then sum -= PRIME
+        const ge_mask = sum >= prime_vec;
+        return @select(u32, ge_mask, sum -% prime_vec, sum);
     }
 
     /// SIMD-aware field addition (Montgomery form) - 8-wide
-    fn addSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
+    /// OPTIMIZED: Uses SIMD comparison instead of inline for loop
+    inline fn addSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
         const KOALABEAR_PRIME: u32 = 0x7f000001;
+        const prime_vec: @Vector(8, u32) = @splat(KOALABEAR_PRIME);
         const sum = a +% b;
-        var result: @Vector(8, u32) = undefined;
-        inline for (0..8) |i| {
-            result[i] = if (sum[i] >= KOALABEAR_PRIME) sum[i] -% KOALABEAR_PRIME else sum[i];
-        }
-        return result;
+        // SIMD comparison: if sum >= PRIME then sum -= PRIME
+        const ge_mask = sum >= prime_vec;
+        return @select(u32, ge_mask, sum -% prime_vec, sum);
     }
 
     /// SIMD-aware field addition (Montgomery form) - dispatches to 4-wide or 8-wide
@@ -343,7 +346,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware field multiplication (Montgomery form) - 4-wide
-    fn mulSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn mulSIMD4(a: @Vector(4, u32), b: @Vector(4, u32)) @Vector(4, u32) {
         const KOALABEAR_PRIME: u64 = 0x7f000001;
         const KOALABEAR_MONTY_MU: u32 = 0x81000001;
         const KOALABEAR_MONTY_MASK: u32 = 0xffffffff;
@@ -366,7 +370,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware field multiplication (Montgomery form) - 8-wide
-    fn mulSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn mulSIMD8(a: @Vector(8, u32), b: @Vector(8, u32)) @Vector(8, u32) {
         const KOALABEAR_PRIME: u64 = 0x7f000001;
         const KOALABEAR_MONTY_MU: u32 = 0x81000001;
         const KOALABEAR_MONTY_MASK: u32 = 0xffffffff;
@@ -510,7 +515,7 @@ pub const Poseidon2SIMD = struct {
 
     /// SIMD-aware MDS matrix application (4x4 block)
     /// Applies the MDS matrix to 4 elements across all SIMD lanes
-    /// OPTIMIZATION: Inline to help compiler optimize
+    /// OPTIMIZATION: Inline for hot path
     inline fn applyMat4SIMD(
         state: []@Vector(SIMD_WIDTH, u32),
         start_idx: usize,
@@ -527,7 +532,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware MDS light permutation for 16-width - 4-wide
-    fn mdsLightPermutation16SIMD4Impl(packed_states: []@Vector(4, u32)) void {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn mdsLightPermutation16SIMD4Impl(packed_states: []@Vector(4, u32)) void {
         const WIDTH = 16;
         if (packed_states.len != WIDTH) return;
 
@@ -550,7 +556,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware MDS light permutation for 16-width - 8-wide
-    fn mdsLightPermutation16SIMD8Impl(packed_states: []@Vector(8, u32)) void {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn mdsLightPermutation16SIMD8Impl(packed_states: []@Vector(8, u32)) void {
         const WIDTH = 16;
         if (packed_states.len != WIDTH) return;
 
@@ -585,7 +592,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware MDS light permutation for 24-width - 4-wide
-    fn mdsLightPermutation24SIMD4Impl(packed_states: []@Vector(4, u32)) void {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn mdsLightPermutation24SIMD4Impl(packed_states: []@Vector(4, u32)) void {
         const WIDTH = 24;
         if (packed_states.len != WIDTH) return;
 
@@ -608,7 +616,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware MDS light permutation for 24-width - 8-wide
-    fn mdsLightPermutation24SIMD8Impl(packed_states: []@Vector(8, u32)) void {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn mdsLightPermutation24SIMD8Impl(packed_states: []@Vector(8, u32)) void {
         const WIDTH = 24;
         if (packed_states.len != WIDTH) return;
 
@@ -769,7 +778,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware internal layer for 16-width - 4-wide
-    fn applyInternalLayer16SIMD4Impl(
+    /// OPTIMIZATION: Inline for hot path
+    inline fn applyInternalLayer16SIMD4Impl(
         packed_states: []@Vector(4, u32),
         rc: u32,
     ) void {
@@ -810,7 +820,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware internal layer for 16-width - 8-wide
-    fn applyInternalLayer16SIMD8Impl(
+    /// OPTIMIZATION: Inline for hot path
+    inline fn applyInternalLayer16SIMD8Impl(
         packed_states: []@Vector(8, u32),
         rc: u32,
     ) void {
@@ -1097,7 +1108,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// True SIMD Poseidon2-16 permutation - 8-wide implementation
-    fn permute16SIMD8Impl(
+    /// OPTIMIZATION: Inline for hot path
+    inline fn permute16SIMD8Impl(
         self: *Poseidon2SIMD,
         packed_states: []@Vector(8, u32),
     ) void {
@@ -1216,24 +1228,56 @@ pub const Poseidon2SIMD = struct {
             }
 
             // Apply MDS matrix in 4x4 blocks
-            for (0..4) |i| {
-                applyMat4SIMD(packed_states, i * 4);
-            }
+            // OPTIMIZATION: Unroll small loop (4 iterations)
+            applyMat4SIMD(packed_states, 0);
+            applyMat4SIMD(packed_states, 4);
+            applyMat4SIMD(packed_states, 8);
+            applyMat4SIMD(packed_states, 12);
 
             // Apply outer circulant matrix
+            // OPTIMIZATION: Unroll sum computation (4 iterations)
             var sums: [4]@Vector(SIMD_WIDTH, u32) = undefined;
-            for (0..4) |k| {
-                sums[k] = @splat(@as(u32, 0));
-                var j: usize = 0;
-                while (j < WIDTH) : (j += 4) {
-                    sums[k] = addSIMD(sums[k], packed_states[j + k]);
-                }
-            }
+            sums[0] = @splat(@as(u32, 0));
+            sums[1] = @splat(@as(u32, 0));
+            sums[2] = @splat(@as(u32, 0));
+            sums[3] = @splat(@as(u32, 0));
+            
+            // OPTIMIZATION: Unroll the while loop (WIDTH=16, so 4 iterations)
+            sums[0] = addSIMD(sums[0], packed_states[0]);
+            sums[1] = addSIMD(sums[1], packed_states[1]);
+            sums[2] = addSIMD(sums[2], packed_states[2]);
+            sums[3] = addSIMD(sums[3], packed_states[3]);
+            sums[0] = addSIMD(sums[0], packed_states[4]);
+            sums[1] = addSIMD(sums[1], packed_states[5]);
+            sums[2] = addSIMD(sums[2], packed_states[6]);
+            sums[3] = addSIMD(sums[3], packed_states[7]);
+            sums[0] = addSIMD(sums[0], packed_states[8]);
+            sums[1] = addSIMD(sums[1], packed_states[9]);
+            sums[2] = addSIMD(sums[2], packed_states[10]);
+            sums[3] = addSIMD(sums[3], packed_states[11]);
+            sums[0] = addSIMD(sums[0], packed_states[12]);
+            sums[1] = addSIMD(sums[1], packed_states[13]);
+            sums[2] = addSIMD(sums[2], packed_states[14]);
+            sums[3] = addSIMD(sums[3], packed_states[15]);
 
             // Add appropriate sum to each element
-            for (0..WIDTH) |i| {
-                packed_states[i] = addSIMD(packed_states[i], sums[i % 4]);
-            }
+            // OPTIMIZATION: Unroll loop (WIDTH=16)
+            packed_states[0] = addSIMD(packed_states[0], sums[0]);
+            packed_states[1] = addSIMD(packed_states[1], sums[1]);
+            packed_states[2] = addSIMD(packed_states[2], sums[2]);
+            packed_states[3] = addSIMD(packed_states[3], sums[3]);
+            packed_states[4] = addSIMD(packed_states[4], sums[0]);
+            packed_states[5] = addSIMD(packed_states[5], sums[1]);
+            packed_states[6] = addSIMD(packed_states[6], sums[2]);
+            packed_states[7] = addSIMD(packed_states[7], sums[3]);
+            packed_states[8] = addSIMD(packed_states[8], sums[0]);
+            packed_states[9] = addSIMD(packed_states[9], sums[1]);
+            packed_states[10] = addSIMD(packed_states[10], sums[2]);
+            packed_states[11] = addSIMD(packed_states[11], sums[3]);
+            packed_states[12] = addSIMD(packed_states[12], sums[0]);
+            packed_states[13] = addSIMD(packed_states[13], sums[1]);
+            packed_states[14] = addSIMD(packed_states[14], sums[2]);
+            packed_states[15] = addSIMD(packed_states[15], sums[3]);
         }
 
         // Internal rounds (20 rounds)
@@ -1242,42 +1286,78 @@ pub const Poseidon2SIMD = struct {
         }
 
         // Final external rounds (4 rounds)
-        for (0..4) |round| {
+        // OPTIMIZATION: Unroll round loop for better performance
+        inline for (0..4) |round| {
             // Add round constants (already in Montgomery form - pre-computed at compile time)
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(SIMD_WIDTH, u32) = @splat(RC16_EXTERNAL_FINAL[round][i]);
                 packed_states[i] = addSIMD(packed_states[i], rc_broadcast);
             }
 
             // Apply S-box to all elements
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 packed_states[i] = sboxSIMD(packed_states[i]);
             }
 
             // Apply MDS matrix in 4x4 blocks
-            for (0..4) |i| {
-                applyMat4SIMD(packed_states, i * 4);
-            }
+            // OPTIMIZATION: Unroll small loop (4 iterations)
+            applyMat4SIMD(packed_states, 0);
+            applyMat4SIMD(packed_states, 4);
+            applyMat4SIMD(packed_states, 8);
+            applyMat4SIMD(packed_states, 12);
 
             // Apply outer circulant matrix
+            // OPTIMIZATION: Unroll sum computation (4 iterations)
             var sums: [4]@Vector(SIMD_WIDTH, u32) = undefined;
-            for (0..4) |k| {
-                sums[k] = @splat(@as(u32, 0));
-                var j: usize = 0;
-                while (j < WIDTH) : (j += 4) {
-                    sums[k] = addSIMD(sums[k], packed_states[j + k]);
-                }
-            }
+            sums[0] = @splat(@as(u32, 0));
+            sums[1] = @splat(@as(u32, 0));
+            sums[2] = @splat(@as(u32, 0));
+            sums[3] = @splat(@as(u32, 0));
+            
+            // OPTIMIZATION: Unroll the while loop (WIDTH=16, so 4 iterations)
+            sums[0] = addSIMD(sums[0], packed_states[0]);
+            sums[1] = addSIMD(sums[1], packed_states[1]);
+            sums[2] = addSIMD(sums[2], packed_states[2]);
+            sums[3] = addSIMD(sums[3], packed_states[3]);
+            sums[0] = addSIMD(sums[0], packed_states[4]);
+            sums[1] = addSIMD(sums[1], packed_states[5]);
+            sums[2] = addSIMD(sums[2], packed_states[6]);
+            sums[3] = addSIMD(sums[3], packed_states[7]);
+            sums[0] = addSIMD(sums[0], packed_states[8]);
+            sums[1] = addSIMD(sums[1], packed_states[9]);
+            sums[2] = addSIMD(sums[2], packed_states[10]);
+            sums[3] = addSIMD(sums[3], packed_states[11]);
+            sums[0] = addSIMD(sums[0], packed_states[12]);
+            sums[1] = addSIMD(sums[1], packed_states[13]);
+            sums[2] = addSIMD(sums[2], packed_states[14]);
+            sums[3] = addSIMD(sums[3], packed_states[15]);
 
             // Add appropriate sum to each element
-            for (0..WIDTH) |i| {
-                packed_states[i] = addSIMD(packed_states[i], sums[i % 4]);
-            }
+            // OPTIMIZATION: Unroll loop (WIDTH=16)
+            packed_states[0] = addSIMD(packed_states[0], sums[0]);
+            packed_states[1] = addSIMD(packed_states[1], sums[1]);
+            packed_states[2] = addSIMD(packed_states[2], sums[2]);
+            packed_states[3] = addSIMD(packed_states[3], sums[3]);
+            packed_states[4] = addSIMD(packed_states[4], sums[0]);
+            packed_states[5] = addSIMD(packed_states[5], sums[1]);
+            packed_states[6] = addSIMD(packed_states[6], sums[2]);
+            packed_states[7] = addSIMD(packed_states[7], sums[3]);
+            packed_states[8] = addSIMD(packed_states[8], sums[0]);
+            packed_states[9] = addSIMD(packed_states[9], sums[1]);
+            packed_states[10] = addSIMD(packed_states[10], sums[2]);
+            packed_states[11] = addSIMD(packed_states[11], sums[3]);
+            packed_states[12] = addSIMD(packed_states[12], sums[0]);
+            packed_states[13] = addSIMD(packed_states[13], sums[1]);
+            packed_states[14] = addSIMD(packed_states[14], sums[2]);
+            packed_states[15] = addSIMD(packed_states[15], sums[3]);
         }
     }
 
     /// True SIMD Poseidon2-24 permutation - 4-wide implementation
-    fn permute24SIMD4Impl(
+    /// OPTIMIZATION: Inline for hot path
+    inline fn permute24SIMD4Impl(
         self: *Poseidon2SIMD,
         packed_states: []@Vector(4, u32),
     ) void {
@@ -1292,26 +1372,33 @@ pub const Poseidon2SIMD = struct {
 
         mdsLightPermutation24SIMD4Impl(packed_states);
 
-        for (0..4) |round| {
+        // OPTIMIZATION: Unroll round loop for better performance
+        inline for (0..4) |round| {
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(4, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
                 packed_states[i] = addSIMD4(packed_states[i], rc_broadcast);
             }
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 packed_states[i] = sboxSIMD4(packed_states[i]);
             }
             mdsLightPermutation24SIMD4Impl(packed_states);
         }
 
+        // Internal rounds (23 rounds) - keep as loop since it's large
         for (0..23) |round| {
             applyInternalLayer24SIMD4Impl(packed_states, RC24_INTERNAL[round]);
         }
 
-        for (0..4) |round| {
+        // OPTIMIZATION: Unroll round loop for better performance
+        inline for (0..4) |round| {
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(4, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
                 packed_states[i] = addSIMD4(packed_states[i], rc_broadcast);
             }
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 packed_states[i] = sboxSIMD4(packed_states[i]);
             }
@@ -1320,7 +1407,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// True SIMD Poseidon2-24 permutation - 8-wide implementation
-    fn permute24SIMD8Impl(
+    /// OPTIMIZATION: Inline for hot path
+    inline fn permute24SIMD8Impl(
         self: *Poseidon2SIMD,
         packed_states: []@Vector(8, u32),
     ) void {
@@ -1335,26 +1423,33 @@ pub const Poseidon2SIMD = struct {
 
         mdsLightPermutation24SIMD8Impl(packed_states);
 
-        for (0..4) |round| {
+        // OPTIMIZATION: Unroll round loop for better performance
+        inline for (0..4) |round| {
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(8, u32) = @splat(RC24_EXTERNAL_INITIAL[round][i]);
                 packed_states[i] = addSIMD8(packed_states[i], rc_broadcast);
             }
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 packed_states[i] = sboxSIMD8(packed_states[i]);
             }
             mdsLightPermutation24SIMD8Impl(packed_states);
         }
 
+        // Internal rounds (23 rounds) - keep as loop since it's large
         for (0..23) |round| {
             applyInternalLayer24SIMD8Impl(packed_states, RC24_INTERNAL[round]);
         }
 
-        for (0..4) |round| {
+        // OPTIMIZATION: Unroll round loop for better performance
+        inline for (0..4) |round| {
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 const rc_broadcast: @Vector(8, u32) = @splat(RC24_EXTERNAL_FINAL[round][i]);
                 packed_states[i] = addSIMD8(packed_states[i], rc_broadcast);
             }
+            // Compiler will unroll this loop in ReleaseFast mode
             for (0..WIDTH) |i| {
                 packed_states[i] = sboxSIMD8(packed_states[i]);
             }
