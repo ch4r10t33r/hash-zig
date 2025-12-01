@@ -24,6 +24,7 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 - [Performance Benchmarks](#performance-benchmarks)
 - [Optimisations Implemented](#optimisations-implemented)
 - [Development](#development)
+- [Cross-Platform Tests](#cross-platform-tests)
 - [Debug Logging](#debug-logging)
 - [License](#license)
 
@@ -287,6 +288,37 @@ cd benchmark/rust_benchmark
 cargo build --release --bin cross_lang_rust_tool
 cargo build --release --features debug-tools --bin remote_hashsig_tool  # optional
 ```
+
+## Cross-Platform Tests
+
+The repository includes GitHub Actions workflows that automatically exercise **cross-platform builds** and **cross-language compatibility** on every push and pull request:
+
+- **Linux (ubuntu-latest)**:
+  - Lint: `zig build lint`
+  - Build and install library: `zig build install -Doptimize=ReleaseFast -Ddebug-logs=false`
+  - Cross-language suite: `python3 benchmark/benchmark.py --lifetime "2^8,2^32"` (Rust ↔ Zig for both lifetimes)
+- **macOS + Windows** (CI job `cross-platform-build`):
+  - Runs `zig build` on `macos-latest` and `windows-latest` to verify that the library and examples compile on all three major platforms.
+
+### Running equivalent tests locally
+
+- **Linux / macOS**:
+
+```bash
+cd hash-zig
+zig build lint
+zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
+python3 benchmark/benchmark.py --lifetime "2^8,2^32"
+```
+
+- **Windows (PowerShell)**:
+
+```powershell
+cd hash-zig
+zig build
+```
+
+When contributing changes that may affect portability, ensure that `zig build` succeeds on your target platforms, and use the benchmark script on at least one platform to confirm cross-language compatibility.
 
 ### Repository Layout
 

@@ -117,22 +117,14 @@ jobs:
           echo "Dependencies fetched successfully"
       
       - name: Build library
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         run: zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
 
       - name: Run cross-language compatibility suite
-        if: steps.check_changes.outputs.has_zig_changes == 'true'
         shell: bash
         run: |
           set -euo pipefail
           echo "Running benchmark/benchmark.py for cross-language compatibility (lifetimes 2^8 and 2^32)"
           python3 benchmark/benchmark.py --lifetime "2^8,2^32"
-
-      - name: Skip tests (no Zig changes)
-        if: steps.check_changes.outputs.has_zig_changes == 'false'
-        run: |
-          echo "⏭️  Skipping tests - no Zig files changed"
-          echo "Only documentation, workflows, or other non-code files were modified"
   
   cross-platform-build:
     name: Cross-Platform Build (${{ matrix.os }})
