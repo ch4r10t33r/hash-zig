@@ -53,10 +53,20 @@ pub fn main() !void {
 
     if (args.len < 2) {
         std.debug.print("Usage:\n", .{});
-        std.debug.print("  {s} keygen [seed_hex] [lifetime]        - Generate keypair (lifetime: 2^8, 2^18, or 2^32, default: 2^8)\n", .{args[0]});
-        std.debug.print("  {s} sign <message> <epoch>               - Sign message using tmp/zig_sk.json, save to tmp/zig_sig.bin\n", .{args[0]});
-        std.debug.print("  {s} verify <rust_sig.bin> <rust_pk.json> <message> <epoch> - Verify Rust signature\n", .{args[0]});
+        std.debug.print("  {s} keygen [seed_hex] [lifetime] [--ssz]  - Generate keypair (lifetime: 2^8, 2^18, or 2^32, default: 2^8)\n", .{args[0]});
+        std.debug.print("  {s} sign <message> <epoch> [--ssz]       - Sign message using tmp/zig_sk.json, save to tmp/zig_sig.bin or tmp/zig_sig.ssz\n", .{args[0]});
+        std.debug.print("  {s} verify <rust_sig.bin> <rust_pk.json> <message> <epoch> [--ssz] - Verify Rust signature\n", .{args[0]});
+        std.debug.print("\n  --ssz: Use SSZ serialization instead of JSON/bincode\n", .{});
         std.process.exit(1);
+    }
+    
+    // Check for --ssz flag
+    var use_ssz = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--ssz")) {
+            use_ssz = true;
+            break;
+        }
     }
 
     if (std.mem.eql(u8, args[1], "keygen")) {
@@ -66,7 +76,7 @@ pub fn main() !void {
             std.debug.print("Error: Invalid lifetime '{s}'. Must be one of: 2^8, 2^18, 2^32\n", .{lifetime_str});
             std.process.exit(1);
         };
-        keygenCommand(allocator, seed_hex, lifetime) catch |err| {
+        keygenCommand(allocator, seed_hex, lifetime, use_ssz) catch |err| {
             log.print("ZIG_MAIN_ERROR: keygenCommand failed with error {s}\n", .{@errorName(err)});
             return err;
         };
@@ -78,7 +88,7 @@ pub fn main() !void {
         const message = args[2];
         const epoch = try std.fmt.parseUnsigned(u32, args[3], 10);
         const lifetime = try readLifetimeFromFile(allocator);
-        try signCommand(allocator, message, epoch, lifetime);
+        try signCommand(allocator, message, epoch, lifetime, use_ssz);
     } else if (std.mem.eql(u8, args[1], "verify")) {
         if (args.len < 6) {
             std.debug.print("Usage: {s} verify <rust_sig.bin> <rust_pk.json> <message> <epoch>\n", .{args[0]});
@@ -89,14 +99,14 @@ pub fn main() !void {
         const message = args[4];
         const epoch = try std.fmt.parseUnsigned(u32, args[5], 10);
         const lifetime = try readLifetimeFromFile(allocator);
-        try verifyCommand(allocator, sig_path, pk_path, message, epoch, lifetime);
+        try verifyCommand(allocator, sig_path, pk_path, message, epoch, lifetime, use_ssz);
     } else {
         std.debug.print("Unknown command: {s}\n", .{args[1]});
         std.process.exit(1);
     }
 }
 
-fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifetime) !void {
+fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifetime, use_ssz: bool) !void {
     const lifetime_str = switch (lifetime) {
         .lifetime_2_8 => "2^8",
         .lifetime_2_18 => "2^18",
@@ -195,38 +205,56 @@ fn keygenCommand(allocator: Allocator, seed_hex: ?[]const u8, lifetime: KeyLifet
     }
     log.print("\n", .{});
 
-    // Serialize secret key to JSON
-    const sk_json = try hash_zig.serialization.serializeSecretKey(allocator, keypair.secret_key);
-    defer allocator.free(sk_json);
-    var sk_file = try std.fs.cwd().createFile("tmp/zig_sk.json", .{});
-    defer sk_file.close();
-    try sk_file.writeAll(sk_json);
-    std.debug.print("✅ Secret key saved to tmp/zig_sk.json\n", .{});
+    if (use_ssz) {
+        // Serialize secret key to SSZ
+        const sk_bytes = try keypair.secret_key.toBytes(allocator);
+        defer allocator.free(sk_bytes);
+        var sk_file = try std.fs.cwd().createFile("tmp/zig_sk.ssz", .{});
+        defer sk_file.close();
+        try sk_file.writeAll(sk_bytes);
+        std.debug.print("✅ Secret key saved to tmp/zig_sk.ssz ({} bytes)\n", .{sk_bytes.len});
 
-    // Serialize public key to JSON
-    const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
-    defer allocator.free(pk_json);
-    
-    // Debug: print parameter that will be written to public key file
-    log.print("ZIG_KEYGEN_DEBUG: parameter to be written to public key file (canonical): ", .{});
-    for (0..5) |i| {
-        log.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toCanonical()});
+        // Serialize public key to SSZ
+        const pk_bytes = try keypair.public_key.toBytes(allocator);
+        defer allocator.free(pk_bytes);
+        var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.ssz", .{});
+        defer pk_file.close();
+        try pk_file.writeAll(pk_bytes);
+        std.debug.print("✅ Public key saved to tmp/zig_pk.ssz ({} bytes)\n", .{pk_bytes.len});
+    } else {
+        // Serialize secret key to JSON
+        const sk_json = try hash_zig.serialization.serializeSecretKey(allocator, keypair.secret_key);
+        defer allocator.free(sk_json);
+        var sk_file = try std.fs.cwd().createFile("tmp/zig_sk.json", .{});
+        defer sk_file.close();
+        try sk_file.writeAll(sk_json);
+        std.debug.print("✅ Secret key saved to tmp/zig_sk.json\n", .{});
+
+        // Serialize public key to JSON
+        const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
+        defer allocator.free(pk_json);
+        
+        // Debug: print parameter that will be written to public key file
+        log.print("ZIG_KEYGEN_DEBUG: parameter to be written to public key file (canonical): ", .{});
+        for (0..5) |i| {
+            log.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toCanonical()});
+        }
+        log.print("(Montgomery: ", .{});
+        for (0..5) |i| {
+            log.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toMontgomery()});
+        }
+        log.print(")\n", .{});
+        
+        var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
+        defer pk_file.close();
+        try pk_file.writeAll(pk_json);
+        std.debug.print("✅ Public key saved to tmp/zig_pk.json\n", .{});
     }
-    log.print("(Montgomery: ", .{});
-    for (0..5) |i| {
-        log.print("0x{x:0>8} ", .{keypair.public_key.parameter[i].toMontgomery()});
-    }
-    log.print(")\n", .{});
-    
-    var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
-    defer pk_file.close();
-    try pk_file.writeAll(pk_json);
-    std.debug.print("✅ Public key saved to tmp/zig_pk.json\n", .{});
 
     std.debug.print("Keypair generated successfully!\n", .{});
 }
 
-fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: KeyLifetime) !void {
+fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: KeyLifetime, use_ssz: bool) !void {
     std.debug.print("Signing message: '{s}' (epoch: {})\n", .{ message, epoch });
 
     // Prefer deserialization path (PRF key + parameter) for reliable reconstruction.
@@ -462,55 +490,73 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         log.debugPrint("ZIG_SIGN_DEBUG: In-memory sign→verify FAILED for epoch {}\n", .{epoch});
     }
 
-    // IMPORTANT: Also update the public key JSON to match the regenerated keypair.
-    // This ensures that verification (in both Zig and Rust) uses a public key that
-    // is consistent with the trees/roots used during signing.
-    const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
-    defer allocator.free(pk_json);
-    var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
-    defer pk_file.close();
-    try pk_file.writeAll(pk_json);
-    std.debug.print("✅ Public key updated to tmp/zig_pk.json (from regenerated keypair)\n", .{});
+    if (use_ssz) {
+        // IMPORTANT: Also update the public key SSZ to match the regenerated keypair.
+        const pk_bytes = try keypair.public_key.toBytes(allocator);
+        defer allocator.free(pk_bytes);
+        var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.ssz", .{});
+        defer pk_file.close();
+        try pk_file.writeAll(pk_bytes);
+        std.debug.print("✅ Public key updated to tmp/zig_pk.ssz ({} bytes, from regenerated keypair)\n", .{pk_bytes.len});
 
-    // Serialize signature to bincode binary format (3116 bytes per leanSignature spec)
-    // Reference: https://github.com/leanEthereum/leanSpec/blob/main/src/lean_spec/subspecs/containers/signature.py
-    // The leanSpec requires:
-    //   1. Signature container: exactly 3116 bytes (Bytes3116)
-    //   2. Signature data: bincode format at the beginning
-    //   3. Can be sliced to scheme.config.SIGNATURE_LEN_BYTES if needed
-    //   4. Format: XmssSignature.from_bytes (bincode deserialization)
-    // Import bincode functions from remote_hash_tool
-    const remote_hash_tool = @import("remote_hash_tool.zig");
-    const rand_len = scheme.lifetime_params.rand_len_fe;
-    const hash_len = scheme.lifetime_params.hash_len_fe;
-    try remote_hash_tool.writeSignatureBincode("tmp/zig_sig.bin", signature, rand_len, hash_len);
-    
-    // Pad to exactly 3116 bytes as per leanSignature spec (Bytes3116 container)
-    const SIG_LEN: usize = 3116;
-    var sig_file = try std.fs.cwd().openFile("tmp/zig_sig.bin", .{ .mode = .read_write });
-    defer sig_file.close();
-    const current_size = try sig_file.getEndPos();
-    if (current_size > SIG_LEN) {
-        return error.SignatureTooLarge;
-    }
-    // Pad with zeros to reach 3116 bytes
-    try sig_file.seekTo(current_size);
-    const padding_needed = SIG_LEN - @as(usize, @intCast(current_size));
-    if (padding_needed > 0) {
-        const zeros = [_]u8{0} ** 1024;
-        var remaining = padding_needed;
-        while (remaining > 0) {
-            const to_write = @min(remaining, zeros.len);
-            try sig_file.writeAll(zeros[0..to_write]);
-            remaining -= to_write;
+        // Serialize signature to SSZ
+        const sig_bytes = try signature.toBytes(allocator);
+        defer allocator.free(sig_bytes);
+        var sig_file = try std.fs.cwd().createFile("tmp/zig_sig.ssz", .{});
+        defer sig_file.close();
+        try sig_file.writeAll(sig_bytes);
+        std.debug.print("✅ Signature saved to tmp/zig_sig.ssz ({} bytes)\n", .{sig_bytes.len});
+    } else {
+        // IMPORTANT: Also update the public key JSON to match the regenerated keypair.
+        // This ensures that verification (in both Zig and Rust) uses a public key that
+        // is consistent with the trees/roots used during signing.
+        const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
+        defer allocator.free(pk_json);
+        var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});
+        defer pk_file.close();
+        try pk_file.writeAll(pk_json);
+        std.debug.print("✅ Public key updated to tmp/zig_pk.json (from regenerated keypair)\n", .{});
+
+        // Serialize signature to bincode binary format (3116 bytes per leanSignature spec)
+        // Reference: https://github.com/leanEthereum/leanSpec/blob/main/src/lean_spec/subspecs/containers/signature.py
+        // The leanSpec requires:
+        //   1. Signature container: exactly 3116 bytes (Bytes3116)
+        //   2. Signature data: bincode format at the beginning
+        //   3. Can be sliced to scheme.config.SIGNATURE_LEN_BYTES if needed
+        //   4. Format: XmssSignature.from_bytes (bincode deserialization)
+        // Import bincode functions from remote_hash_tool
+        const remote_hash_tool = @import("remote_hash_tool.zig");
+        const rand_len = scheme.lifetime_params.rand_len_fe;
+        const hash_len = scheme.lifetime_params.hash_len_fe;
+        try remote_hash_tool.writeSignatureBincode("tmp/zig_sig.bin", signature, rand_len, hash_len);
+        
+        // Pad to exactly 3116 bytes as per leanSignature spec (Bytes3116 container)
+        const SIG_LEN: usize = 3116;
+        var sig_file = try std.fs.cwd().openFile("tmp/zig_sig.bin", .{ .mode = .read_write });
+        defer sig_file.close();
+        const current_size = try sig_file.getEndPos();
+        if (current_size > SIG_LEN) {
+            return error.SignatureTooLarge;
         }
+        // Pad with zeros to reach 3116 bytes
+        try sig_file.seekTo(current_size);
+        const padding_needed = SIG_LEN - @as(usize, @intCast(current_size));
+        if (padding_needed > 0) {
+            const zeros = [_]u8{0} ** 1024;
+            var remaining = padding_needed;
+            while (remaining > 0) {
+                const to_write = @min(remaining, zeros.len);
+                try sig_file.writeAll(zeros[0..to_write]);
+                remaining -= to_write;
+            }
+        }
+        std.debug.print("✅ Signature saved to tmp/zig_sig.bin ({} bytes)\n", .{SIG_LEN});
     }
-    std.debug.print("✅ Signature saved to tmp/zig_sig.bin ({} bytes)\n", .{SIG_LEN});
 
     std.debug.print("Message signed successfully!\n", .{});
 }
 
-fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8, message: []const u8, epoch: u32, lifetime: KeyLifetime) !void {
+fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8, message: []const u8, epoch: u32, lifetime: KeyLifetime, use_ssz: bool) !void {
     std.debug.print("Verifying signature from Rust...\n", .{});
     std.debug.print("  Signature: {s}\n", .{sig_path});
     std.debug.print("  Public key: {s}\n", .{pk_path});
@@ -520,37 +566,52 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     // Debug: print file path to verify we're reading from the correct file
     log.print("ZIG_VERIFY_DEBUG: Reading signature from file: {s}\n", .{sig_path});
 
-    // Load signature from binary format (bincode)
-    // Import bincode functions from remote_hash_tool
-    const remote_hash_tool = @import("remote_hash_tool.zig");
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
     defer scheme.deinit();
     
-    const rand_len = scheme.lifetime_params.rand_len_fe;
-    const max_path_len: usize = scheme.lifetime_params.final_layer;
-    const hash_len = scheme.lifetime_params.hash_len_fe;
-    const max_hashes: usize = scheme.lifetime_params.dimension;
+    var signature: *hash_zig.GeneralizedXMSSSignature = undefined;
+    var public_key: hash_zig.GeneralizedXMSSPublicKey = undefined;
     
-    // Read signature from binary format (bincode)
-    // The readSignatureBincode function reads from file path directly
-    var signature = try remote_hash_tool.readSignatureBincode(sig_path, allocator, rand_len, max_path_len, hash_len, max_hashes);
-    defer signature.deinit();
-    
-    // Debug: print rho from signature right after reading (before verify)
-    const rho_after_read = signature.getRho();
-    log.print("ZIG_VERIFY_DEBUG: rho from signature.getRho() RIGHT AFTER READ (Montgomery): ", .{});
-    for (0..rand_len) |i| {
-        log.print("0x{x:0>8} ", .{rho_after_read[i].toMontgomery()});
+    if (use_ssz) {
+        // Load signature from SSZ format
+        const sig_bytes = try std.fs.cwd().readFileAlloc(allocator, sig_path, std.math.maxInt(usize));
+        defer allocator.free(sig_bytes);
+        signature = try hash_zig.GeneralizedXMSSSignature.fromBytes(sig_bytes, allocator);
+        defer signature.deinit();
+        
+        // Load public key from SSZ format
+        const pk_bytes = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
+        defer allocator.free(pk_bytes);
+        public_key = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_bytes, null);
+    } else {
+        // Load signature from binary format (bincode)
+        // Import bincode functions from remote_hash_tool
+        const remote_hash_tool = @import("remote_hash_tool.zig");
+        const rand_len = scheme.lifetime_params.rand_len_fe;
+        const max_path_len: usize = scheme.lifetime_params.final_layer;
+        const hash_len = scheme.lifetime_params.hash_len_fe;
+        const max_hashes: usize = scheme.lifetime_params.dimension;
+        
+        // The readSignatureBincode function reads from file path directly
+        signature = try remote_hash_tool.readSignatureBincode(sig_path, allocator, rand_len, max_path_len, hash_len, max_hashes);
+        defer signature.deinit();
+        
+        // Debug: print rho from signature right after reading (before verify)
+        const rho_after_read = signature.getRho();
+        log.print("ZIG_VERIFY_DEBUG: rho from signature.getRho() RIGHT AFTER READ (Montgomery): ", .{});
+        for (0..rand_len) |i| {
+            log.print("0x{x:0>8} ", .{rho_after_read[i].toMontgomery()});
+        }
+        log.print("\n", .{});
+
+        // Debug: print which public key file we're reading from
+        log.print("ZIG_VERIFY_DEBUG: Reading public key from file: {s}\n", .{pk_path});
+
+        // Load public key from Rust
+        const pk_json = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
+        defer allocator.free(pk_json);
+        public_key = try hash_zig.serialization.deserializePublicKey(pk_json);
     }
-    log.print("\n", .{});
-
-    // Debug: print which public key file we're reading from
-    log.print("ZIG_VERIFY_DEBUG: Reading public key from file: {s}\n", .{pk_path});
-
-    // Load public key from Rust
-    const pk_json = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
-    defer allocator.free(pk_json);
-    const public_key = try hash_zig.serialization.deserializePublicKey(pk_json);
     
     // Debug: print parameter from public key right after reading
     log.print("ZIG_VERIFY_DEBUG: parameter from public key file (canonical): ", .{});

@@ -555,6 +555,22 @@ pub const HashTreeOpening = struct {
         _ = T;
         return false; // Variable size
     }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    pub fn toBytes(self: *const HashTreeOpening, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    pub fn fromBytes(serialized: []const u8, allocator: std.mem.Allocator) !*HashTreeOpening {
+        const decoded = try allocator.create(HashTreeOpening);
+        errdefer allocator.destroy(decoded);
+        try sszDecode(serialized, decoded, allocator);
+        return decoded;
+    }
 };
 
 // Signature structure matching Rust exactly
@@ -620,27 +636,47 @@ pub const GeneralizedXMSSSignature = struct {
 
     // SSZ serialization methods
     pub fn sszEncode(self: *const GeneralizedXMSSSignature, l: *std.ArrayList(u8)) !void {
-        // Encode path (HashTreeOpening) - variable length
-        try self.path.sszEncode(l);
+        // SSZ struct encoding for GeneralizedXMSSSignature:
+        // Field order: path (variable), rho (fixed), hashes (variable)
+        // var_start = path_offset(4) + rho(28) + hashes_offset(4) = 36
 
-        // Convert rho to canonical u32 array and serialize (28 bytes for 7 u32s)
+        // Calculate path size
+        var path_size_buffer = std.ArrayList(u8).init(self.allocator);
+        defer path_size_buffer.deinit();
+        try self.path.sszEncode(&path_size_buffer);
+        const path_size = path_size_buffer.items.len;
+
+        // Calculate hashes size
+        var hashes_canonical = try self.allocator.alloc([8]u32, self.hashes.len);
+        defer self.allocator.free(hashes_canonical);
+        for (self.hashes, 0..) |hash, i| {
+            for (hash, 0..) |fe, j| {
+                hashes_canonical[i][j] = fe.toCanonical();
+            }
+        }
+        // Calculate var_start (size of fixed part: path_offset(4) + rho(28) + hashes_offset(4) = 36)
+        const var_start: usize = 36;
+
+        // Write path offset (absolute offset from start of serialized data)
+        const path_offset: u32 = @as(u32, @intCast(var_start));
+        try ssz.serialize(u32, path_offset, l);
+
+        // Write rho (fixed, 28 bytes)
         var rho_canonical: [7]u32 = undefined;
         for (self.rho, 0..) |fe, i| {
             rho_canonical[i] = fe.toCanonical();
         }
         try ssz.serialize([7]u32, rho_canonical, l);
 
-        // Convert hashes to canonical u32 arrays and serialize as variable-length list
-        var hashes_canonical = try self.allocator.alloc([8]u32, self.hashes.len);
-        defer self.allocator.free(hashes_canonical);
+        // Write hashes offset (absolute offset from start of serialized data)
+        const hashes_offset: u32 = @as(u32, @intCast(var_start + path_size));
+        try ssz.serialize(u32, hashes_offset, l);
 
-        for (self.hashes, 0..) |hash, i| {
-            for (hash, 0..) |fe, j| {
-                hashes_canonical[i][j] = fe.toCanonical();
-            }
-        }
+        // Third pass: Write variable fields
+        // Write path data
+        try self.path.sszEncode(l);
 
-        // Use generic slice serialization for variable-length list
+        // Write hashes data
         try ssz.serialize([]const [8]u32, hashes_canonical, l);
     }
 
@@ -652,9 +688,9 @@ pub const GeneralizedXMSSSignature = struct {
         // First pass: Read offsets for variable fields
         var offset: usize = 0;
 
-        // Read path offset (4 bytes)
+        // Read path offset (4 bytes) - absolute offset from start
         if (serialized.len < offset + 4) return error.InvalidLength;
-        const path_offset = std.mem.readInt(u32, serialized[offset .. offset + 4], .little);
+        const path_offset = std.mem.readInt(u32, serialized[offset..][0..4], .little);
         offset += 4;
 
         // Read rho (fixed, 28 bytes for 7 u32s)
@@ -667,19 +703,19 @@ pub const GeneralizedXMSSSignature = struct {
             rho[i] = FieldElement.fromCanonical(val);
         }
 
-        // Read hashes offset (4 bytes)
+        // Read hashes offset (4 bytes) - absolute offset from start
         if (serialized.len < offset + 4) return error.InvalidLength;
-        const hashes_offset = std.mem.readInt(u32, serialized[offset .. offset + 4], .little);
+        const hashes_offset = std.mem.readInt(u32, serialized[offset..][0..4], .little);
         offset += 4;
 
         // Second pass: Deserialize variable fields using offsets
-        // Decode path
+        // Decode path (absolute offset)
         if (path_offset > serialized.len) return error.InvalidOffset;
         const path = try alloc.create(HashTreeOpening);
         errdefer alloc.destroy(path);
         try HashTreeOpening.sszDecode(serialized[path_offset..], path, alloc);
 
-        // Decode hashes
+        // Decode hashes (absolute offset)
         if (hashes_offset > serialized.len) return error.InvalidOffset;
         const hashes_data_start = hashes_offset;
         // Determine number of hashes: for fixed-size items, calculate from remaining data
@@ -717,6 +753,22 @@ pub const GeneralizedXMSSSignature = struct {
     pub fn isFixedSizeObject(comptime T: type) bool {
         _ = T;
         return false; // Variable size (path and hashes are variable-length)
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    pub fn toBytes(self: *const GeneralizedXMSSSignature, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    pub fn fromBytes(serialized: []const u8, allocator: std.mem.Allocator) !*GeneralizedXMSSSignature {
+        const decoded = try allocator.create(GeneralizedXMSSSignature);
+        errdefer allocator.destroy(decoded);
+        try sszDecode(serialized, decoded, allocator);
+        return decoded;
     }
 };
 
@@ -805,6 +857,21 @@ pub const GeneralizedXMSSPublicKey = struct {
     pub fn isFixedSizeObject(comptime T: type) bool {
         _ = T;
         return true; // 32 + 20 = 52 bytes
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    pub fn toBytes(self: *const GeneralizedXMSSPublicKey, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    pub fn fromBytes(serialized: []const u8, allocator: ?std.mem.Allocator) !GeneralizedXMSSPublicKey {
+        var decoded: GeneralizedXMSSPublicKey = undefined;
+        try sszDecode(serialized, &decoded, allocator);
+        return decoded;
     }
 };
 
@@ -929,6 +996,23 @@ pub const GeneralizedXMSSSecretKey = struct {
     pub fn isFixedSizeObject(comptime T: type) bool {
         _ = T;
         return true; // 32 + 20 + 8 + 8 = 68 bytes
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    /// Note: Only serializes prf_key, parameter, and epochs. Trees are not serialized.
+    pub fn toBytes(self: *const GeneralizedXMSSSecretKey, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    /// Note: Returns error.SecretKeyRequiresKeyGen since trees cannot be deserialized.
+    /// The caller must use keyGen to reconstruct the full secret key.
+    pub fn fromBytes(serialized: []const u8, allocator: ?std.mem.Allocator) !void {
+        var dummy: GeneralizedXMSSSecretKey = undefined;
+        try sszDecode(serialized, &dummy, allocator);
     }
 
     // Serialization method using controlled access
