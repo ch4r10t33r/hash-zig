@@ -6,7 +6,7 @@
 
 Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible behavior against the Rust reference implementation ([leanSig](https://github.com/leanEthereum/leanSig)). Keys, signatures, and Merkle paths interchange freely between the two ecosystems for lifetimes `2^8`, `2^18`, and `2^32`.
 
-**✅ Cross-Language Compatibility**: All cross-language compatibility tests pass for lifetimes `2^8` and `2^32` in both directions (Rust↔Zig). For lifetime `2^18`, all flows pass except **Zig sign → Rust verify**, which currently fails only on the Rust side; this is being tracked as a known limitation of the 2^18 instantiation.
+**✅ Cross-Language Compatibility**: All cross-language compatibility tests pass for lifetimes `2^8`, `2^18`, and `2^32` in both directions (Rust↔Zig).
 
 **⚠️ Prototype Status**: This is a prototype implementation for research and development purposes. Use at your own risk.
 
@@ -161,19 +161,6 @@ Performance measurements are taken using ReleaseFast builds with debug logging d
 **Verification Performance:**
 - Average: **~2-3 ms** per verification
 
-### Lifetime 2^32 (256 Active Epochs)
-
-**Key Generation:**
-- Time: **~916 seconds** (~15.3 minutes)
-
-**Signing Performance:**
-- Average: **~30-50 ms** per signature
-- First signature: **~100-200 ms**
-- Subsequent signatures: **~30-40 ms**
-
-**Verification Performance:**
-- Average: **~4-5 ms** per verification
-
 ### Lifetime 2^32 (1024 Active Epochs) - With Parallel Tree Generation
 
 **Key Generation:**
@@ -265,12 +252,6 @@ This section provides a summary of optimizations implemented in the Zig implemen
 - Zig (8-wide SIMD, AVX-512): **~3.5-4.0s** (expected, ~2x speedup)
 - Gap: **~2.2-3.6x slower** with 4-wide, **~1.1-1.6x slower** with 8-wide (down from ~18x)
 - **Note**: Full SIMD Poseidon2 is implemented and enabled, plus bottom-tree caching, parallel tree generation, and memory alignment optimizations
-
-**Current Performance (2^32, 256 epochs) - ✅ VERIFIED:**
-- Rust: **2.000s**
-- Zig: **1.316s** (Zig faster in this case)
-- Gap: **Zig is faster** (thread-level parallelism working well)
-- **Status**: All cross-language compatibility tests pass ✅
 
 **Performance Notes:**
 - With AVX-512 support, Zig performance approaches Rust performance (~1.1-1.6x gap vs ~2.2-3.6x with 4-wide SIMD)
