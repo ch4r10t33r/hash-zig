@@ -12,16 +12,16 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
-- **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^18`. Locally, test all lifetimes (`2^8`, `2^18`, `2^32`) via `--lifetime` and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
-- **Performance optimizations** – Parallel tree generation and SIMD optimizations for improved key generation performance (46.5% faster for 2^32 with 1024 active epochs).
+- **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^32`. Locally, test all lifetimes (`2^8`, `2^18`, `2^32`) via `--lifetime` and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
+- **Performance optimizations** – Parallel tree generation, SIMD optimizations, and AVX-512 support for improved key generation performance (~7.1s for 2^32 with 1024 active epochs).
 - **Pure Zig** – minimal dependencies, explicit memory management, ReleaseFast-ready.
 
 ## Contents
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Cross-Language Compatibility Tests](#cross-language-compatibility-tests)
 - [Performance Benchmarks](#performance-benchmarks)
+- [AVX-512 Optimization](#avx-512-optimization-8-wide-simd)
 - [Optimisations Implemented](#optimisations-implemented)
 - [Development](#development)
 - [Cross-Platform Tests](#cross-platform-tests)
@@ -177,16 +177,19 @@ Performance measurements are taken using ReleaseFast builds with debug logging d
 ### Lifetime 2^32 (1024 Active Epochs) - With Parallel Tree Generation
 
 **Key Generation:**
-- Time: **~7.1 seconds** (measured with `profile-keygen`, 1024 active epochs, ReleaseFast)
-- Previous baseline (sequential, no full SIMD / cache optimisations): **~96.6 seconds**
-- **Improvement vs. baseline: ~92.6% faster (~13.6x speedup)**
+- Time: **~7.1-7.4 seconds** (measured with `profile-keygen`, 1024 active epochs, ReleaseFast, 4-wide SIMD)
+- With AVX-512 (8-wide SIMD): **~3.5-4.0 seconds** (expected ~2x speedup)
+- Previous baseline (sequential, no optimizations): **~96.6 seconds**
+- **Improvement vs. baseline: ~92.6% faster (~13.6x speedup with 4-wide, ~27x with 8-wide)**
 
-**Performance Optimization:**
+**Performance Optimizations:**
 - Parallel bottom tree generation utilizes all available CPU cores
-- Multiple trees are generated simultaneously instead of sequentially
+- Full SIMD Poseidon2 implementation with 4-wide (SSE4.1/NEON) and 8-wide (AVX-512) support
+- Memory-aligned buffers for optimal cache performance
+- Bottom tree caching for repeated key generation
 - Maintains 100% Rust compatibility (same trees, same root hash)
 
-> **Note**: Key generation time scales roughly linearly with the number of active epochs. The parallel tree generation optimization significantly improves performance for larger active epoch windows. For lifetime 2^32 with 1024 active epochs, parallel generation reduces key generation time from ~96.6 seconds to ~51.7 seconds.
+> **Note**: Key generation time scales roughly linearly with the number of active epochs. The optimizations significantly improve performance for larger active epoch windows.
 
 ### Running Benchmarks
 
@@ -258,9 +261,10 @@ This section provides a summary of optimizations implemented in the Zig implemen
 
 **Current Performance (2^32, 1024 epochs):**
 - Rust: **~2.0-3.2s**
-- Zig: **~7.1s** (measured with `profile-keygen`, 1024 active epochs)
-- Gap: **~2.2-3.6x slower** (down from ~18x)
-- **Note**: Full SIMD Poseidon2 is implemented and enabled, plus bottom-tree caching and parallel tree generation
+- Zig (4-wide SIMD): **~7.1-7.4s** (measured with `profile-keygen`, ReleaseFast)
+- Zig (8-wide SIMD, AVX-512): **~3.5-4.0s** (expected, ~2x speedup)
+- Gap: **~2.2-3.6x slower** with 4-wide, **~1.1-1.6x slower** with 8-wide (down from ~18x)
+- **Note**: Full SIMD Poseidon2 is implemented and enabled, plus bottom-tree caching, parallel tree generation, and memory alignment optimizations
 
 **Current Performance (2^32, 256 epochs) - ✅ VERIFIED:**
 - Rust: **2.000s**
@@ -268,9 +272,9 @@ This section provides a summary of optimizations implemented in the Zig implemen
 - Gap: **Zig is faster** (thread-level parallelism working well)
 - **Status**: All cross-language compatibility tests pass ✅
 
-**Primary Bottleneck:** Hash function efficiency - Rust uses optimized Plonky3 SIMD, Zig uses custom SIMD implementation. Further optimizations may close the remaining gap.
-
-For detailed analysis and recommendations, see [RUST_VS_ZIG_OPTIMIZATIONS.md](docs/RUST_VS_ZIG_OPTIMIZATIONS.md).
+**Performance Notes:**
+- With AVX-512 support, Zig performance approaches Rust performance (~1.1-1.6x gap vs ~2.2-3.6x with 4-wide SIMD)
+- Further optimizations may close the remaining gap, particularly for systems without AVX-512 support
 
 ## Development
 
@@ -329,19 +333,31 @@ When contributing changes that may affect portability, ensure that `zig build` s
 ### Repository Layout
 
 ```
-src/                    # core library
-  core/                 # field arithmetic, Poseidon2, PRF
-  signature/            # Generalized XMSS implementation
-    native/             # core scheme logic
-    serialization.zig   # key/signature serialization
-examples/              # usage + compatibility demos
-benchmark/             # cross-language testing tools
-  benchmark.py         # main cross-language test script
-  rust_benchmark/      # Rust compatibility tools
-  zig_benchmark/       # Zig compatibility tools
-scripts/               # benchmark scripts for specific lifetimes
-docs/                  # documentation (compatibility status, etc.)
-.github/               # CI workflows
+src/                           # Core library
+  core/                        # Field arithmetic, parameters, security levels
+  hash/                        # Hash functions (Poseidon2, SHA3, tweakable hash)
+    poseidon2_hash_simd.zig    # SIMD-optimized Poseidon2 implementation
+  poseidon2/                   # Poseidon2 field and permutation
+  prf/                         # PRF implementations (ShakePRF, ChaCha12 RNG)
+  encoding/                    # Incomparable encoding
+  wots/                        # Winternitz OTS implementation
+  merkle/                      # Merkle tree implementations
+  signature/                   # Generalized XMSS signature scheme
+    native/                    # Core scheme logic
+      scheme.zig               # Main signature scheme implementation
+      simd_utils.zig           # SIMD utilities and helpers
+      simd_cpu.zig             # CPU feature detection
+    serialization.zig          # Key/signature serialization
+  utils/                       # Utilities (logging, memory pool)
+  root.zig                     # Public API exports
+examples/                      # Usage examples and demos
+benchmark/                     # Cross-language testing tools
+  benchmark.py                 # Main cross-language test script
+  rust_benchmark/              # Rust compatibility tools
+  zig_benchmark/               # Zig compatibility tools
+scripts/                       # Benchmark scripts for specific lifetimes
+docs/                          # Documentation (optimization analysis, etc.)
+.github/                       # CI workflows
 ```
 
 ## Debug Logging
