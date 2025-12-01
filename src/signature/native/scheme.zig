@@ -1025,7 +1025,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // OPTIMIZATION: Pack parameter once per thread (constant across all epochs and batches)
                     // Parameter is constant across all epochs, so we can pack it once per thread
                     // and reuse it for all batches in this chunk
-                    var packed_parameter: [5]simd_utils.PackedF = undefined;
+                    // OPTIMIZATION: Align for SIMD
+                    const align_bytes_param = if (SIMD_WIDTH == 8) 32 else 16;
+                    var packed_parameter: [5]simd_utils.PackedF align(align_bytes_param) = undefined;
                     // Use @splat for better SIMD optimization when all lanes have same value
                     for (0..5) |i| {
                         packed_parameter[i] = simd_utils.PackedF{ .values = @splat(ctx.parameter[i].value) };
@@ -1035,11 +1037,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // This matches Rust's par_chunks_exact approach - more cache-friendly
                     var epoch_idx = chunk_start;
 
-                    // OPTIMIZATION: Pre-allocate reusable buffers outside loops to reduce allocations
-                    // These buffers are reused across all batches and remainder epochs
-                    var simd_output_buffer: [SIMD_WIDTH][8]FieldElement = undefined;
-                    var chain_domains_stack: [64][8]FieldElement = undefined;
-                    var leaf_domain_buffer: [8]FieldElement = undefined;
+        // OPTIMIZATION: Pre-allocate reusable buffers outside loops to reduce allocations
+        // These buffers are reused across all batches and remainder epochs
+        // OPTIMIZATION: Align buffers for better cache performance
+        const align_bytes_buf = if (SIMD_WIDTH == 8) 32 else 16;
+        var simd_output_buffer: [SIMD_WIDTH][8]FieldElement align(align_bytes_buf) = undefined;
+        var chain_domains_stack: [64][8]FieldElement align(align_bytes_buf) = undefined;
+        var leaf_domain_buffer: [8]FieldElement align(align_bytes_buf) = undefined;
 
                     // Process complete SIMD-width batches
                     while (epoch_idx + SIMD_WIDTH <= chunk_end) {
@@ -1061,8 +1065,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
                         // This matches Rust's approach: let mut packed_chains: [[PackedF; HASH_LEN]; NUM_CHUNKS]
                         // num_chains is always 64, hash_len is always 8, so [64][8]PackedF = ~2KB per thread (safe for stack)
-                        // OPTIMIZATION: Align for SIMD (16-byte alignment for NEON/SSE, 32-byte for AVX-512)
-                        var packed_chains_stack: [64][8]simd_utils.PackedF = undefined;
+                        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+                        // AVX-512 requires 32-byte alignment for optimal performance
+                        // Note: Zig's align() on stack variables ensures proper alignment for SIMD operations
+                        const align_bytes = if (SIMD_WIDTH == 8) 32 else 16;
+                        var packed_chains_stack: [64][8]simd_utils.PackedF align(align_bytes) = undefined;
 
                         // Generate and pack chain starting points for all epochs in batch
                         // Note: actual_batch_size is always SIMD_WIDTH for complete batches
@@ -1711,7 +1718,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
         // This matches Rust's approach: let mut packed_input = [PackedF::ZERO; CHAIN_COMPRESSION_WIDTH];
-        var packed_combined_input: [CHAIN_COMPRESSION_WIDTH]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const SIMD_WIDTH_LOCAL = simd_utils.SIMD_WIDTH;
+        const align_bytes_combined = if (SIMD_WIDTH_LOCAL == 8) 32 else 16;
+        var packed_combined_input: [CHAIN_COMPRESSION_WIDTH]simd_utils.PackedF align(align_bytes_combined) = undefined;
 
         // Copy parameter (already packed)
         @memcpy(packed_combined_input[0..5], &packed_parameter);
@@ -1753,7 +1763,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // CRITICAL OPTIMIZATION: Use stack-allocated buffer for packed_next
         // hash_len is at most 8, so 8 PackedF = 128 bytes (safe for stack)
         // This avoids 64 chains × 7 steps = 448 allocations per batch!
-        var packed_next_stack: [8]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_next = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_next_stack: [8]simd_utils.PackedF align(align_bytes_next) = undefined;
 
         // OPTIMIZATION: Pre-compute all tweaks for all steps once
         // This avoids recomputing tweaks in applyPoseidonChainTweakHashSIMD for each step
@@ -1761,8 +1773,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const num_steps = chain_length - 1;
         // Max 256 steps × 2 tweaks × SIMD_WIDTH lanes (4 or 8) = 2-4KB (safe for stack)
         // Use a comptime switch to select the correct array type based on SIMD_WIDTH
+        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
         const PrecomputedTweaksType = if (SIMD_WIDTH == 8) [256][2][8]u32 else [256][2][4]u32;
-        var precomputed_tweaks: PrecomputedTweaksType = undefined;
+        const align_bytes = if (SIMD_WIDTH == 8) 32 else 16;
+        var precomputed_tweaks: PrecomputedTweaksType align(align_bytes) = undefined;
         const tweaks_slice = precomputed_tweaks[0..num_steps];
 
         // Pre-compute tweaks for all steps and all lanes
@@ -1944,7 +1958,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const p: u128 = 2130706433; // KoalaBear field modulus
 
         // OPTIMIZATION: Stack-allocate packed input (max size known: 5+2+8+8=23)
-        var packed_input: [23]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_input = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_input: [23]simd_utils.PackedF align(align_bytes_input) = undefined;
         const packed_input_slice = packed_input[0..total_input_len];
 
         // OPTIMIZATION: Pack directly without intermediate buffers (reduce memory overhead)
@@ -2014,7 +2030,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Use SIMD Poseidon2-24 compression
         // CRITICAL OPTIMIZATION: Use stack-allocated buffer instead of heap allocation
         // hash_len is at most 8, so 8 PackedF = 128 bytes (safe for stack)
-        var packed_hash_results_stack: [8]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_results = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_hash_results_stack: [8]simd_utils.PackedF align(align_bytes_results) = undefined;
         // OPTIMIZATION: Use passed instance instead of creating new one
         try simd_poseidon2.compress24SIMD(packed_input_slice, hash_len, packed_hash_results_stack[0..hash_len]);
 
@@ -2900,7 +2918,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const original_input_len = packed_leaf_input.len;
         const extra_elements = (RATE - (original_input_len % RATE)) % RATE;
         const padded_input_len = original_input_len + extra_elements;
-        var padded_leaf_input_stack: [600]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_input = if (SIMD_WIDTH == 8) 32 else 16;
+        var padded_leaf_input_stack: [600]simd_utils.PackedF align(align_bytes_input) = undefined;
         const padded_leaf_input = padded_leaf_input_stack[0..padded_input_len];
         @memcpy(padded_leaf_input[0..original_input_len], packed_leaf_input);
         // Pad with zeros
@@ -2910,8 +2930,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Initialize state: capacity in capacity part, zeros in rate part
         // OPTIMIZATION: Initialize all to zero first, then set capacity part
-        // OPTIMIZATION: Align for SIMD (16-byte alignment for NEON/SSE, 32-byte for AVX-512)
-        var packed_state: [24]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        // Note: SIMD_WIDTH is already declared in function scope above
+        const align_bytes = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_state: [24]simd_utils.PackedF align(align_bytes) = undefined;
         const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
         // Initialize all elements to zero (loop unrolled for efficiency)
         for (&packed_state) |*elem| {

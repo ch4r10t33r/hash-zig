@@ -201,6 +201,29 @@ zig build test-lifetimes -Denable-lifetime-2-32=true
 zig build benchmark-parallel -Doptimize=ReleaseFast
 ```
 
+## AVX-512 Optimization (8-wide SIMD)
+
+For x86-64 systems with AVX-512 support, you can build with 8-wide SIMD for approximately 2x performance improvement:
+
+```bash
+# Build with 8-wide SIMD (AVX-512)
+zig build profile-keygen -Doptimize=ReleaseFast -Dsimd-width=8 -Denable-profile-keygen=true -Ddebug-logs=false
+
+# Or for all targets
+zig build install -Doptimize=ReleaseFast -Dsimd-width=8 -Ddebug-logs=false
+```
+
+**Requirements:**
+- x86-64 CPU with AVX-512F support
+- Zig compiler (0.14.1+)
+- Build with `-Dsimd-width=8` flag
+
+**Performance Impact:**
+- 4-wide SIMD (default): ~7.1-7.4s for 2^32 (1024 epochs)
+- 8-wide SIMD (AVX-512): Expected ~3.5-4.0s for 2^32 (1024 epochs) - **~2x speedup**
+
+**Note:** On ARM/Apple Silicon, only 4-wide SIMD is available (8-wide not supported). The build will automatically use 4-wide in this case.
+
 ## Optimisations Implemented
 
 This section provides a summary of optimizations implemented in the Zig implementation compared to the Rust reference implementation.
