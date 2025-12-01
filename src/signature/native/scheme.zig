@@ -723,7 +723,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn prfDomainElement(
+    /// OPTIMIZATION: Mark as inline since this is called very frequently in hot loops
+    pub inline fn prfDomainElement(
         self: *const GeneralizedXMSSSignatureScheme,
         prf_key: [32]u8,
         epoch: u32,
@@ -852,7 +853,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(leaf_domains);
 
         const num_cpus = std.Thread.getCpuCount() catch 1;
-        const min_parallel_leaves = 128; // Threshold for parallel leaf computation
+        // OPTIMIZATION: Increased threshold to reduce thread creation overhead for small workloads
+        // Only use parallel processing when there's enough work to justify thread overhead
+        const min_parallel_leaves = 256; // Increased from 128 to reduce overhead
 
         if (leafs_per_bottom_tree < min_parallel_leaves or num_cpus <= 1) {
             // Sequential processing for small workloads
@@ -928,13 +931,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)), &leaf_domain_buffer);
                 const leaf_domain_slice = leaf_domain_buffer[0..hash_len];
                 // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+                // OPTIMIZATION: Use @memcpy and @memset for efficient copying
                 var leaf_domain: [8]FieldElement = undefined;
-                for (0..hash_len) |i| {
-                    leaf_domain[i] = leaf_domain_slice[i];
-                }
-                for (hash_len..8) |i| {
-                    leaf_domain[i] = FieldElement{ .value = 0 };
-                }
+                @memcpy(leaf_domain[0..hash_len], leaf_domain_slice[0..hash_len]);
+                @memset(leaf_domain[hash_len..8], FieldElement{ .value = 0 });
                 leaf_domains[epoch - epoch_range_start] = leaf_domain;
 
                 // Debug: Print leaf domain head for all epochs in first bottom tree
@@ -1012,6 +1012,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // This matches Rust's par_chunks_exact approach - more cache-friendly
                     var epoch_idx = chunk_start;
 
+                    // OPTIMIZATION: Pre-allocate reusable buffers outside loops to reduce allocations
+                    // These buffers are reused across all batches and remainder epochs
+                    var simd_output_buffer: [SIMD_WIDTH][8]FieldElement = undefined;
+                    var chain_domains_stack: [64][8]FieldElement = undefined;
+                    var leaf_domain_buffer: [8]FieldElement = undefined;
+
                     // Process complete SIMD-width batches
                     while (epoch_idx + SIMD_WIDTH <= chunk_end) {
                         const batch_start_idx = epoch_idx;
@@ -1022,8 +1028,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         // OPTIMIZATION: Create @Vector directly without intermediate array
                         const packed_epochs: @Vector(SIMD_WIDTH, u32) = blk: {
                             var epochs: [SIMD_WIDTH]u32 = undefined;
+                            const base_epoch = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx));
                             for (0..SIMD_WIDTH) |i| {
-                                epochs[i] = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx + i));
+                                epochs[i] = base_epoch + @as(u32, @intCast(i));
                             }
                             break :blk epochs;
                         };
@@ -1094,7 +1101,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             const local_idx = batch_start_idx;
 
                             // Extract chain domains for this epoch from packed chains
-                            var chain_domains_stack: [64][8]FieldElement = undefined;
+                            // Reuse pre-allocated chain_domains_stack
                             const chain_domains = chain_domains_stack[0..ctx.num_chains];
                             for (0..ctx.num_chains) |chain_idx| {
                                 for (0..ctx.hash_len) |h| {
@@ -1112,7 +1119,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             }
 
                             // Use scalar sponge hash
-                            var leaf_domain_buffer: [8]FieldElement = undefined;
+                            // Reuse pre-allocated leaf_domain_buffer
                             ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, epoch_parameter, epoch, &leaf_domain_buffer) catch |err| {
                                 ctx.error_mutex.lock();
                                 defer ctx.error_mutex.unlock();
@@ -1130,7 +1137,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             @memset(ctx.leaf_domains[local_idx][ctx.hash_len..8], FieldElement{ .value = 0 });
                         } else {
                             // Multiple epochs - use SIMD sponge hash
-                            var simd_output_buffer: [SIMD_WIDTH][8]FieldElement = undefined;
+                            // Reuse pre-allocated simd_output_buffer
                             ctx.scheme.reduceChainDomainsToLeafDomainSIMD(
                                 &simd_poseidon2,
                                 &packed_chains_slices,
@@ -1165,12 +1172,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                     // Handle remainder epochs with scalar code (matching Rust's approach)
                     // Rust processes remainder separately to avoid padding issues
+                    // Reuse pre-allocated chain_domains_stack and leaf_domain_buffer
                     while (epoch_idx < chunk_end) {
                         const epoch = @as(u32, @intCast(ctx.epoch_range_start + epoch_idx));
                         const local_idx = epoch_idx;
 
                         // Process this epoch using scalar code (same as sequential path)
-                        var chain_domains_stack: [64][8]FieldElement = undefined;
+                        // Reuse pre-allocated chain_domains_stack
                         const chain_domains = chain_domains_stack[0..ctx.num_chains];
 
                         // Compute chain domains for this epoch using scalar path
@@ -1187,8 +1195,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             };
                         }
 
-                        // OPTIMIZATION: Use stack-allocated buffer for leaf domain output
-                        var leaf_domain_buffer: [8]FieldElement = undefined;
+                        // OPTIMIZATION: Reuse pre-allocated leaf_domain_buffer
                         ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch, &leaf_domain_buffer) catch |err| {
                             ctx.error_mutex.lock();
                             defer ctx.error_mutex.unlock();
@@ -1200,13 +1207,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         };
                         const leaf_domain_slice = leaf_domain_buffer[0..ctx.hash_len];
 
-                        // Store leaf domain
-                        for (0..ctx.hash_len) |i| {
-                            ctx.leaf_domains[local_idx][i] = leaf_domain_slice[i];
-                        }
-                        for (ctx.hash_len..8) |i| {
-                            ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
-                        }
+                        // OPTIMIZATION: Use @memcpy for efficient copying
+                        @memcpy(ctx.leaf_domains[local_idx][0..ctx.hash_len], leaf_domain_slice[0..ctx.hash_len]);
+                        // Zero-pad remaining elements
+                        @memset(ctx.leaf_domains[local_idx][ctx.hash_len..8], FieldElement{ .value = 0 });
 
                         epoch_idx += 1;
                     }
@@ -1229,26 +1233,49 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // OPTIMIZATION: Pre-divide work into chunks (matching Rust's par_chunks_exact)
             // This is more cache-friendly and reduces atomic operations
-            // OPTIMIZATION: Limit thread count to avoid overhead (Rust's rayon uses similar limits)
-            // For 1024 epochs, using all CPUs might create too many threads
-            const optimal_threads = @min(num_cpus, @max(1, leafs_per_bottom_tree / 32)); // At least 32 epochs per thread
+            // OPTIMIZATION: Smarter thread count calculation to balance parallelism vs overhead
+            // Use fewer threads with more work each to reduce thread creation overhead
+            // For small workloads, prefer sequential; for large, use fewer but more efficient threads
+            const min_epochs_per_thread = 64; // Increased from 32 to reduce thread overhead
+            const max_threads = num_cpus;
+            const optimal_threads = @min(max_threads, @max(1, leafs_per_bottom_tree / min_epochs_per_thread));
             const num_threads = @min(optimal_threads, leafs_per_bottom_tree);
             const num_epochs = leafs_per_bottom_tree;
             const chunk_size = (num_epochs + num_threads - 1) / num_threads; // Round up
 
-            var threads = try self.allocator.alloc(std.Thread, num_threads);
-            defer self.allocator.free(threads);
+            // OPTIMIZATION: Use stack allocation for small thread counts to reduce allocator overhead
+            // For typical cases (num_threads <= 16), stack allocation is faster
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
 
-            // Spawn worker threads with pre-assigned chunks
-            for (0..num_threads) |t| {
-                const chunk_start = t * chunk_size;
-                const chunk_end = @min(chunk_start + chunk_size, num_epochs);
-                threads[t] = try std.Thread.spawn(.{}, leafWorker.worker, .{ &leaf_ctx, chunk_start, chunk_end });
-            }
+                // Spawn worker threads with pre-assigned chunks
+                for (0..num_threads) |t| {
+                    const chunk_start = t * chunk_size;
+                    const chunk_end = @min(chunk_start + chunk_size, num_epochs);
+                    threads[t] = try std.Thread.spawn(.{}, leafWorker.worker, .{ &leaf_ctx, chunk_start, chunk_end });
+                }
 
-            // Wait for all threads
-            for (threads) |thread| {
-                thread.join();
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Fallback to heap allocation for large thread counts
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                // Spawn worker threads with pre-assigned chunks
+                for (0..num_threads) |t| {
+                    const chunk_start = t * chunk_size;
+                    const chunk_end = @min(chunk_start + chunk_size, num_epochs);
+                    threads[t] = try std.Thread.spawn(.{}, leafWorker.worker, .{ &leaf_ctx, chunk_start, chunk_end });
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
             }
 
             // Check for errors
@@ -1532,13 +1559,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(hash_result);
 
         // Return type is [8]FieldElement, so pad with zeros if hash_len < 8
+        // OPTIMIZATION: Use @memcpy and @memset for efficient copying
         var result: [8]FieldElement = undefined;
-        for (0..hash_len) |i| {
-            result[i] = hash_result[i];
-        }
-        for (hash_len..8) |i| {
-            result[i] = FieldElement{ .value = 0 };
-        }
+        @memcpy(result[0..hash_len], hash_result[0..hash_len]);
+        @memset(result[hash_len..8], FieldElement{ .value = 0 });
         return result;
     }
 
@@ -1682,13 +1706,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         for (0..num_steps) |step| {
             const pos_in_chain = @as(u8, @intCast(step + 1));
 
-            // Use pre-computed tweaks
-            // Convert array to vector for PackedF initialization
-            const tweak0_vec: @Vector(SIMD_WIDTH, u32) = tweaks_slice[step][0];
-            const tweak1_vec: @Vector(SIMD_WIDTH, u32) = tweaks_slice[step][1];
+            // OPTIMIZATION: Use pre-computed tweaks directly without intermediate conversion
+            // The tweaks are already stored as arrays, convert to PackedF directly
             const packed_tweaks = [2]simd_utils.PackedF{
-                simd_utils.PackedF{ .values = tweak0_vec },
-                simd_utils.PackedF{ .values = tweak1_vec },
+                simd_utils.PackedF{ .values = tweaks_slice[step][0] },
+                simd_utils.PackedF{ .values = tweaks_slice[step][1] },
             };
 
             // Apply SIMD hash to advance chain for all epochs simultaneously
@@ -2014,17 +2036,33 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             };
 
             const num_threads = @min(num_cpus, parents_len);
-            var threads = try self.allocator.alloc(std.Thread, num_threads);
-            defer self.allocator.free(threads);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
 
-            // Spawn worker threads
-            for (0..num_threads) |t| {
-                threads[t] = try std.Thread.spawn(.{}, pairProcessWorker, .{&ctx});
-            }
+                // Spawn worker threads
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, pairProcessWorker, .{&ctx});
+                }
 
-            // Wait for all threads
-            for (threads) |thread| {
-                thread.join();
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                // Spawn worker threads
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, pairProcessWorker, .{&ctx});
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
             }
 
             // Check for errors
@@ -3843,17 +3881,32 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Reset the atomic counter to 0 for remaining trees (indices 2+)
             ctx.next_index.store(0, .monotonic);
 
-            // Spawn worker threads
-            var threads = try self.allocator.alloc(std.Thread, num_threads);
-            defer self.allocator.free(threads);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
 
-            for (0..num_threads) |t| {
-                threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
-            }
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
+                }
 
-            // Wait for all threads
-            for (threads) |thread| {
-                thread.join();
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Spawn worker threads
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
             }
 
             // CRITICAL: Verify all trees were built and roots stored
@@ -4749,13 +4802,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.debugPrint("\n", .{});
         // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
         // hash_len is already declared above (line 2643)
+        // OPTIMIZATION: Use @memcpy and @memset for efficient copying
         var current_domain: [8]FieldElement = undefined;
-        for (0..hash_len) |i| {
-            current_domain[i] = leaf_domain_slice[i];
-        }
-        for (hash_len..8) |i| {
-            current_domain[i] = FieldElement{ .value = 0 };
-        }
+        @memcpy(current_domain[0..hash_len], leaf_domain_slice[0..hash_len]);
+        @memset(current_domain[hash_len..8], FieldElement{ .value = 0 });
 
         // Debug: log leaf domain
         log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction (canonical): ", .{});

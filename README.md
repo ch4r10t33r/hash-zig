@@ -303,16 +303,6 @@ docs/                  # documentation (compatibility status, etc.)
 .github/               # CI workflows
 ```
 
-### Running Cross-Language Tests
-
-```bash
-# Quick test (2^8 and 2^18)
-python3 benchmark/benchmark.py
-
-# Full test suite (all lifetimes)
-python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32"
-```
-
 ## Debug Logging
 
 Debug logging is controlled by a build-time flag `-Ddebug-logs` (defaults to `false`). When disabled, there is zero performance overhead.
