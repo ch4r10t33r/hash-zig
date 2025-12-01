@@ -1037,13 +1037,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // This matches Rust's par_chunks_exact approach - more cache-friendly
                     var epoch_idx = chunk_start;
 
-        // OPTIMIZATION: Pre-allocate reusable buffers outside loops to reduce allocations
-        // These buffers are reused across all batches and remainder epochs
-        // OPTIMIZATION: Align buffers for better cache performance
-        const align_bytes_buf = if (SIMD_WIDTH == 8) 32 else 16;
-        var simd_output_buffer: [SIMD_WIDTH][8]FieldElement align(align_bytes_buf) = undefined;
-        var chain_domains_stack: [64][8]FieldElement align(align_bytes_buf) = undefined;
-        var leaf_domain_buffer: [8]FieldElement align(align_bytes_buf) = undefined;
+                    // OPTIMIZATION: Pre-allocate reusable buffers outside loops to reduce allocations
+                    // These buffers are reused across all batches and remainder epochs
+                    // OPTIMIZATION: Align buffers for better cache performance
+                    const align_bytes_buf = if (SIMD_WIDTH == 8) 32 else 16;
+                    var simd_output_buffer: [SIMD_WIDTH][8]FieldElement align(align_bytes_buf) = undefined;
+                    var chain_domains_stack: [64][8]FieldElement align(align_bytes_buf) = undefined;
+                    var leaf_domain_buffer: [8]FieldElement align(align_bytes_buf) = undefined;
 
                     // Process complete SIMD-width batches
                     while (epoch_idx + SIMD_WIDTH <= chunk_end) {
