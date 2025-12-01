@@ -5,10 +5,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
     const enable_debug_logs = b.option(bool, "debug-logs", "Enable verbose std.debug logging") orelse false;
+    const enable_profile_keygen = b.option(bool, "enable-profile-keygen", "Enable detailed keygen profiling logs") orelse false;
     const simd_width = b.option(u32, "simd-width", "SIMD width (4 or 8, default: 4)") orelse 4;
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_debug_logs", enable_debug_logs);
+    build_options.addOption(bool, "enable_profile_keygen", enable_profile_keygen);
     build_options.addOption(u32, "simd_width", simd_width);
     const enable_lifetime_2_32 = b.option(bool, "enable-lifetime-2-32", "Enable lifetime 2^32 tests (default: false)") orelse false;
     build_options.addOption(bool, "enable_lifetime_2_32", enable_lifetime_2_32);

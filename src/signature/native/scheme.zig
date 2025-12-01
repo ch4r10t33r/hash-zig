@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const log = @import("../../utils/log.zig");
+const build_opts = @import("build_options");
 const FieldElement = @import("../../core/field.zig").FieldElement;
 const ParametersRustCompat = @import("../../core/params_rust_compat.zig").ParametersRustCompat;
 const ShakePRFtoF_8_7 = @import("../../prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
@@ -138,6 +139,7 @@ pub const HashSubTree = struct {
 };
 
 const CACHE_MAGIC = @as(u32, 0x42544331); // "BTC1"
+const CACHE_VERSION: u8 = 2;
 
 const BottomTreeCache = struct {
     allocator: std.mem.Allocator,
@@ -269,7 +271,7 @@ const BottomTreeCache = struct {
         if (magic != CACHE_MAGIC) return CacheError.InvalidCacheFile;
 
         const version = try reader.readByte();
-        if (version != 1) return CacheError.InvalidCacheFile;
+        if (version != CACHE_VERSION) return CacheError.InvalidCacheFile;
 
         const stored_log = try reader.readByte();
         _ = try reader.readInt(u16, .little); // reserved
@@ -363,7 +365,7 @@ const BottomTreeCache = struct {
         const writer = atomic_file.file.writer();
 
         writer.writeInt(u32, CACHE_MAGIC, .little) catch return;
-        writer.writeByte(1) catch return;
+        writer.writeByte(CACHE_VERSION) catch return;
         writer.writeByte(@intCast(log_lifetime)) catch return;
         writer.writeInt(u16, 0, .little) catch return;
         writer.writeInt(u32, @intCast(bottom_tree_index), .little) catch return;
@@ -789,8 +791,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         bottom_tree_index: usize,
         parameter: [5]FieldElement,
     ) !*HashSubTree {
-        // Debug: For bottom tree 0, log the inputs
-        if (bottom_tree_index == 0) {
+        // Debug: For bottom tree 0, log the inputs (only when debug logs are enabled)
+        if (build_opts.enable_debug_logs and bottom_tree_index == 0) {
             log.print("ZIG_TREEBUILD_INPUTS: bottom_tree_index=0, prf_key[0..8]=", .{});
             for (prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
             log.print(", parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ parameter[0].value, parameter[0].toCanonical() });
@@ -798,11 +800,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const num_chains = self.lifetime_params.dimension;
         _ = self.lifetime_params.base; // chain_length unused for now
 
-        // TEMPORARY: Disable cache to force rebuild with new scalar code
-        // This ensures trees are built with the fixed code, not cached old trees
-        const force_disable_cache = true;
+        // Cache control: allow cache by default, can be disabled via environment
+        // HASH_ZIG_DISABLE_BT_CACHE or by setting bottom_tree_cache.enabled = false.
+        const force_disable_cache = false;
         if (self.bottom_tree_cache.enabled and !force_disable_cache) {
-            log.print("ZIG_TREEBUILD_DEBUG: Cache enabled, attempting to load bottom tree {}\n", .{bottom_tree_index});
+            if (build_opts.enable_debug_logs) {
+                log.print("ZIG_TREEBUILD_DEBUG: Cache enabled, attempting to load bottom tree {}\n", .{bottom_tree_index});
+            }
             const cached = self.bottom_tree_cache.load(
                 self.allocator,
                 self.lifetime_params.log_lifetime,
@@ -814,12 +818,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 break :blk null;
             };
             if (cached) |tree| {
-                log.print("ZIG_TREEBUILD_DEBUG: Using cached bottom tree {}\n", .{bottom_tree_index});
+                if (build_opts.enable_debug_logs) {
+                    log.print("ZIG_TREEBUILD_DEBUG: Using cached bottom tree {}\n", .{bottom_tree_index});
+                }
                 return tree;
             }
-            log.print("ZIG_TREEBUILD_DEBUG: Cache miss, building bottom tree {}\n", .{bottom_tree_index});
+            if (build_opts.enable_debug_logs) {
+                log.print("ZIG_TREEBUILD_DEBUG: Cache miss, building bottom tree {}\n", .{bottom_tree_index});
+            }
         } else if (force_disable_cache) {
-            log.print("ZIG_TREEBUILD_DEBUG: Cache disabled, building bottom tree {}\n", .{bottom_tree_index});
+            if (build_opts.enable_debug_logs) {
+                log.print("ZIG_TREEBUILD_DEBUG: Cache disabled, building bottom tree {}\n", .{bottom_tree_index});
+            }
         }
 
         // Calculate leaves per bottom tree
@@ -839,10 +849,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         if (leafs_per_bottom_tree < min_parallel_leaves or num_cpus <= 1) {
             // Sequential processing for small workloads
-            log.print("ZIG_TREEBUILD_DEBUG: Entering sequential path, epoch_range={}..{}\n", .{ epoch_range_start, epoch_range_end });
+            if (build_opts.enable_debug_logs) {
+                log.print("ZIG_TREEBUILD_DEBUG: Entering sequential path, epoch_range={}..{}\n", .{ epoch_range_start, epoch_range_end });
+            }
             for (epoch_range_start..epoch_range_end) |epoch| {
                 // Debug: For epoch 1, verify the epoch value
-                if (epoch == 1 and bottom_tree_index == 0) {
+                if (build_opts.enable_debug_logs and epoch == 1 and bottom_tree_index == 0) {
                     log.print("ZIG_TREEBUILD_DEBUG: Processing epoch 1, bottom_tree_index=0, epoch_range_start={}, epoch_range_end={}\n", .{ epoch_range_start, epoch_range_end });
                 }
                 // Generate chain end domains (8-wide) for this epoch
@@ -866,7 +878,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             const epoch_u32 = @as(u32, @intCast(epoch));
                             const domain_elements = self.prfDomainElement(prf_key, epoch_u32, @as(u64, @intCast(chain_index)));
                             // Debug: For epoch 1, chain 0, log the inputs and PRF computation
-                            if (epoch == 1 and chain_index == 0 and bottom_tree_index == 0) {
+                            if (build_opts.enable_debug_logs and epoch == 1 and chain_index == 0 and bottom_tree_index == 0) {
                                 // Use log.print for visibility in release builds
                                 log.print("ZIG_TREEBUILD_SCALAR: Epoch 1, chain 0: prf_key[0..8]=", .{});
                                 for (prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
@@ -874,7 +886,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             }
                             batch_domains[i] = try self.computeHashChainDomain(domain_elements, epoch_u32, @as(u8, @intCast(chain_index)), parameter);
                             // Debug: For epoch 1, chain 0, log the result
-                            if (epoch == 1 and chain_index == 0 and bottom_tree_index == 0) {
+                            if (build_opts.enable_debug_logs and epoch == 1 and chain_index == 0 and bottom_tree_index == 0) {
                                 log.print("ZIG_TREEBUILD_SCALAR: Epoch 1, chain 0 result: batch_domains[{}][0]=0x{x:0>8}\n", .{ i, batch_domains[i][0].value });
                             }
                         }
@@ -919,7 +931,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 leaf_domains[epoch - epoch_range_start] = leaf_domain;
 
                 // Debug: Print leaf domain head for all epochs in first bottom tree
-                if (bottom_tree_index == 0) {
+                if (build_opts.enable_debug_logs and bottom_tree_index == 0) {
                     log.print("DEBUG: Bottom tree {} epoch {} leaf domain[0]: 0x{x}\n", .{ bottom_tree_index, epoch, leaf_domain[0].value });
                     if (epoch == 0) {
                         log.debugPrint("ZIG_TREEBUILD_LEAF: Epoch 0 leaf domain (Montgomery): ", .{});
@@ -934,11 +946,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         }
                         log.print("]\n", .{});
                         // Also print full leaf domain for comparison with verification
-                        log.debugPrint("ZIG_KEYGEN_DEBUG: Leaf domain epoch={} after reduction (Montgomery): ", .{epoch});
-                        for (0..hash_len) |h| {
-                            log.debugPrint("0x{x:0>8} ", .{leaf_domain[h].value});
+                        if (build_opts.enable_debug_logs) {
+                            log.debugPrint("ZIG_KEYGEN_DEBUG: Leaf domain epoch={} after reduction (Montgomery): ", .{epoch});
+                            for (0..hash_len) |h| {
+                                log.debugPrint("0x{x:0>8} ", .{leaf_domain[h].value});
+                            }
+                            log.debugPrint("\n", .{});
                         }
-                        log.debugPrint("\n", .{});
                     }
                     if (epoch == 1) {
                         log.debugPrint("ZIG_TREEBUILD_LEAF: Epoch 1 leaf domain (Montgomery): ", .{});
@@ -1103,12 +1117,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             };
                             const leaf_domain_slice = leaf_domain_buffer[0..ctx.hash_len];
 
-                            for (0..ctx.hash_len) |i| {
-                                ctx.leaf_domains[local_idx][i] = leaf_domain_slice[i];
-                            }
-                            for (ctx.hash_len..8) |i| {
-                                ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
-                            }
+                            // OPTIMIZATION: Use @memcpy for efficient copying
+                            @memcpy(ctx.leaf_domains[local_idx][0..ctx.hash_len], leaf_domain_slice[0..ctx.hash_len]);
+                            // Zero-pad remaining elements
+                            @memset(ctx.leaf_domains[local_idx][ctx.hash_len..8], FieldElement{ .value = 0 });
                         } else {
                             // Multiple epochs - use SIMD sponge hash
                             var simd_output_buffer: [SIMD_WIDTH][8]FieldElement = undefined;
@@ -1129,14 +1141,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             };
 
                             // Copy results to leaf_domains
+                            // OPTIMIZATION: Use @memcpy for efficient copying
                             for (0..actual_batch_size) |batch_offset| {
                                 const local_idx = batch_start_idx + batch_offset;
-                                for (0..ctx.hash_len) |i| {
-                                    ctx.leaf_domains[local_idx][i] = simd_output_buffer[batch_offset][i];
-                                }
-                                for (ctx.hash_len..8) |i| {
-                                    ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
-                                }
+                                @memcpy(ctx.leaf_domains[local_idx][0..ctx.hash_len], simd_output_buffer[batch_offset][0..ctx.hash_len]);
+                                // Zero-pad remaining elements
+                                @memset(ctx.leaf_domains[local_idx][ctx.hash_len..8], FieldElement{ .value = 0 });
                             }
                         }
 
@@ -1256,9 +1266,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             return error.InvalidBottomTree;
         }
 
-        // Debug: check root layer structure
+        // Debug: check root layer structure (only when debug logs enabled)
         const root_layer = bottom_layers[bottom_layers.len - 1];
-        if (bottom_tree_index == 1) {
+        if (build_opts.enable_debug_logs and bottom_tree_index == 1) {
             log.print("ZIG_BOTTOM_ROOT: bottom_tree_index={}, root_layer.nodes.len={}, root_layer.start_index={}\n", .{ bottom_tree_index, root_layer.nodes.len, root_layer.start_index });
         }
 
@@ -1271,7 +1281,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var bottom_root: [8]FieldElement = undefined;
         @memcpy(&bottom_root, &root_layer.nodes[root_node_index]);
 
-        if (bottom_tree_index == 1) {
+        if (build_opts.enable_debug_logs and bottom_tree_index == 1) {
             log.print("ZIG_BOTTOM_ROOT: Using root_node_index={}, root[0]=0x{x:0>8}\n", .{ root_node_index, bottom_root[0].value });
         }
 
@@ -1688,9 +1698,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             );
 
             // Update packed chain state
-            for (0..hash_len) |h| {
-                packed_chains[chain_index][h] = packed_next_stack[h];
-            }
+            // OPTIMIZATION: Use @memcpy for efficient copying (hash_len is small, typically 8)
+            @memcpy(packed_chains[chain_index][0..hash_len], packed_next_stack[0..hash_len]);
         }
     }
 
@@ -1725,11 +1734,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
         const batch_size = SIMD_WIDTH; // Process SIMD_WIDTH pairs at a time for SIMD optimization
 
+        // OPTIMIZATION: Create Poseidon2SIMD instance once and reuse it for all batches
+        // This avoids creating a new instance for each batch (Poseidon2SIMD.init is lightweight but still has overhead)
+        var simd_poseidon2 = poseidon2_simd.Poseidon2SIMD.init(self.allocator, self.poseidon2);
+
         var i = start_idx;
         // Use SIMD for batches, scalar for remaining pairs
         while (i + batch_size <= end_idx) : (i += batch_size) {
             // Process batch of SIMD_WIDTH pairs together using SIMD
-            try self.batchHashTreePairsSIMD(
+            try self.batchHashTreePairsSIMDWithInstance(
+                &simd_poseidon2, // Pass reusable instance
                 nodes,
                 parents,
                 parent_start,
@@ -1756,16 +1770,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Debug output removed for performance
 
             // Debug: For bottom tree 0, epoch 0, level 0, first parent (i=0), log the hash inputs
-            if (current_level == 0 and i == 0 and parent_start == 0) {
+            if (build_opts.enable_debug_logs and current_level == 0 and i == 0 and parent_start == 0) {
                 log.debugPrint("ZIG_TREEBUILD_HASH: Bottom tree 0, epoch 0, level 0, parent_pos 0: left[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical), right[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical), level={}, pos_in_level={}, param[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ left_slice[0].value, left_slice[0].toCanonical(), right_slice[0].value, right_slice[0].toCanonical(), current_level, parent_pos, parameter[0].value, parameter[0].toCanonical() });
             }
             // Debug: For bottom tree 0, log all hashes for levels 0-3 (for 2^8 lifetime debugging)
-            if (parent_start == 0 and current_level <= 3) {
+            if (build_opts.enable_debug_logs and parent_start == 0 and current_level <= 3) {
                 log.debugPrint("ZIG_TREEBUILD_HASH: Bottom tree 0, level {}, i={}, parent_pos {}: left[0]=0x{x:0>8}, right[0]=0x{x:0>8}, left_idx={}, right_idx={}\n", .{ current_level, i, parent_pos, left_slice[0].value, right_slice[0].value, left_idx, right_idx });
             }
 
             // Debug: For bottom tree 0, level 0, i=0, log inputs before hash call
-            if (current_level == 0 and i == 0 and parent_start == 0) {
+            if (build_opts.enable_debug_logs and current_level == 0 and i == 0 and parent_start == 0) {
                 log.debugPrint("ZIG_TREEBUILD_HASH_INPUT: Bottom tree 0, level 0, i=0: left[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical), right[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical), level={}, pos_in_level={}, param[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ left_slice[0].value, left_slice[0].toCanonical(), right_slice[0].value, right_slice[0].toCanonical(), current_level, parent_pos, parameter[0].value, parameter[0].toCanonical() });
             }
 
@@ -1780,21 +1794,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // Debug output removed for performance
             // Debug: For bottom tree 0, log all hash results for levels 0-3 (for 2^8 lifetime debugging)
-            if (parent_start == 0 and current_level <= 3) {
+            if (build_opts.enable_debug_logs and parent_start == 0 and current_level <= 3) {
                 log.debugPrint("ZIG_TREEBUILD_HASH: Bottom tree 0, level {}, i={}, parent_pos {}: left[0]=0x{x:0>8}, right[0]=0x{x:0>8}, parent[0]=0x{x:0>8}\n", .{ current_level, i, parent_pos, left_slice[0].value, right_slice[0].value, hash_result[0].value });
             }
-            // CRITICAL DEBUG: For bottom tree 0, level 0, i=0, always log (for root cause analysis)
-            // Remove parent_start condition to ensure it always shows
-            if (current_level == 0 and i == 0) {
+            // CRITICAL DEBUG: For bottom tree 0, level 0, i=0, log when enabled
+            if (build_opts.enable_debug_logs and current_level == 0 and i == 0) {
                 log.debugPrint("ZIG_TREEBUILD_CRITICAL: level={}, i={}, parent_start={}, parent_pos={}, left[0]=0x{x:0>8}, right[0]=0x{x:0>8}, result[0]=0x{x:0>8}\n", .{ current_level, i, parent_start, parent_pos, left_slice[0].value, right_slice[0].value, hash_result[0].value });
-                // Debug output removed for performance
             }
             // Debug: For bottom tree 0, level 1, i=0, log the result (should match node 0's result)
-            if (parent_start == 0 and current_level == 1 and i == 0) {
+            if (build_opts.enable_debug_logs and parent_start == 0 and current_level == 1 and i == 0) {
                 log.debugPrint("ZIG_TREEBUILD_HASH: Bottom tree 0, level 1, i=0, parent_pos {}: parent[0]=0x{x:0>8} (should match node 0's result)\n", .{ parent_pos, hash_result[0].value });
             }
             // Debug: For first top tree hash (level=16, i=0, parent_start=0), log the result
-            if (current_level == 16 and i == 0 and parent_start == 0) {
+            if (build_opts.enable_debug_logs and current_level == 16 and i == 0 and parent_start == 0) {
                 log.debugPrint("ZIG_TREEBUILD_HASH: First top tree hash (level=16, i=0, parent_pos=0): left[0]=0x{x:0>8}, right[0]=0x{x:0>8}, parent[0]=0x{x:0>8}\n", .{ left_slice[0].value, right_slice[0].value, hash_result[0].value });
             }
 
@@ -1803,9 +1815,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
     }
 
-    /// Batch hash tree pairs using SIMD Poseidon2-24
-    inline fn batchHashTreePairsSIMD(
+    /// Batch hash tree pairs using SIMD Poseidon2-24 (with reusable instance)
+    inline fn batchHashTreePairsSIMDWithInstance(
         self: *GeneralizedXMSSSignatureScheme,
+        simd_poseidon2: *poseidon2_simd.Poseidon2SIMD, // Reusable instance
         nodes: [][8]FieldElement,
         parents: [][8]FieldElement,
         parent_start: usize,
@@ -1896,15 +1909,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // CRITICAL OPTIMIZATION: Use stack-allocated buffer instead of heap allocation
         // hash_len is at most 8, so 8 PackedF = 128 bytes (safe for stack)
         var packed_hash_results_stack: [8]simd_utils.PackedF = undefined;
-        var simd_poseidon2 = poseidon2_simd.Poseidon2SIMD.init(self.allocator, self.poseidon2);
+        // OPTIMIZATION: Use passed instance instead of creating new one
         try simd_poseidon2.compress24SIMD(packed_input_slice, hash_len, packed_hash_results_stack[0..hash_len]);
 
         // Extract results for each lane
+        // OPTIMIZATION: Use @memcpy for efficient copying where possible
         for (0..actual_batch_size) |lane| {
             const pair_idx = start_idx + lane;
+            // Copy hash_len elements
             for (0..hash_len) |h_idx| {
                 parents[pair_idx][h_idx] = FieldElement{ .value = packed_hash_results_stack[h_idx].values[lane] };
             }
+            // Zero-pad remaining elements
             @memset(parents[pair_idx][hash_len..8], FieldElement{ .value = 0 });
 
             // Debug output removed for performance
@@ -3521,14 +3537,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         const root_array = layers[layers.len - 1].nodes[0];
-        log.print("DEBUG: Final top tree root array: {any}\n", .{root_array});
+        if (build_opts.enable_debug_logs) {
+            log.print("DEBUG: Final top tree root array: {any}\n", .{root_array});
+        }
         return root_array;
     }
 
     /// Build bottom tree from leaf hashes and return as array of 8 field elements
     fn buildBottomTreeAsArray(self: *GeneralizedXMSSSignatureScheme, leaf_hashes: []FieldElement, parameter: [5]FieldElement) ![8]FieldElement {
         // Debug: Print input information
-        log.print("DEBUG: buildBottomTreeAsArray called with {} leaf hashes\n", .{leaf_hashes.len});
+        if (build_opts.enable_debug_logs) {
+            log.print("DEBUG: buildBottomTreeAsArray called with {} leaf hashes\n", .{leaf_hashes.len});
+        }
 
         // Instead of building to a single root, build to exactly 8 field elements
         // This matches the Rust implementation which produces 8 different values
@@ -3651,6 +3671,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         prf_key: [32]u8,
         rng_already_consumed: bool,
     ) !KeyGenResult {
+        const profile_keygen = @hasDecl(build_opts, "enable_profile_keygen") and build_opts.enable_profile_keygen;
+        var total_timer: std.time.Timer = undefined;
+        var bottom_time_ns: u64 = 0;
+        var top_time_ns: u64 = 0;
+        var bottom_start_ns: u64 = 0;
+        var top_start_ns: u64 = 0;
+        if (profile_keygen) {
+            total_timer = try std.time.Timer.start();
+            bottom_start_ns = 0;
+            top_start_ns = 0;
+        }
+
         const lifetime = @as(usize, 1) << @intCast(self.lifetime_params.log_lifetime);
 
         // Validate activation parameters
@@ -3687,6 +3719,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Note: Worker threads mutate this array, so we need a mutable reference
         const roots_of_bottom_trees = try self.allocator.alloc([8]FieldElement, num_bottom_trees);
         defer self.allocator.free(roots_of_bottom_trees);
+
+        if (profile_keygen) {
+            // Bottom tree generation starts here
+            bottom_start_ns = total_timer.read();
+        }
 
         log.print("DEBUG: Generating {} bottom trees in parallel\n", .{num_bottom_trees});
         log.print("DEBUG: PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
@@ -3858,12 +3895,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Log roots for first tree
-        if (num_bottom_trees > 0) {
+        if (build_opts.enable_debug_logs and num_bottom_trees > 0) {
             log.print("ZIG_KEYGEN_DEBUG: Bottom tree {} root: ", .{tree_indices[0]});
             for (roots_of_bottom_trees[0]) |fe| {
                 log.print("0x{x:0>8} ", .{fe.value});
             }
             log.print("\n", .{});
+        }
+
+        if (profile_keygen) {
+            // Bottom trees done
+            const now = total_timer.read();
+            bottom_time_ns = now - bottom_start_ns;
+            top_start_ns = now;
         }
 
         // Store first two trees (left and right) for secret key
@@ -3909,13 +3953,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         // Debug: log all roots before building top tree
-        log.debugPrint("ZIG_KEYGEN_DEBUG: All {} roots before building top tree:\n", .{roots_of_bottom_trees.len});
-        for (roots_of_bottom_trees, 0..) |root, i| {
-            log.debugPrint("ZIG_KEYGEN_DEBUG:   Root {} (bottom tree index {}): ", .{ i, tree_indices[i] });
-            for (root) |fe| {
-                log.debugPrint("0x{x:0>8} ", .{fe.value});
+        if (build_opts.enable_debug_logs) {
+            log.debugPrint("ZIG_KEYGEN_DEBUG: All {} roots before building top tree:\n", .{roots_of_bottom_trees.len});
+            for (roots_of_bottom_trees, 0..) |root, i| {
+                log.debugPrint("ZIG_KEYGEN_DEBUG:   Root {} (bottom tree index {}): ", .{ i, tree_indices[i] });
+                for (root) |fe| {
+                    log.debugPrint("0x{x:0>8} ", .{fe.value});
+                }
+                log.debugPrint("\n", .{});
             }
-            log.debugPrint("\n", .{});
         }
 
         // Build top tree from bottom tree roots and get root as array
@@ -3932,22 +3978,26 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
         const root_array = top_layers[top_layers.len - 1].nodes[0];
 
-        // Debug: log the computed root (canonical)
-        log.print("ZIG_KEYGEN_DEBUG: Computed root during keygen (canonical): ", .{});
-        for (root_array) |fe| {
-            log.print("0x{x:0>8} ", .{fe.value});
+        // Debug: log the computed root (canonical) and Montgomery (only when debug logs enabled)
+        if (build_opts.enable_debug_logs) {
+            log.print("ZIG_KEYGEN_DEBUG: Computed root during keygen (canonical): ", .{});
+            for (root_array) |fe| {
+                log.print("0x{x:0>8} ", .{fe.value});
+            }
+            log.print("\n", .{});
         }
-        log.print("\n", .{});
 
         // Roots are already represented in Montgomery form in our FieldElement type.
         const root_monty: [8]FieldElement = root_array;
 
-        // Debug: log the root in Montgomery form
-        log.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
-        for (root_monty) |fe| {
-            log.print("0x{x:0>8} ", .{fe.value});
+        if (build_opts.enable_debug_logs) {
+            // Debug: log the root in Montgomery form
+            log.print("ZIG_KEYGEN_DEBUG: Root in Montgomery form: ", .{});
+            for (root_monty) |fe| {
+                log.print("0x{x:0>8} ", .{fe.value});
+            }
+            log.print("\n", .{});
         }
-        log.print("\n", .{});
 
         // Create a top tree for the secret key, preserving the layered structure for future path computation
         const top_tree = try HashSubTree.initWithLayers(self.allocator, root_array, top_layers);
@@ -3956,23 +4006,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Create public and secret keys (store root in Montgomery form to match Rust)
         const public_key = GeneralizedXMSSPublicKey.init(root_monty, parameter);
 
-        // Debug: log the public key root
-        log.print("ZIG_KEYGEN_DEBUG: Public key root: ", .{});
-        for (public_key.root) |fe| {
-            log.print("0x{x:0>8} ", .{fe.value});
-        }
-        log.print("\n", .{});
+        // Debug: log the public key root and parameter (only when debug logs enabled)
+        if (build_opts.enable_debug_logs) {
+            log.print("ZIG_KEYGEN_DEBUG: Public key root: ", .{});
+            for (public_key.root) |fe| {
+                log.print("0x{x:0>8} ", .{fe.value});
+            }
+            log.print("\n", .{});
 
-        // CRITICAL DEBUG: Print parameter BEFORE creating secret key
-        log.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{});
-        for (0..5) |i| {
-            log.print("0x{x:0>8} ", .{parameter[i].toCanonical()});
+            // CRITICAL DEBUG: Print parameter BEFORE creating secret key
+            log.print("ZIG_KEYGEN_DEBUG: Parameter passed to secret_key.init (canonical): ", .{});
+            for (0..5) |i| {
+                log.print("0x{x:0>8} ", .{parameter[i].toCanonical()});
+            }
+            log.print("(Montgomery: ", .{});
+            for (0..5) |i| {
+                log.print("0x{x:0>8} ", .{parameter[i].toMontgomery()});
+            }
+            log.print(")\n", .{});
         }
-        log.print("(Montgomery: ", .{});
-        for (0..5) |i| {
-            log.print("0x{x:0>8} ", .{parameter[i].toMontgomery()});
-        }
-        log.print(")\n", .{});
 
         const secret_key = try GeneralizedXMSSSecretKey.init(
             self.allocator,
@@ -3987,12 +4039,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         );
 
         // CRITICAL: Compute chain domain for epoch 1, chain 0 to verify it matches what we'll get during signing
-        const keygen_prf_domain = self.prfDomainElement(prf_key, 1, 0);
-        const keygen_chain_domain = try self.computeHashChainDomain(keygen_prf_domain, 1, 0, parameter);
-        log.print("ZIG_KEYGEN_VERIFY: Chain domain for epoch 1, chain 0 during keygen: chain_domain[0]=0x{x:0>8}\n", .{keygen_chain_domain[0].value});
-        log.print("ZIG_KEYGEN_VERIFY: PRF key[0..8]=", .{});
-        for (prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
-        log.print(", parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ parameter[0].value, parameter[0].toCanonical() });
+        if (build_opts.enable_debug_logs) {
+            const keygen_prf_domain = self.prfDomainElement(prf_key, 1, 0);
+            const keygen_chain_domain = try self.computeHashChainDomain(keygen_prf_domain, 1, 0, parameter);
+            log.print("ZIG_KEYGEN_VERIFY: Chain domain for epoch 1, chain 0 during keygen: chain_domain[0]=0x{x:0>8}\n", .{keygen_chain_domain[0].value});
+            log.print("ZIG_KEYGEN_VERIFY: PRF key[0..8]=", .{});
+            for (prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
+            log.print(", parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ parameter[0].value, parameter[0].toCanonical() });
+        }
 
         // CRITICAL DEBUG: Verify the parameter is correctly stored in the secret key
         log.print("ZIG_KEYGEN_DEBUG: Secret key parameter after init (canonical): ", .{});
@@ -4004,6 +4058,24 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             log.print("0x{x:0>8} ", .{secret_key.parameter[i].toMontgomery()});
         }
         log.print(")\n", .{});
+
+        if (profile_keygen) {
+            const now = total_timer.read();
+            top_time_ns = now - top_start_ns;
+            const total_ns = now;
+
+            const total_sec: f64 = @as(f64, @floatFromInt(total_ns)) / 1_000_000_000.0;
+            const bottom_sec: f64 = @as(f64, @floatFromInt(bottom_time_ns)) / 1_000_000_000.0;
+            const top_sec: f64 = @as(f64, @floatFromInt(top_time_ns)) / 1_000_000_000.0;
+
+            const bottom_pct: f64 = if (total_sec > 0) (bottom_sec / total_sec) * 100.0 else 0.0;
+            const top_pct: f64 = if (total_sec > 0) (top_sec / total_sec) * 100.0 else 0.0;
+
+            log.print(
+                "PROFILE_KEYGEN: bottom={d:.3}s ({d:.1}%), top={d:.3}s ({d:.1}%), total={d:.3}s\n",
+                .{ bottom_sec, bottom_pct, top_sec, top_pct, total_sec },
+            );
+        }
 
         return .{
             .public_key = public_key,
