@@ -19,6 +19,7 @@ const rng_flow = @import("rng_flow.zig");
 const poseidon_top_level = @import("poseidon_top_level.zig");
 const target_sum_encoding = @import("target_sum_encoding.zig");
 const simd_utils = @import("simd_utils.zig");
+const ssz = @import("ssz");
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;

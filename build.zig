@@ -42,6 +42,13 @@ pub fn build(b: *std.Build) void {
     const enable_lifetime_2_32 = b.option(bool, "enable-lifetime-2-32", "Enable lifetime 2^32 tests (default: false)") orelse false;
     build_options.addOption(bool, "enable_lifetime_2_32", enable_lifetime_2_32);
 
+    // Add ssz.zig dependency
+    const ssz_dep = b.dependency("ssz", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const ssz_module = ssz_dep.module("ssz.zig");
+
     // Create the module
     const hash_zig_module = b.addModule("hash-zig", .{
         .root_source_file = b.path("src/root.zig"),
@@ -49,6 +56,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     hash_zig_module.addOptions("build_options", build_options);
+    hash_zig_module.addImport("ssz", ssz_module);
 
     // Library
     const lib = b.addLibrary(.{
