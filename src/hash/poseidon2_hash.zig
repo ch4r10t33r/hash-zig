@@ -43,7 +43,7 @@ pub const Poseidon2RustCompat = struct {
         // Use Poseidon2-16 for chain compression (matching Rust PoseidonTweakHash)
         const full_output = try self.applyPoseidon2_16(allocator, input);
         defer allocator.free(full_output);
-        
+
         // Return exactly hash_len elements (matching Rust's poseidon_compress with OUT_LEN=hash_len)
         // For lifetime 2^18: hash_len=7, for lifetime 2^8/2^32: hash_len=8
         const output = try allocator.alloc(FieldElement, hash_len);

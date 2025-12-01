@@ -595,7 +595,7 @@ pub fn applyTopLevelPoseidonMessageHash(
             log.print(" 0x{x:0>8}", .{m.toCanonical()});
         }
         log.print(" iter_idx: 0x{x:0>8} (i={})\n", .{ combined_input[ITER_INPUT_LEN - 1].toCanonical(), i });
-        
+
         // Also print the combined input in canonical form
         log.print("ZIG_POS_INPUT_CANONICAL (24 values):", .{});
         for (0..24) |j| {
@@ -605,7 +605,7 @@ pub fn applyTopLevelPoseidonMessageHash(
             }
         }
         log.print("\n", .{});
-        
+
         // Print output in canonical form
         log.print("ZIG_POS_OUTPUT_CANONICAL (15 values):", .{});
         for (0..POS_OUTPUT_LEN_PER_INV_FE) |j| {

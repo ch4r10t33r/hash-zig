@@ -23,12 +23,12 @@ var detection_mutex = std.Thread.Mutex{};
 /// a C function or external library for CPUID
 fn detectAVX512() bool {
     const target = builtin.target;
-    
+
     // Only check on x86-64
     if (target.cpu.arch != .x86_64) {
         return false;
     }
-    
+
     // For now, we'll use a conservative approach:
     // If the build option explicitly sets simd-width=8, assume AVX-512 is available
     // Otherwise, default to 4-wide for safety
@@ -38,7 +38,7 @@ fn detectAVX512() bool {
         // User explicitly requested 8-wide, assume they know their CPU supports it
         return true;
     }
-    
+
     // Default to false (4-wide) for safety
     return false;
 }
@@ -48,17 +48,17 @@ fn detectAVX512() bool {
 /// Falls back to 4 if detection fails or AVX-512 is not available
 pub fn detectOptimalSIMDWidth() u32 {
     const target = builtin.target;
-    
+
     // For non-x86-64 architectures (ARM, etc.), always use 4-wide
     if (target.cpu.arch != .x86_64) {
         return 4;
     }
-    
+
     // For x86-64, check for AVX-512 support
     if (detectAVX512()) {
         return 8;
     }
-    
+
     // Fallback to 4-wide (SSE4.1 is assumed available on x86-64)
     return 4;
 }
@@ -76,15 +76,15 @@ pub fn getSIMDWidth() u32 {
             return build_width;
         }
     }
-    
+
     // Use cached detection result
     detection_mutex.lock();
     defer detection_mutex.unlock();
-    
+
     if (detected_simd_width) |width| {
         return width;
     }
-    
+
     // Detect and cache
     const width = detectOptimalSIMDWidth();
     detected_simd_width = width;
@@ -115,9 +115,9 @@ pub fn printSIMDInfo() void {
         }
         break :blk 4;
     };
-    
+
     const detected_width = getSIMDWidth();
-    
+
     if (target.cpu.arch == .x86_64) {
         if (detected_width == 8) {
             std.debug.print("SIMD: Detected AVX-512 support (8-wide SIMD available)\n", .{});
@@ -132,4 +132,3 @@ pub fn printSIMDInfo() void {
         std.debug.print("SIMD: Using 4-wide SIMD (ARM/NEON - 8-wide not available on this architecture)\n", .{});
     }
 }
-

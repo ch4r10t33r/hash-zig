@@ -56,27 +56,27 @@ pub const Poseidon2SIMD = struct {
                 // 8-wide SIMD path
                 var packed_states: [WIDTH_16]@Vector(8, u32) = undefined;
 
-            // Initialize state from packed input
-            for (0..WIDTH_16) |i| {
-                if (i < input_len) {
-                    packed_states[i] = packed_input[i].values;
-                } else {
-                    packed_states[i] = @splat(@as(u32, 0));
+                // Initialize state from packed input
+                for (0..WIDTH_16) |i| {
+                    if (i < input_len) {
+                        packed_states[i] = packed_input[i].values;
+                    } else {
+                        packed_states[i] = @splat(@as(u32, 0));
+                    }
                 }
-            }
 
-            const packed_input_states = packed_states;
+                const packed_input_states = packed_states;
                 permute16SIMD8Impl(self, &packed_states);
 
-            // Feed-forward
-            for (0..WIDTH_16) |i| {
+                // Feed-forward
+                for (0..WIDTH_16) |i| {
                     packed_states[i] = addSIMD8(packed_states[i], packed_input_states[i]);
-            }
+                }
 
                 // Write directly to output buffer (no allocation!)
-            for (0..out_len) |i| {
-                packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
-            }
+                for (0..out_len) |i| {
+                    packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                }
             } else {
                 // 4-wide SIMD path
                 // OPTIMIZATION: Align for NEON/SSE (16-byte alignment)
@@ -86,7 +86,7 @@ pub const Poseidon2SIMD = struct {
                 for (0..WIDTH_16) |i| {
                     if (i < input_len) {
                         packed_states[i] = packed_input[i].values;
-        } else {
+                    } else {
                         packed_states[i] = @splat(@as(u32, 0));
                     }
                 }
@@ -203,16 +203,16 @@ pub const Poseidon2SIMD = struct {
                 // OPTIMIZATION: Align for AVX-512 (32-byte alignment)
                 var packed_states: [WIDTH_24]@Vector(8, u32) align(32) = undefined;
 
-            for (0..WIDTH_24) |i| {
-                if (i < input_len) {
-                    packed_states[i] = packed_input[i].values;
-                } else {
-                    packed_states[i] = @splat(@as(u32, 0));
+                for (0..WIDTH_24) |i| {
+                    if (i < input_len) {
+                        packed_states[i] = packed_input[i].values;
+                    } else {
+                        packed_states[i] = @splat(@as(u32, 0));
+                    }
                 }
-            }
 
                 var packed_input_states: [WIDTH_24]@Vector(8, u32) = undefined;
-            for (0..WIDTH_24) |i| {
+                for (0..WIDTH_24) |i| {
                     packed_input_states[i] = packed_states[i];
                 }
 
@@ -222,9 +222,9 @@ pub const Poseidon2SIMD = struct {
                     packed_states[i] = addSIMD8(packed_states[i], packed_input_states[i]);
                 }
 
-            for (0..out_len) |i| {
-                packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
-            }
+                for (0..out_len) |i| {
+                    packed_output[i] = simd_utils.PackedF{ .values = packed_states[i] };
+                }
             } else {
                 // 4-wide SIMD path
                 // OPTIMIZATION: Align for NEON/SSE (16-byte alignment)
@@ -233,7 +233,7 @@ pub const Poseidon2SIMD = struct {
                 for (0..WIDTH_24) |i| {
                     if (i < input_len) {
                         packed_states[i] = packed_input[i].values;
-        } else {
+                    } else {
                         packed_states[i] = @splat(@as(u32, 0));
                     }
                 }
@@ -1245,7 +1245,7 @@ pub const Poseidon2SIMD = struct {
             sums[1] = @splat(@as(u32, 0));
             sums[2] = @splat(@as(u32, 0));
             sums[3] = @splat(@as(u32, 0));
-            
+
             // OPTIMIZATION: Unroll the while loop (WIDTH=16, so 4 iterations)
             sums[0] = addSIMD(sums[0], packed_states[0]);
             sums[1] = addSIMD(sums[1], packed_states[1]);
@@ -1319,7 +1319,7 @@ pub const Poseidon2SIMD = struct {
             sums[1] = @splat(@as(u32, 0));
             sums[2] = @splat(@as(u32, 0));
             sums[3] = @splat(@as(u32, 0));
-            
+
             // OPTIMIZATION: Unroll the while loop (WIDTH=16, so 4 iterations)
             sums[0] = addSIMD(sums[0], packed_states[0]);
             sums[1] = addSIMD(sums[1], packed_states[1]);
