@@ -1066,6 +1066,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                         // Generate and pack chain starting points for all epochs in batch
                         // Note: actual_batch_size is always SIMD_WIDTH for complete batches
+                        // OPTIMIZATION: Pre-compute zero-packed value outside loop
+                        const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
                         for (0..ctx.num_chains) |chain_idx| {
                             // Generate starting points for this chain across all epochs in batch
                             var starts: [SIMD_WIDTH][8]u32 = undefined;
@@ -1074,16 +1076,38 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             }
 
                             // Transpose: [lane][element] -> [element][lane] for SIMD processing
+                            // OPTIMIZATION: Unroll small loops for better performance
                             for (0..ctx.hash_len) |h| {
                                 var values: [SIMD_WIDTH]u32 = undefined;
-                                for (0..SIMD_WIDTH) |lane| {
-                                    values[lane] = starts[lane][h];
+                                // Unroll for common SIMD widths (4 or 8)
+                                if (SIMD_WIDTH == 4) {
+                                    values[0] = starts[0][h];
+                                    values[1] = starts[1][h];
+                                    values[2] = starts[2][h];
+                                    values[3] = starts[3][h];
+                                } else if (SIMD_WIDTH == 8) {
+                                    values[0] = starts[0][h];
+                                    values[1] = starts[1][h];
+                                    values[2] = starts[2][h];
+                                    values[3] = starts[3][h];
+                                    values[4] = starts[4][h];
+                                    values[5] = starts[5][h];
+                                    values[6] = starts[6][h];
+                                    values[7] = starts[7][h];
+                                } else {
+                                    // Fallback for other widths
+                                    for (0..SIMD_WIDTH) |lane| {
+                                        values[lane] = starts[lane][h];
+                                    }
                                 }
                                 packed_chains_stack[chain_idx][h] = simd_utils.PackedF{ .values = values };
                             }
                             // Zero-pad remaining hash_len elements if needed
-                            for (ctx.hash_len..8) |h| {
-                                packed_chains_stack[chain_idx][h] = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+                            // OPTIMIZATION: Only pad if needed (hash_len < 8)
+                            if (ctx.hash_len < 8) {
+                                for (ctx.hash_len..8) |h| {
+                                    packed_chains_stack[chain_idx][h] = zero_packed;
+                                }
                             }
                         }
 
@@ -1698,9 +1722,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Copy input (already packed)
         @memcpy(packed_combined_input[7 .. 7 + hash_len], packed_input[0..hash_len]);
 
-        // Pad remaining with zeros if needed
-        for (7 + hash_len..CHAIN_COMPRESSION_WIDTH) |i| {
-            packed_combined_input[i] = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+        // OPTIMIZATION: Pad remaining with zeros using @memset for better performance
+        // Only pad if there's actually something to pad (hash_len < 8)
+        if (7 + hash_len < CHAIN_COMPRESSION_WIDTH) {
+            const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+            // Use loop for small range (typically 0-1 iterations)
+            for (7 + hash_len..CHAIN_COMPRESSION_WIDTH) |i| {
+                packed_combined_input[i] = zero_packed;
+            }
         }
 
         // Use SIMD Poseidon2 compression - write directly to output buffer (no allocation!)
