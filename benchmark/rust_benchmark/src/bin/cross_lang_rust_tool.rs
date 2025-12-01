@@ -1,21 +1,18 @@
 //! Rust tool for cross-language compatibility testing
-//! 
+//!
 //! This tool provides:
 //! - Key generation (supports lifetime 2^8, 2^18, 2^32)
-//! - Serialization of secret/public keys to bincode JSON
+//! - Serialization of secret/public keys to JSON
 //! - Signing messages
 //! - Verifying signatures from Zig
 
 use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
 use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_18::SIGTopLevelTargetSumLifetime18Dim64Base8;
 use leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
-use leansig::signature::{SignatureScheme, SignatureSchemeSecretKey};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json;
-use rand::{SeedableRng, rngs::StdRng, RngCore};
+use leansig::signature::SignatureScheme;
+use rand::{rngs::StdRng, SeedableRng};
 use std::env;
 use std::fs;
-use std::io::Write;
 
 #[derive(Debug, Clone, Copy)]
 enum LifetimeTag {
@@ -130,8 +127,8 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
     match lifetime {
         LifetimeTag::Pow8 => {
             let mut rng = StdRng::from_seed(seed);
-            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
-            
+            let (public_key, secret_key) = SIGTopLevelTargetSumLifetime8Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
+
             // Serialize secret key to bincode JSON
             let sk_json = serde_json::to_string_pretty(&secret_key)?;
             fs::write("tmp/rust_sk.json", &sk_json)?;
@@ -144,8 +141,8 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
         }
         LifetimeTag::Pow18 => {
             let mut rng = StdRng::from_seed(seed);
-            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime18Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
-            
+            let (public_key, secret_key) = SIGTopLevelTargetSumLifetime18Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
+
             // Serialize secret key to bincode JSON
             let sk_json = serde_json::to_string_pretty(&secret_key)?;
             fs::write("tmp/rust_sk.json", &sk_json)?;
@@ -157,18 +154,18 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag) -> Result<()
             eprintln!("✅ Public key saved to tmp/rust_pk.json");
         }
         LifetimeTag::Pow32 => {
-    let mut rng = StdRng::from_seed(seed);
-            let (public_key, mut secret_key) = SIGTopLevelTargetSumLifetime32Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
-    
-    // Serialize secret key to bincode JSON
-    let sk_json = serde_json::to_string_pretty(&secret_key)?;
-    fs::write("tmp/rust_sk.json", &sk_json)?;
-    eprintln!("✅ Secret key saved to tmp/rust_sk.json");
-    
-    // Serialize public key to bincode JSON
-    let pk_json = serde_json::to_string_pretty(&public_key)?;
-    fs::write("tmp/rust_pk.json", &pk_json)?;
-    eprintln!("✅ Public key saved to tmp/rust_pk.json");
+            let mut rng = StdRng::from_seed(seed);
+            let (public_key, secret_key) = SIGTopLevelTargetSumLifetime32Dim64Base8::key_gen(&mut rng, 0, num_active_epochs);
+
+            // Serialize secret key to JSON
+            let sk_json = serde_json::to_string_pretty(&secret_key)?;
+            fs::write("tmp/rust_sk.json", &sk_json)?;
+            eprintln!("✅ Secret key saved to tmp/rust_sk.json");
+
+            // Serialize public key to JSON
+            let pk_json = serde_json::to_string_pretty(&public_key)?;
+            fs::write("tmp/rust_pk.json", &pk_json)?;
+            eprintln!("✅ Public key saved to tmp/rust_pk.json");
         }
     }
     

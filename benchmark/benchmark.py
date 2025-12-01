@@ -198,6 +198,11 @@ def zig_sign_timeout(cfg: ScenarioConfig, timeout_2_32: int) -> int:
 
 def ensure_rust_binary() -> None:
     print("Building cross-lang-rust-tool (Rust)...")
+    # Always force a fresh build of the Rust helper binary.
+    # This avoids accidentally reusing a stale binary from a previous run.
+    if RUST_BIN.exists():
+        print(f"Removing existing Rust binary: {RUST_BIN}")
+        RUST_BIN.unlink()
     result = run_command(
         ["cargo", "build", "--release", "--bin", "cross_lang_rust_tool"],
         cwd=RUST_PROJECT,
@@ -209,6 +214,11 @@ def ensure_rust_binary() -> None:
 
 def ensure_zig_binary() -> None:
     print("Building cross-lang-zig-tool (Zig)...")
+    # Always force a fresh build of the Zig helper binary.
+    # This avoids accidentally reusing a stale binary from a previous run.
+    if ZIG_BIN.exists():
+        print(f"Removing existing Zig binary: {ZIG_BIN}")
+        ZIG_BIN.unlink()
     result = run_command(
         ["zig", "build", "install", "-Doptimize=ReleaseFast", "-Ddebug-logs=false"],
         cwd=REPO_ROOT,
