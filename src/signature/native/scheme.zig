@@ -808,6 +808,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const num_chains = self.lifetime_params.dimension;
         _ = self.lifetime_params.base; // chain_length unused for now
 
+        // OPTIMIZATION: Profile cache and computation times
+        const profile_keygen = @hasDecl(build_opts, "enable_profile_keygen") and build_opts.enable_profile_keygen;
+        var cache_timer: std.time.Timer = undefined;
+        var leaf_timer: std.time.Timer = undefined;
+        var tree_timer: std.time.Timer = undefined;
+        var cache_time_ns: u64 = 0;
+        var leaf_time_ns: u64 = 0;
+        var tree_time_ns: u64 = 0;
+        if (profile_keygen) {
+            cache_timer = try std.time.Timer.start();
+        }
+
         // Cache control: allow cache by default, can be disabled via environment
         // HASH_ZIG_DISABLE_BT_CACHE or by setting bottom_tree_cache.enabled = false.
         const force_disable_cache = false;
@@ -825,9 +837,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 log.print("ZIG_CACHE: failed to load bottom tree {}: {s}\n", .{ bottom_tree_index, @errorName(err) });
                 break :blk null;
             };
+            if (profile_keygen) {
+                cache_time_ns = cache_timer.read();
+            }
             if (cached) |tree| {
                 if (build_opts.enable_debug_logs) {
                     log.print("ZIG_TREEBUILD_DEBUG: Using cached bottom tree {}\n", .{bottom_tree_index});
+                }
+                if (profile_keygen) {
+                    const cache_sec = @as(f64, @floatFromInt(cache_time_ns)) / 1_000_000_000.0;
+                    log.print("PROFILE_BTREE: tree={} cache_hit={d:.3}ms\n", .{ bottom_tree_index, cache_sec * 1000.0 });
                 }
                 return tree;
             }
@@ -838,6 +857,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (build_opts.enable_debug_logs) {
                 log.print("ZIG_TREEBUILD_DEBUG: Cache disabled, building bottom tree {}\n", .{bottom_tree_index});
             }
+        }
+        if (profile_keygen) {
+            cache_time_ns = cache_timer.read();
+            leaf_timer = try std.time.Timer.start();
         }
 
         // Calculate leaves per bottom tree
@@ -1291,8 +1314,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Build bottom tree layers from leaf domains (shared with signing path)
         // CRITICAL: Store layers so they can be reused during signing (major performance optimization!)
+        if (profile_keygen) {
+            leaf_time_ns = leaf_timer.read();
+            tree_timer = try std.time.Timer.start();
+        }
         const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains, parameter, bottom_tree_index);
         // Don't defer free - we're transferring ownership to HashSubTree
+        if (profile_keygen) {
+            tree_time_ns = tree_timer.read();
+            const cache_sec = @as(f64, @floatFromInt(cache_time_ns)) / 1_000_000_000.0;
+            const leaf_sec = @as(f64, @floatFromInt(leaf_time_ns)) / 1_000_000_000.0;
+            const tree_sec = @as(f64, @floatFromInt(tree_time_ns)) / 1_000_000_000.0;
+            log.print("PROFILE_BTREE: tree={} cache={d:.3}ms leaf_gen={d:.3}ms tree_build={d:.3}ms total={d:.3}ms\n", .{
+                bottom_tree_index,
+                cache_sec * 1000.0,
+                leaf_sec * 1000.0,
+                tree_sec * 1000.0,
+                (cache_sec + leaf_sec + tree_sec) * 1000.0,
+            });
+        }
 
         if (bottom_layers.len == 0 or bottom_layers[bottom_layers.len - 1].nodes.len == 0) {
             for (bottom_layers) |layer| self.allocator.free(layer.nodes);
@@ -1320,6 +1360,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         if (self.bottom_tree_cache.enabled) {
+            if (profile_keygen) {
+                cache_timer.reset();
+            }
             self.bottom_tree_cache.store(
                 self.lifetime_params.log_lifetime,
                 prf_key,
@@ -1328,6 +1371,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 bottom_root,
                 bottom_layers,
             );
+            if (profile_keygen) {
+                const store_time_ns = cache_timer.read();
+                const store_sec = @as(f64, @floatFromInt(store_time_ns)) / 1_000_000_000.0;
+                log.print("PROFILE_BTREE: tree={} cache_store={d:.3}ms\n", .{ bottom_tree_index, store_sec * 1000.0 });
+            }
         }
 
         // Store layers in HashSubTree so they can be reused during signing (major optimization!)
