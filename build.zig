@@ -344,6 +344,24 @@ pub fn build(b: *std.Build) void {
     const parallel_benchmark_exe_step = b.step("benchmark-parallel", "Run parallel tree generation benchmark");
     parallel_benchmark_exe_step.dependOn(&run_parallel_benchmark_exe.step);
 
+    // Verification benchmark
+    const verify_benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark_verify.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    verify_benchmark_module.addImport("hash-zig", hash_zig_module);
+
+    const verify_benchmark_exe = b.addExecutable(.{
+        .name = "benchmark-verify",
+        .root_module = verify_benchmark_module,
+    });
+    b.installArtifact(verify_benchmark_exe);
+
+    const run_verify_benchmark_exe = b.addRunArtifact(verify_benchmark_exe);
+    const verify_benchmark_exe_step = b.step("benchmark-verify", "Run verification performance benchmark");
+    verify_benchmark_exe_step.dependOn(&run_verify_benchmark_exe.step);
+
     // Performance profiling
     const profile_module = b.createModule(.{
         .root_source_file = b.path("scripts/profile_keygen_detailed.zig"),

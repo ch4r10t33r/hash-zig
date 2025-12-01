@@ -4787,64 +4787,235 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.debugPrint("ZIG_VERIFY_DEBUG: Starting chain computation, hashes.len={}, x[0]={}, base_minus_one={}\n", .{ hashes.len, x[0], base_minus_one });
 
         const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
-        for (hashes, 0..) |domain, i| {
-            var current: [8]FieldElement = undefined;
-            @memcpy(current[0..hash_len], domain[0..hash_len]);
-            // Pad remaining elements with zeros
-            for (hash_len..8) |j| {
-                current[j] = FieldElement{ .value = 0 };
-            }
-            const start_pos_in_chain: u8 = x[i];
-            const steps: u8 = base_minus_one - start_pos_in_chain;
 
-            // Debug: print starting state for first chain with detailed comparison
-            if (i == 0) {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Montgomery): ", .{i});
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].value});
-                }
-                log.debugPrint("(x[{}]={}, steps={}, base_minus_one={})\n", .{ i, start_pos_in_chain, steps, base_minus_one });
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Canonical): ", .{i});
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
-                }
-                log.debugPrint("\n", .{});
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting at position {} in chain, need to walk {} steps to reach position {}\n", .{ i, start_pos_in_chain, steps, base_minus_one });
-                // Also print what domain[0] contains directly
-                log.debugPrint("ZIG_VERIFY_DEBUG: domain[0] directly (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ domain[0].value, domain[0].toCanonical() });
-            }
+        // OPTIMIZATION: Parallelize chain computation since chains are independent
+        // Use parallel processing for large workloads (64+ chains)
+        const num_cpus = std.Thread.getCpuCount() catch 1;
+        const min_parallel_chains = 64; // Threshold for parallel processing
 
-            if (i == 0 or i == 2) {
-                // domain[0] is in Montgomery form (we read it as Montgomery)
-                const initial_monty = domain[0].value;
-                const initial_canonical = domain[0].toCanonical();
-                log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical });
-            }
+        if (hashes.len < min_parallel_chains or num_cpus <= 1) {
+            // Sequential processing for small workloads
+            for (hashes, 0..) |domain, i| {
+                var current: [8]FieldElement = undefined;
+                @memcpy(current[0..hash_len], domain[0..hash_len]);
+                // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                @memset(current[hash_len..8], FieldElement{ .value = 0 });
+                const start_pos_in_chain: u8 = x[i];
+                const steps: u8 = base_minus_one - start_pos_in_chain;
 
-            // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
-            // Rust: for j in 0..steps { tweak = chain_tweak(epoch, chain_index, start_pos_in_chain + j + 1) }
-            for (0..steps) |j| {
-                const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                // Debug: print starting state for first chain with detailed comparison
                 if (i == 0) {
-                    // Debug: print every step for chain 0
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, pos_in_chain, current[0].value, current[0].toCanonical() });
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Montgomery): ", .{i});
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.debugPrint("(x[{}]={}, steps={}, base_minus_one={})\n", .{ i, start_pos_in_chain, steps, base_minus_one });
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Canonical): ", .{i});
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
+                    }
+                    log.debugPrint("\n", .{});
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting at position {} in chain, need to walk {} steps to reach position {}\n", .{ i, start_pos_in_chain, steps, base_minus_one });
+                    // Also print what domain[0] contains directly
+                    log.debugPrint("ZIG_VERIFY_DEBUG: domain[0] directly (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ domain[0].value, domain[0].toCanonical() });
                 }
-                const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
-                // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-                @memcpy(current[0..hash_len], next[0..hash_len]);
-                // Pad remaining elements with zeros
-                for (hash_len..8) |k| {
-                    current[k] = FieldElement{ .value = 0 };
+
+                if (i == 0 or i == 2) {
+                    // domain[0] is in Montgomery form (we read it as Montgomery)
+                    const initial_monty = domain[0].value;
+                    const initial_canonical = domain[0].toCanonical();
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical });
+                }
+
+                // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
+                // Rust: for j in 0..steps { tweak = chain_tweak(epoch, chain_index, start_pos_in_chain + j + 1) }
+                for (0..steps) |j| {
+                    const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                    if (i == 0) {
+                        // Debug: print every step for chain 0
+                        log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, pos_in_chain, current[0].value, current[0].toCanonical() });
+                    }
+                    const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
+                    // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+                    @memcpy(current[0..hash_len], next[0..hash_len]);
+                    // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                    @memset(current[hash_len..8], FieldElement{ .value = 0 });
+                    if (i == 0) {
+                        log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, next[0].value, next[0].toCanonical() });
+                    }
+                }
+
+                final_chain_domains[i] = current;
+
+                // Debug: print first chain final value for comparison
+                if (i == 0) {
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} final domain after walking {} steps (Montgomery): ", .{ i, steps });
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.debugPrint("\n", .{});
+                    // Compare with tree building
+                    if (epoch == 0) {
+                        log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain 0 final domain at position {} (Montgomery, should match tree building): ", .{base_minus_one});
+                        for (0..hash_len) |h| {
+                            log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                        }
+                        log.debugPrint("\n", .{});
+                    }
+                }
+                // Debug: print a few more chains for epoch 0 to verify they're all correct
+                if (epoch == 0 and (i == 1 or i == 2 or i == 63)) {
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain {} final domain[0] at position {}: 0x{x:0>8} (x[{}]={}, steps={})\n", .{ i, base_minus_one, current[0].value, i, x[i], steps });
                 }
                 if (i == 0) {
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, next[0].value, next[0].toCanonical() });
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i});
+                    for (0..hash_len) |j| {
+                        log.print("0x{x:0>8} ", .{current[j].toCanonical()});
+                    }
+                    log.print("\n", .{});
+                }
+                if (i == 0 or i == 2) {
+                    // Convert Montgomery to canonical for comparison with Rust
+                    const monty_f = F{ .value = current[0].value };
+                    const canonical = monty_f.toU32();
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
+                }
+            }
+        } else {
+            // Parallel processing for large workloads
+            const ChainVerifyContext = struct {
+                scheme: *GeneralizedXMSSSignatureScheme,
+                hashes: [][8]FieldElement,
+                x: []const u8,
+                epoch: u32,
+                parameter: [5]FieldElement,
+                base_minus_one: u8,
+                hash_len: usize,
+                final_chain_domains: [][8]FieldElement,
+                next_index: std.atomic.Value(usize),
+                error_flag: std.atomic.Value(bool),
+                error_mutex: std.Thread.Mutex,
+                stored_error: ?anyerror,
+            };
+
+            const chainVerifyWorker = struct {
+                fn worker(ctx: *ChainVerifyContext) void {
+                    while (true) {
+                        const i = ctx.next_index.fetchAdd(1, .monotonic);
+                        if (i >= ctx.hashes.len) {
+                            break;
+                        }
+
+                        const domain = ctx.hashes[i];
+                        var current: [8]FieldElement = undefined;
+                        @memcpy(current[0..ctx.hash_len], domain[0..ctx.hash_len]);
+                        // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                        @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+                        const start_pos_in_chain: u8 = ctx.x[i];
+                        const steps: u8 = ctx.base_minus_one - start_pos_in_chain;
+
+                        // Walk 'steps' steps from start_pos_in_chain
+                        for (0..steps) |j| {
+                            const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                            const next = ctx.scheme.applyPoseidonChainTweakHash(current, ctx.epoch, @as(u8, @intCast(i)), pos_in_chain, ctx.parameter) catch |err| {
+                                ctx.error_mutex.lock();
+                                defer ctx.error_mutex.unlock();
+                                if (!ctx.error_flag.load(.monotonic)) {
+                                    ctx.error_flag.store(true, .monotonic);
+                                    ctx.stored_error = err;
+                                }
+                                return;
+                            };
+                            @memcpy(current[0..ctx.hash_len], next[0..ctx.hash_len]);
+                            // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                            @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+                        }
+
+                        ctx.final_chain_domains[i] = current;
+                    }
+                }
+            };
+
+            var chain_ctx = ChainVerifyContext{
+                .scheme = self,
+                .hashes = hashes,
+                .x = x,
+                .epoch = epoch,
+                .parameter = public_key.parameter,
+                .base_minus_one = base_minus_one,
+                .hash_len = hash_len,
+                .final_chain_domains = final_chain_domains,
+                .next_index = std.atomic.Value(usize).init(0),
+                .error_flag = std.atomic.Value(bool).init(false),
+                .error_mutex = .{},
+                .stored_error = null,
+            };
+
+            const num_threads = @min(num_cpus, hashes.len);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainVerifyWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Fallback to heap allocation for large thread counts
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainVerifyWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
                 }
             }
 
-            final_chain_domains[i] = current;
-            // Debug: print first chain final value for comparison
+            // Check for errors
+            if (chain_ctx.error_flag.load(.monotonic)) {
+                chain_ctx.error_mutex.lock();
+                defer chain_ctx.error_mutex.unlock();
+                if (chain_ctx.stored_error) |err| {
+                    return err;
+                }
+                return error.UnknownError;
+            }
+        }
+
+        // Debug: print first chain final value for comparison (only for parallel path)
+        if (hashes.len >= min_parallel_chains and num_cpus > 1 and final_chain_domains.len > 0) {
+            const i: usize = 0;
+            const current = final_chain_domains[i];
+            const debug_steps = base_minus_one - x[i];
             if (i == 0) {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} final domain after walking {} steps (Montgomery): ", .{ i, steps });
+                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} final domain after walking {} steps (Montgomery): ", .{ i, debug_steps });
                 for (0..hash_len) |h| {
                     log.debugPrint("0x{x:0>8} ", .{current[h].value});
                 }
@@ -4860,7 +5031,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
             // Debug: print a few more chains for epoch 0 to verify they're all correct
             if (epoch == 0 and (i == 1 or i == 2 or i == 63)) {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain {} final domain[0] at position {}: 0x{x:0>8} (x[{}]={}, steps={})\n", .{ i, base_minus_one, current[0].value, i, x[i], steps });
+                const debug_steps2 = base_minus_one - x[i];
+                log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain {} final domain[0] at position {}: 0x{x:0>8} (x[{}]={}, steps={})\n", .{ i, base_minus_one, current[0].value, i, x[i], debug_steps2 });
             }
             if (i == 0) {
                 log.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i});
