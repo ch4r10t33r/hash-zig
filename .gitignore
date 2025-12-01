@@ -5,7 +5,6 @@ zig-out/
 .cargo/
 .rustup
 .zig-global-cache/
-zig-remote-hash-tool/
 
 
 # Build outputs
@@ -71,12 +70,7 @@ benchmark/rust_benchmark/target/
 benchmark/rust_benchmark/.cargo_home/
 benchmark/rust_benchmark/.cargo/
 context.md
-debug_*
-benchmark/rust_hash_sig_debug
-benchmark/rust-hash-sig-source
-benchmark/rust-hash-sig-debug
 
 # Repo-local temporary artifacts
 /tmp/
-zig-verify-signature.o
 analysis/
