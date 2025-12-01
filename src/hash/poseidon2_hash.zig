@@ -38,9 +38,17 @@ pub const Poseidon2RustCompat = struct {
     }
 
     /// Hash field elements using Poseidon2-16 (for chain compression)
-    pub fn hashFieldElements16(self: *Poseidon2RustCompat, allocator: Allocator, input: []const FieldElement) ![]FieldElement {
+    /// Returns exactly hash_len elements (matching Rust's poseidon_compress with OUT_LEN=hash_len)
+    pub fn hashFieldElements16(self: *Poseidon2RustCompat, allocator: Allocator, input: []const FieldElement, hash_len: usize) ![]FieldElement {
         // Use Poseidon2-16 for chain compression (matching Rust PoseidonTweakHash)
-        return self.applyPoseidon2_16(allocator, input);
+        const full_output = try self.applyPoseidon2_16(allocator, input);
+        defer allocator.free(full_output);
+
+        // Return exactly hash_len elements (matching Rust's poseidon_compress with OUT_LEN=hash_len)
+        // For lifetime 2^18: hash_len=7, for lifetime 2^8/2^32: hash_len=8
+        const output = try allocator.alloc(FieldElement, hash_len);
+        @memcpy(output[0..hash_len], full_output[0..hash_len]);
+        return output;
     }
 
     /// Apply Poseidon2-24 (for message hashing)

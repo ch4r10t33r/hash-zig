@@ -1,0 +1,40 @@
+[package]
+name = "p3-poseidon2"
+description = "An implementation of the Poseidon2 cryptographic permutation for zero-knowledge applications."
+version = "0.3.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Plonky3/Plonky3"
+homepage = "https://github.com/Plonky3/Plonky3"
+keywords = ["poseidon", "cryptography", "zero-knowledge"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-mds = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+
+rand = "0.9"
+
+[dev-dependencies]
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-bn254 = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-goldilocks = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+p3-mersenne-31 = { git = "https://github.com/Plonky3/Plonky3.git", rev = "a33a312" }
+
+criterion = "0.7"
+
+[[bench]]
+name = "poseidon2"
+harness = false
+
+[lints.rust]
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_must_use = "deny"
+rust_2024_incompatible_pat = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }

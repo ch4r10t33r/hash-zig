@@ -646,22 +646,22 @@ where
     // This matches what Zig does in applyTopLevelPoseidonMessageHash
     #[cfg(feature = "debug-tools")]
     {
-        // Note: Avoiding leansig imports here to prevent triggering const generics compilation issues
-        use p3_field::{PrimeField32, PrimeCharacteristicRing};
-        use p3_koala_bear::KoalaBear;
-        // NOTE: hashsig import removed - using manual permutation + feed-forward instead
-        // This avoids const generics issues and dependency problems
-        
-        // Get parameter and randomness from signature - ALWAYS run for comparison
-        // Extract and print Poseidon outputs for comparison with Zig
-        // Read public key JSON to get parameter
-        let pk_json_str = std::fs::read_to_string(pk_json_path)?;
-        let pk_json: serde_json::Value = serde_json::from_str(&pk_json_str)?;
-        
-        // Clone sig_json to avoid borrow checker issues
-        let sig_json_clone = sig_json.clone();
-        if let Some(rho_array) = sig_json_clone.get("rho").and_then(|r| r.as_array()) {
-            if let Some(param_array) = pk_json.get("parameter").and_then(|p| p.as_array()) {
+    // Note: Avoiding leansig imports here to prevent triggering const generics compilation issues
+    use p3_field::{PrimeField32, PrimeCharacteristicRing};
+    use p3_koala_bear::KoalaBear;
+    // NOTE: hashsig import removed - using manual permutation + feed-forward instead
+    // This avoids const generics issues and dependency problems
+    
+    // Get parameter and randomness from signature - ALWAYS run for comparison
+    // Extract and print Poseidon outputs for comparison with Zig
+    // Read public key JSON to get parameter
+    let pk_json_str = std::fs::read_to_string(pk_json_path)?;
+    let pk_json: serde_json::Value = serde_json::from_str(&pk_json_str)?;
+    
+    // Clone sig_json to avoid borrow checker issues
+    let sig_json_clone = sig_json.clone();
+    if let Some(rho_array) = sig_json_clone.get("rho").and_then(|r| r.as_array()) {
+        if let Some(param_array) = pk_json.get("parameter").and_then(|p| p.as_array()) {
             // Build randomness vector - handle conversion failures gracefully
                 let mut randomness: Vec<KoalaBear> = Vec::new();
                 for val in rho_array.iter().take(7) {

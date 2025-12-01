@@ -5,9 +5,13 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
     const enable_debug_logs = b.option(bool, "debug-logs", "Enable verbose std.debug logging") orelse false;
+    const enable_profile_keygen = b.option(bool, "enable-profile-keygen", "Enable detailed keygen profiling logs") orelse false;
+    const simd_width = b.option(u32, "simd-width", "SIMD width (4 or 8, default: 4)") orelse 4;
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_debug_logs", enable_debug_logs);
+    build_options.addOption(bool, "enable_profile_keygen", enable_profile_keygen);
+    build_options.addOption(u32, "simd_width", simd_width);
     const enable_lifetime_2_32 = b.option(bool, "enable-lifetime-2-32", "Enable lifetime 2^32 tests (default: false)") orelse false;
     build_options.addOption(bool, "enable_lifetime_2_32", enable_lifetime_2_32);
 
@@ -276,6 +280,25 @@ pub fn build(b: *std.Build) void {
     const keygen_benchmark_exe_step = b.step("benchmark-keygen", "Run key generation benchmarks");
     keygen_benchmark_exe_step.dependOn(&run_keygen_benchmark_exe.step);
 
+    // Hash function benchmark
+    const hash_function_benchmark_module = b.createModule(.{
+        .root_source_file = b.path("scripts/benchmark_hash_function.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hash_function_benchmark_module.addImport("hash-zig", hash_zig_module);
+    hash_function_benchmark_module.addOptions("build_options", build_options);
+
+    const hash_function_benchmark_exe = b.addExecutable(.{
+        .name = "benchmark-hash-function",
+        .root_module = hash_function_benchmark_module,
+    });
+    b.installArtifact(hash_function_benchmark_exe);
+
+    const run_hash_function_benchmark_exe = b.addRunArtifact(hash_function_benchmark_exe);
+    const hash_function_benchmark_exe_step = b.step("benchmark-hash-function", "Run hash function benchmarks");
+    hash_function_benchmark_exe_step.dependOn(&run_hash_function_benchmark_exe.step);
+
     // Parallel benchmark
     const parallel_benchmark_module = b.createModule(.{
         .root_source_file = b.path("scripts/benchmark_parallel.zig"),
@@ -293,6 +316,24 @@ pub fn build(b: *std.Build) void {
     const run_parallel_benchmark_exe = b.addRunArtifact(parallel_benchmark_exe);
     const parallel_benchmark_exe_step = b.step("benchmark-parallel", "Run parallel tree generation benchmark");
     parallel_benchmark_exe_step.dependOn(&run_parallel_benchmark_exe.step);
+
+    // Performance profiling
+    const profile_module = b.createModule(.{
+        .root_source_file = b.path("scripts/profile_keygen_detailed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    profile_module.addImport("hash-zig", hash_zig_module);
+
+    const profile_exe = b.addExecutable(.{
+        .name = "profile-keygen",
+        .root_module = profile_module,
+    });
+    b.installArtifact(profile_exe);
+
+    const run_profile_exe = b.addRunArtifact(profile_exe);
+    const profile_exe_step = b.step("profile-keygen", "Run detailed key generation performance profiling");
+    profile_exe_step.dependOn(&run_profile_exe.step);
 
     // Documentation generation
     if (enable_docs) {
