@@ -1576,7 +1576,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Apply Poseidon2 chain tweak hash (matching Rust chain_tweak)
-    pub fn applyPoseidonChainTweakHash(
+    /// CRITICAL OPTIMIZATION: Uses stack allocation instead of heap allocation for hot path
+    pub inline fn applyPoseidonChainTweakHash(
         self: *GeneralizedXMSSSignatureScheme,
         input: [8]FieldElement,
         epoch: u32,
@@ -1584,10 +1585,6 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         pos_in_chain: u8,
         parameter: [5]FieldElement,
     ) ![8]FieldElement {
-        // Debug: log inputs for first chain, position 7 (the step that fails during verification)
-        if (chain_index == 0 and pos_in_chain == 7) {
-            log.debugPrint("ZIG_CHAIN_HASH_DEBUG: applyPoseidonChainTweakHash called with epoch={} chain_index={} pos_in_chain={} input[0]=0x{x:0>8} param[0]=0x{x:0>8}\n", .{ epoch, chain_index, pos_in_chain, input[0].value, parameter[0].value });
-        }
         // Convert epoch, chain_index, and pos_in_chain to field elements for tweak using Rust's encoding
         // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | TWEAK_SEPARATOR_FOR_CHAIN_HASH
         const field = @import("../../core/field.zig");
@@ -1604,23 +1601,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var sanitized_input: [8]FieldElement = input;
         @memset(sanitized_input[hash_len..8], FieldElement.zero());
 
-        // Prepare combined input: parameter + tweak + input (all already in Montgomery form)
-        // Rust's poseidon_compress expects input.len() >= OUT_LEN, and pads to WIDTH_16
-        // We allocate exactly what we need, then applyPoseidon2_16 will pad to WIDTH_16
-        // Rust's poseidon_compress pads input to WIDTH, so we need to ensure our input matches exactly
+        // OPTIMIZATION: Use stack allocation instead of heap allocation (max size: 5+2+8=15 elements)
+        // This eliminates heap allocations in the hot path, significantly improving performance
         const total_input_len = 5 + 2 + hash_len;
-        var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
-        defer self.allocator.free(combined_input);
-        // Zero-initialize to ensure no garbage values (though we'll overwrite all elements)
-        @memset(combined_input, FieldElement.zero());
+        var combined_input: [15]FieldElement = undefined;
+        const combined_input_slice = combined_input[0..total_input_len];
 
         // Parameter and tweak are already stored in Montgomery form.
         // Rust: parameter.iter().chain(tweak_fe.iter()).chain(single.iter())
         for (0..5) |i| {
-            combined_input[i] = parameter[i];
+            combined_input_slice[i] = parameter[i];
         }
         for (0..2) |i| {
-            combined_input[5 + i] = tweak[i];
+            combined_input_slice[5 + i] = tweak[i];
         }
 
         // Copy input (already in Montgomery form) - only hash_len_fe elements
@@ -1628,19 +1621,45 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // CRITICAL: Only use the first hash_len elements from input[8]FieldElement
         // For lifetime 2^18: hash_len=7, so we only use input[0..7]
         // For lifetime 2^8/2^32: hash_len=8, so we use input[0..8]
-        @memcpy(combined_input[7 .. 7 + hash_len], sanitized_input[0..hash_len]);
+        @memcpy(combined_input_slice[7 .. 7 + hash_len], sanitized_input[0..hash_len]);
 
-        // Apply Poseidon2-16 hash (matching Rust's poseidon_compress with CHAIN_COMPRESSION_WIDTH=16, OUT_LEN=hash_len)
-        // Rust uses poseidon2_16() for chain hashing, not poseidon2_24()
-        // Rust's poseidon_compress returns exactly HASH_LEN elements (7 for lifetime 2^18, 8 for lifetime 2^8/2^32)
-        // hashFieldElements16 now returns exactly hash_len elements to match Rust
-        const hash_result = try self.poseidon2.hashFieldElements16(self.allocator, combined_input, hash_len);
-        defer self.allocator.free(hash_result);
+        // OPTIMIZATION: Use direct Poseidon2-16 compression with stack-allocated state
+        // This avoids the heap allocation in hashFieldElements16
+        // CRITICAL: combined_input_slice values are already in Montgomery form (FieldElement.value)
+        // We need to convert them to the KoalaBearField type which also uses Montgomery form
+        const poseidon2_root = @import("../../poseidon2/root.zig");
+        const F = poseidon2_root.Poseidon2KoalaBear16.Field;
+        var state: [16]F = undefined;
+        var padded_input: [16]F = undefined;
+
+        // combined_input_slice values are already in Montgomery form, so we can use them directly
+        // Store both in state and padded_input for feed-forward
+        for (0..total_input_len) |i| {
+            // FieldElement.value is already in Montgomery form, so create F directly
+            state[i] = F{ .value = combined_input_slice[i].value };
+            padded_input[i] = state[i]; // Store for feed-forward
+        }
+        // Pad remaining with zeros
+        for (total_input_len..16) |i| {
+            state[i] = F.zero;
+            padded_input[i] = F.zero;
+        }
+
+        // Apply Poseidon2-16 permutation
+        poseidon2_root.Poseidon2KoalaBear16.permutation(&state);
+
+        // Feed-forward: Add the input back into the state element-wise (matching Rust's poseidon_compress)
+        for (0..16) |i| {
+            state[i] = state[i].add(padded_input[i]);
+        }
 
         // Return type is [8]FieldElement, so pad with zeros if hash_len < 8
-        // OPTIMIZATION: Use @memcpy and @memset for efficient copying
+        // CRITICAL: state[i].value is already in Montgomery form, so use it directly
+        // Don't use toU32() which converts to canonical - we need Montgomery form
         var result: [8]FieldElement = undefined;
-        @memcpy(result[0..hash_len], hash_result[0..hash_len]);
+        for (0..hash_len) |i| {
+            result[i] = FieldElement{ .value = state[i].value };
+        }
         @memset(result[hash_len..8], FieldElement{ .value = 0 });
         return result;
     }
@@ -4485,7 +4504,6 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             log.print("ZIG_ENCODING_DEBUG: Failed after {} attempts\n", .{MAX_TRIES});
             return error.EncodingAttemptsExceeded;
         }
-        defer self.allocator.free(x);
 
         // Generate hashes for chains using PRF-derived starts and message-derived steps x
         // Match Rust: Rust stores hashes internally in Montgomery form (TH::Domain = [KoalaBear; HASH_LEN])
@@ -4493,88 +4511,228 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // We need to store hashes in Montgomery form to match Rust's internal representation
         const hashes = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
         const hash_len = self.lifetime_params.hash_len_fe;
-        for (0..self.lifetime_params.dimension) |chain_index| {
-            // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
-            const domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
-            var current: [8]FieldElement = undefined;
-            // domain_elements are already in Montgomery form, store directly for hash_len elements
-            for (0..hash_len) |j| {
-                current[j] = FieldElement{ .value = domain_elements[j] };
-            }
-            // Pad remaining entries with zeros
-            for (hash_len..8) |j| {
-                current[j] = FieldElement{ .value = 0 };
-            }
+        const dimension = self.lifetime_params.dimension;
 
-            // Walk chain for x[chain_index] steps
-            const steps: u8 = x[chain_index];
-            if (chain_index == 0) {
-                log.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
-            }
-            if (steps > 0) {
-                var s: u8 = 1;
-                while (s <= steps) : (s += 1) {
-                    if (chain_index == 0) {
-                        // Debug: print every step for chain 0 during signing
-                        log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, s, current[0].value, current[0].toCanonical() });
-                    }
-                    const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
-                    // Batch copy using memcpy for better performance
-                    @memcpy(current[0..hash_len], next[0..hash_len]);
-                    @memset(current[hash_len..8], FieldElement{ .value = 0 });
-                    if (chain_index == 0) {
-                        log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, next[0].value, next[0].toCanonical() });
-                    }
-                }
-            }
-            // Store hashes in Montgomery form (matching Rust's internal representation)
-            hashes[chain_index] = current;
-            if (chain_index == 0) {
-                // Debug: print full stored hash with detailed info
-                log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Montgomery, x[{}]={}, steps={}): ", .{ chain_index, chain_index, steps, steps });
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].value});
-                }
-                log.debugPrint("\n", .{});
-                log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Canonical): ", .{chain_index});
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
-                }
-                log.debugPrint("\n", .{});
-                // Also print what position in chain this represents
-                log.debugPrint("ZIG_SIGN_DEBUG: Chain {} stored at position {} in chain (walked {} steps from position 0)\n", .{ chain_index, steps, steps });
+        // OPTIMIZATION: Parallelize chain computation since chains are independent
+        // Use parallel processing for large workloads (64+ chains)
+        const num_cpus = std.Thread.getCpuCount() catch 1;
+        const min_parallel_chains = 64; // Threshold for parallel processing
 
-                // CRITICAL VERIFICATION: For chain 0, verify that continuing the walk from position steps to base_minus_one
-                // gives the same result as computeHashChainDomain would produce
-                log.print("ZIG_SIGN_VERIFY_START: chain_index={}, epoch={}, steps={}\n", .{ chain_index, epoch, steps });
-                if (epoch == 0) {
-                    const base_minus_one = self.lifetime_params.base - 1;
-                    const remaining_steps = base_minus_one - steps;
-                    log.debugPrint("ZIG_SIGN_VERIFY: base_minus_one={}, remaining_steps={}\n", .{ base_minus_one, remaining_steps });
-                    if (remaining_steps > 0) {
-                        var verify_current: [8]FieldElement = undefined;
-                        @memcpy(&verify_current, &current);
-                        // Continue walk from position steps to base_minus_one
-                        for (0..remaining_steps) |j| {
-                            const pos_in_chain: u8 = steps + @as(u8, @intCast(j)) + 1;
-                            const next = try self.applyPoseidonChainTweakHash(verify_current, epoch, @as(u8, @intCast(chain_index)), pos_in_chain, secret_key.parameter);
-                            @memcpy(verify_current[0..hash_len], next[0..hash_len]);
-                            @memset(verify_current[hash_len..8], FieldElement{ .value = 0 });
+        if (dimension < min_parallel_chains or num_cpus <= 1) {
+            // Sequential processing for small workloads
+            for (0..dimension) |chain_index| {
+                // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
+                const domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
+                var current: [8]FieldElement = undefined;
+                // domain_elements are already in Montgomery form, store directly for hash_len elements
+                for (0..hash_len) |j| {
+                    current[j] = FieldElement{ .value = domain_elements[j] };
+                }
+                // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                @memset(current[hash_len..8], FieldElement{ .value = 0 });
+
+                // Walk chain for x[chain_index] steps
+                const steps: u8 = x[chain_index];
+                if (chain_index == 0) {
+                    log.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
+                }
+                if (steps > 0) {
+                    var s: u8 = 1;
+                    while (s <= steps) : (s += 1) {
+                        if (chain_index == 0) {
+                            // Debug: print every step for chain 0 during signing
+                            log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, s, current[0].value, current[0].toCanonical() });
                         }
-                        log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continued from position {} to {}: verify_current[0]=0x{x:0>8}\n", .{ steps, base_minus_one, verify_current[0].value });
-
-                        // Now compute from scratch using computeHashChainDomain
-                        const verify_domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, 0);
-                        const full_chain = try self.computeHashChainDomain(verify_domain_elements, epoch, 0, secret_key.parameter);
-                        log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 computed from scratch to position {}: full_chain[0]=0x{x:0>8}\n", .{ base_minus_one, full_chain[0].value });
-
-                        if (!verify_current[0].eql(full_chain[0])) {
-                            log.debugPrint("ZIG_SIGN_ERROR: Chain 0 continuation mismatch! continued[0]=0x{x:0>8} vs full[0]=0x{x:0>8}\n", .{ verify_current[0].value, full_chain[0].value });
-                        } else {
-                            log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continuation matches ✓\n", .{});
+                        const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
+                        // Batch copy using memcpy for better performance
+                        @memcpy(current[0..hash_len], next[0..hash_len]);
+                        @memset(current[hash_len..8], FieldElement{ .value = 0 });
+                        if (chain_index == 0) {
+                            log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, next[0].value, next[0].toCanonical() });
                         }
                     }
                 }
+                // Store hashes in Montgomery form (matching Rust's internal representation)
+                hashes[chain_index] = current;
+
+                // Debug logging for chain 0
+                if (chain_index == 0) {
+                    // Debug: print full stored hash with detailed info
+                    log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Montgomery, x[{}]={}, steps={}): ", .{ chain_index, chain_index, steps, steps });
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.debugPrint("\n", .{});
+                    log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Canonical): ", .{chain_index});
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
+                    }
+                    log.debugPrint("\n", .{});
+                    // Also print what position in chain this represents
+                    log.debugPrint("ZIG_SIGN_DEBUG: Chain {} stored at position {} in chain (walked {} steps from position 0)\n", .{ chain_index, steps, steps });
+
+                    // CRITICAL VERIFICATION: For chain 0, verify that continuing the walk from position steps to base_minus_one
+                    // gives the same result as computeHashChainDomain would produce
+                    log.print("ZIG_SIGN_VERIFY_START: chain_index={}, epoch={}, steps={}\n", .{ chain_index, epoch, steps });
+                    if (epoch == 0) {
+                        const base_minus_one = self.lifetime_params.base - 1;
+                        const remaining_steps = base_minus_one - steps;
+                        log.debugPrint("ZIG_SIGN_VERIFY: base_minus_one={}, remaining_steps={}\n", .{ base_minus_one, remaining_steps });
+                        if (remaining_steps > 0) {
+                            var verify_current: [8]FieldElement = undefined;
+                            @memcpy(&verify_current, &current);
+                            // Continue walk from position steps to base_minus_one
+                            for (0..remaining_steps) |j| {
+                                const pos_in_chain: u8 = steps + @as(u8, @intCast(j)) + 1;
+                                const next = try self.applyPoseidonChainTweakHash(verify_current, epoch, @as(u8, @intCast(chain_index)), pos_in_chain, secret_key.parameter);
+                                @memcpy(verify_current[0..hash_len], next[0..hash_len]);
+                                @memset(verify_current[hash_len..8], FieldElement{ .value = 0 });
+                            }
+                            log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continued from position {} to {}: verify_current[0]=0x{x:0>8}\n", .{ steps, base_minus_one, verify_current[0].value });
+
+                            // Now compute from scratch using computeHashChainDomain
+                            const verify_domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, 0);
+                            const full_chain = try self.computeHashChainDomain(verify_domain_elements, epoch, 0, secret_key.parameter);
+                            log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 computed from scratch to position {}: full_chain[0]=0x{x:0>8}\n", .{ base_minus_one, full_chain[0].value });
+
+                            if (!verify_current[0].eql(full_chain[0])) {
+                                log.debugPrint("ZIG_SIGN_ERROR: Chain 0 continuation mismatch! continued[0]=0x{x:0>8} vs full[0]=0x{x:0>8}\n", .{ verify_current[0].value, full_chain[0].value });
+                            } else {
+                                log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continuation matches ✓\n", .{});
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Parallel processing for large workloads
+            const ChainSignContext = struct {
+                scheme: *GeneralizedXMSSSignatureScheme,
+                prf_key: [32]u8,
+                epoch: u32,
+                parameter: [5]FieldElement,
+                x: []const u8,
+                dimension: usize,
+                hash_len: usize,
+                hashes: [][8]FieldElement,
+                next_index: std.atomic.Value(usize),
+                error_flag: std.atomic.Value(bool),
+                error_mutex: std.Thread.Mutex,
+                stored_error: ?anyerror,
+            };
+
+            const chainSignWorker = struct {
+                fn worker(ctx: *ChainSignContext) void {
+                    while (true) {
+                        const chain_index = ctx.next_index.fetchAdd(1, .monotonic);
+                        if (chain_index >= ctx.dimension) {
+                            break;
+                        }
+
+                        // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
+                        const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, ctx.epoch, @as(u64, @intCast(chain_index)));
+                        var current: [8]FieldElement = undefined;
+                        // domain_elements are already in Montgomery form, store directly for hash_len elements
+                        for (0..ctx.hash_len) |j| {
+                            current[j] = FieldElement{ .value = domain_elements[j] };
+                        }
+                        // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                        @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+
+                        // Walk chain for x[chain_index] steps
+                        const steps: u8 = ctx.x[chain_index];
+                        if (steps > 0) {
+                            var s: u8 = 1;
+                            while (s <= steps) : (s += 1) {
+                                const next = ctx.scheme.applyPoseidonChainTweakHash(current, ctx.epoch, @as(u8, @intCast(chain_index)), s, ctx.parameter) catch |err| {
+                                    ctx.error_mutex.lock();
+                                    defer ctx.error_mutex.unlock();
+                                    if (!ctx.error_flag.load(.monotonic)) {
+                                        ctx.error_flag.store(true, .monotonic);
+                                        ctx.stored_error = err;
+                                    }
+                                    return;
+                                };
+                                @memcpy(current[0..ctx.hash_len], next[0..ctx.hash_len]);
+                                @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+                            }
+                        }
+                        // Store hashes in Montgomery form (matching Rust's internal representation)
+                        ctx.hashes[chain_index] = current;
+                    }
+                }
+            };
+
+            var chain_ctx = ChainSignContext{
+                .scheme = self,
+                .prf_key = secret_key.prf_key,
+                .epoch = epoch,
+                .parameter = secret_key.parameter,
+                .x = x,
+                .dimension = dimension,
+                .hash_len = hash_len,
+                .hashes = hashes,
+                .next_index = std.atomic.Value(usize).init(0),
+                .error_flag = std.atomic.Value(bool).init(false),
+                .error_mutex = .{},
+                .stored_error = null,
+            };
+
+            const num_threads = @min(num_cpus, dimension);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainSignWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Fallback to heap allocation for large thread counts
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainSignWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            }
+
+            // Check for errors
+            if (chain_ctx.error_flag.load(.monotonic)) {
+                chain_ctx.error_mutex.lock();
+                defer chain_ctx.error_mutex.unlock();
+                if (chain_ctx.stored_error) |err| {
+                    return err;
+                }
+                return error.UnknownError;
             }
         }
 
@@ -4679,6 +4837,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Free the original hashes allocation after copying (done in init)
         self.allocator.free(hashes);
+        self.allocator.free(x);
 
         return signature;
     }
