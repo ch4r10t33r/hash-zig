@@ -723,7 +723,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn prfDomainElement(
+    /// OPTIMIZATION: Mark as inline since this is called very frequently in hot loops
+    pub inline fn prfDomainElement(
         self: *const GeneralizedXMSSSignatureScheme,
         prf_key: [32]u8,
         epoch: u32,
@@ -807,6 +808,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const num_chains = self.lifetime_params.dimension;
         _ = self.lifetime_params.base; // chain_length unused for now
 
+        // OPTIMIZATION: Profile cache and computation times
+        const profile_keygen = @hasDecl(build_opts, "enable_profile_keygen") and build_opts.enable_profile_keygen;
+        var cache_timer: std.time.Timer = undefined;
+        var leaf_timer: std.time.Timer = undefined;
+        var tree_timer: std.time.Timer = undefined;
+        var cache_time_ns: u64 = 0;
+        var leaf_time_ns: u64 = 0;
+        var tree_time_ns: u64 = 0;
+        if (profile_keygen) {
+            cache_timer = try std.time.Timer.start();
+        }
+
         // Cache control: allow cache by default, can be disabled via environment
         // HASH_ZIG_DISABLE_BT_CACHE or by setting bottom_tree_cache.enabled = false.
         const force_disable_cache = false;
@@ -824,9 +837,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 log.print("ZIG_CACHE: failed to load bottom tree {}: {s}\n", .{ bottom_tree_index, @errorName(err) });
                 break :blk null;
             };
+            if (profile_keygen) {
+                cache_time_ns = cache_timer.read();
+            }
             if (cached) |tree| {
                 if (build_opts.enable_debug_logs) {
                     log.print("ZIG_TREEBUILD_DEBUG: Using cached bottom tree {}\n", .{bottom_tree_index});
+                }
+                if (profile_keygen) {
+                    const cache_sec = @as(f64, @floatFromInt(cache_time_ns)) / 1_000_000_000.0;
+                    log.print("PROFILE_BTREE: tree={} cache_hit={d:.3}ms\n", .{ bottom_tree_index, cache_sec * 1000.0 });
                 }
                 return tree;
             }
@@ -837,6 +857,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             if (build_opts.enable_debug_logs) {
                 log.print("ZIG_TREEBUILD_DEBUG: Cache disabled, building bottom tree {}\n", .{bottom_tree_index});
             }
+        }
+        if (profile_keygen) {
+            cache_time_ns = cache_timer.read();
+            leaf_timer = try std.time.Timer.start();
         }
 
         // Calculate leaves per bottom tree
@@ -852,7 +876,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         defer self.allocator.free(leaf_domains);
 
         const num_cpus = std.Thread.getCpuCount() catch 1;
-        const min_parallel_leaves = 128; // Threshold for parallel leaf computation
+        // OPTIMIZATION: Increased threshold to reduce thread creation overhead for small workloads
+        // Only use parallel processing when there's enough work to justify thread overhead
+        const min_parallel_leaves = 256; // Increased from 128 to reduce overhead
 
         if (leafs_per_bottom_tree < min_parallel_leaves or num_cpus <= 1) {
             // Sequential processing for small workloads
@@ -928,13 +954,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)), &leaf_domain_buffer);
                 const leaf_domain_slice = leaf_domain_buffer[0..hash_len];
                 // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
+                // OPTIMIZATION: Use @memcpy and @memset for efficient copying
                 var leaf_domain: [8]FieldElement = undefined;
-                for (0..hash_len) |i| {
-                    leaf_domain[i] = leaf_domain_slice[i];
-                }
-                for (hash_len..8) |i| {
-                    leaf_domain[i] = FieldElement{ .value = 0 };
-                }
+                @memcpy(leaf_domain[0..hash_len], leaf_domain_slice[0..hash_len]);
+                @memset(leaf_domain[hash_len..8], FieldElement{ .value = 0 });
                 leaf_domains[epoch - epoch_range_start] = leaf_domain;
 
                 // Debug: Print leaf domain head for all epochs in first bottom tree
@@ -1002,7 +1025,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // OPTIMIZATION: Pack parameter once per thread (constant across all epochs and batches)
                     // Parameter is constant across all epochs, so we can pack it once per thread
                     // and reuse it for all batches in this chunk
-                    var packed_parameter: [5]simd_utils.PackedF = undefined;
+                    // OPTIMIZATION: Align for SIMD
+                    const align_bytes_param = if (SIMD_WIDTH == 8) 32 else 16;
+                    var packed_parameter: [5]simd_utils.PackedF align(align_bytes_param) = undefined;
                     // Use @splat for better SIMD optimization when all lanes have same value
                     for (0..5) |i| {
                         packed_parameter[i] = simd_utils.PackedF{ .values = @splat(ctx.parameter[i].value) };
@@ -1011,6 +1036,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // OPTIMIZATION FIX 5: Process pre-assigned chunk without atomic operations
                     // This matches Rust's par_chunks_exact approach - more cache-friendly
                     var epoch_idx = chunk_start;
+
+                    // OPTIMIZATION: Pre-allocate reusable buffers outside loops to reduce allocations
+                    // These buffers are reused across all batches and remainder epochs
+                    // OPTIMIZATION: Align buffers for better cache performance
+                    const align_bytes_buf = if (SIMD_WIDTH == 8) 32 else 16;
+                    var simd_output_buffer: [SIMD_WIDTH][8]FieldElement align(align_bytes_buf) = undefined;
+                    var chain_domains_stack: [64][8]FieldElement align(align_bytes_buf) = undefined;
+                    var leaf_domain_buffer: [8]FieldElement align(align_bytes_buf) = undefined;
 
                     // Process complete SIMD-width batches
                     while (epoch_idx + SIMD_WIDTH <= chunk_end) {
@@ -1022,8 +1055,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         // OPTIMIZATION: Create @Vector directly without intermediate array
                         const packed_epochs: @Vector(SIMD_WIDTH, u32) = blk: {
                             var epochs: [SIMD_WIDTH]u32 = undefined;
+                            const base_epoch = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx));
                             for (0..SIMD_WIDTH) |i| {
-                                epochs[i] = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx + i));
+                                epochs[i] = base_epoch + @as(u32, @intCast(i));
                             }
                             break :blk epochs;
                         };
@@ -1031,11 +1065,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
                         // This matches Rust's approach: let mut packed_chains: [[PackedF; HASH_LEN]; NUM_CHUNKS]
                         // num_chains is always 64, hash_len is always 8, so [64][8]PackedF = ~2KB per thread (safe for stack)
-                        // OPTIMIZATION: Align for SIMD (16-byte alignment for NEON/SSE, 32-byte for AVX-512)
-                        var packed_chains_stack: [64][8]simd_utils.PackedF = undefined;
+                        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+                        // AVX-512 requires 32-byte alignment for optimal performance
+                        // Note: Zig's align() on stack variables ensures proper alignment for SIMD operations
+                        const align_bytes = if (SIMD_WIDTH == 8) 32 else 16;
+                        var packed_chains_stack: [64][8]simd_utils.PackedF align(align_bytes) = undefined;
 
                         // Generate and pack chain starting points for all epochs in batch
                         // Note: actual_batch_size is always SIMD_WIDTH for complete batches
+                        // OPTIMIZATION: Pre-compute zero-packed value outside loop
+                        const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
                         for (0..ctx.num_chains) |chain_idx| {
                             // Generate starting points for this chain across all epochs in batch
                             var starts: [SIMD_WIDTH][8]u32 = undefined;
@@ -1044,16 +1083,38 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             }
 
                             // Transpose: [lane][element] -> [element][lane] for SIMD processing
+                            // OPTIMIZATION: Unroll small loops for better performance
                             for (0..ctx.hash_len) |h| {
                                 var values: [SIMD_WIDTH]u32 = undefined;
-                                for (0..SIMD_WIDTH) |lane| {
-                                    values[lane] = starts[lane][h];
+                                // Unroll for common SIMD widths (4 or 8)
+                                if (SIMD_WIDTH == 4) {
+                                    values[0] = starts[0][h];
+                                    values[1] = starts[1][h];
+                                    values[2] = starts[2][h];
+                                    values[3] = starts[3][h];
+                                } else if (SIMD_WIDTH == 8) {
+                                    values[0] = starts[0][h];
+                                    values[1] = starts[1][h];
+                                    values[2] = starts[2][h];
+                                    values[3] = starts[3][h];
+                                    values[4] = starts[4][h];
+                                    values[5] = starts[5][h];
+                                    values[6] = starts[6][h];
+                                    values[7] = starts[7][h];
+                                } else {
+                                    // Fallback for other widths
+                                    for (0..SIMD_WIDTH) |lane| {
+                                        values[lane] = starts[lane][h];
+                                    }
                                 }
                                 packed_chains_stack[chain_idx][h] = simd_utils.PackedF{ .values = values };
                             }
                             // Zero-pad remaining hash_len elements if needed
-                            for (ctx.hash_len..8) |h| {
-                                packed_chains_stack[chain_idx][h] = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+                            // OPTIMIZATION: Only pad if needed (hash_len < 8)
+                            if (ctx.hash_len < 8) {
+                                for (ctx.hash_len..8) |h| {
+                                    packed_chains_stack[chain_idx][h] = zero_packed;
+                                }
                             }
                         }
 
@@ -1094,7 +1155,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             const local_idx = batch_start_idx;
 
                             // Extract chain domains for this epoch from packed chains
-                            var chain_domains_stack: [64][8]FieldElement = undefined;
+                            // Reuse pre-allocated chain_domains_stack
                             const chain_domains = chain_domains_stack[0..ctx.num_chains];
                             for (0..ctx.num_chains) |chain_idx| {
                                 for (0..ctx.hash_len) |h| {
@@ -1112,7 +1173,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             }
 
                             // Use scalar sponge hash
-                            var leaf_domain_buffer: [8]FieldElement = undefined;
+                            // Reuse pre-allocated leaf_domain_buffer
                             ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, epoch_parameter, epoch, &leaf_domain_buffer) catch |err| {
                                 ctx.error_mutex.lock();
                                 defer ctx.error_mutex.unlock();
@@ -1130,7 +1191,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             @memset(ctx.leaf_domains[local_idx][ctx.hash_len..8], FieldElement{ .value = 0 });
                         } else {
                             // Multiple epochs - use SIMD sponge hash
-                            var simd_output_buffer: [SIMD_WIDTH][8]FieldElement = undefined;
+                            // Reuse pre-allocated simd_output_buffer
                             ctx.scheme.reduceChainDomainsToLeafDomainSIMD(
                                 &simd_poseidon2,
                                 &packed_chains_slices,
@@ -1165,12 +1226,13 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                     // Handle remainder epochs with scalar code (matching Rust's approach)
                     // Rust processes remainder separately to avoid padding issues
+                    // Reuse pre-allocated chain_domains_stack and leaf_domain_buffer
                     while (epoch_idx < chunk_end) {
                         const epoch = @as(u32, @intCast(ctx.epoch_range_start + epoch_idx));
                         const local_idx = epoch_idx;
 
                         // Process this epoch using scalar code (same as sequential path)
-                        var chain_domains_stack: [64][8]FieldElement = undefined;
+                        // Reuse pre-allocated chain_domains_stack
                         const chain_domains = chain_domains_stack[0..ctx.num_chains];
 
                         // Compute chain domains for this epoch using scalar path
@@ -1187,8 +1249,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             };
                         }
 
-                        // OPTIMIZATION: Use stack-allocated buffer for leaf domain output
-                        var leaf_domain_buffer: [8]FieldElement = undefined;
+                        // OPTIMIZATION: Reuse pre-allocated leaf_domain_buffer
                         ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch, &leaf_domain_buffer) catch |err| {
                             ctx.error_mutex.lock();
                             defer ctx.error_mutex.unlock();
@@ -1200,13 +1261,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         };
                         const leaf_domain_slice = leaf_domain_buffer[0..ctx.hash_len];
 
-                        // Store leaf domain
-                        for (0..ctx.hash_len) |i| {
-                            ctx.leaf_domains[local_idx][i] = leaf_domain_slice[i];
-                        }
-                        for (ctx.hash_len..8) |i| {
-                            ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
-                        }
+                        // OPTIMIZATION: Use @memcpy for efficient copying
+                        @memcpy(ctx.leaf_domains[local_idx][0..ctx.hash_len], leaf_domain_slice[0..ctx.hash_len]);
+                        // Zero-pad remaining elements
+                        @memset(ctx.leaf_domains[local_idx][ctx.hash_len..8], FieldElement{ .value = 0 });
 
                         epoch_idx += 1;
                     }
@@ -1229,26 +1287,49 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             // OPTIMIZATION: Pre-divide work into chunks (matching Rust's par_chunks_exact)
             // This is more cache-friendly and reduces atomic operations
-            // OPTIMIZATION: Limit thread count to avoid overhead (Rust's rayon uses similar limits)
-            // For 1024 epochs, using all CPUs might create too many threads
-            const optimal_threads = @min(num_cpus, @max(1, leafs_per_bottom_tree / 32)); // At least 32 epochs per thread
+            // OPTIMIZATION: Smarter thread count calculation to balance parallelism vs overhead
+            // Use fewer threads with more work each to reduce thread creation overhead
+            // For small workloads, prefer sequential; for large, use fewer but more efficient threads
+            const min_epochs_per_thread = 64; // Increased from 32 to reduce thread overhead
+            const max_threads = num_cpus;
+            const optimal_threads = @min(max_threads, @max(1, leafs_per_bottom_tree / min_epochs_per_thread));
             const num_threads = @min(optimal_threads, leafs_per_bottom_tree);
             const num_epochs = leafs_per_bottom_tree;
             const chunk_size = (num_epochs + num_threads - 1) / num_threads; // Round up
 
-            var threads = try self.allocator.alloc(std.Thread, num_threads);
-            defer self.allocator.free(threads);
+            // OPTIMIZATION: Use stack allocation for small thread counts to reduce allocator overhead
+            // For typical cases (num_threads <= 16), stack allocation is faster
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
 
-            // Spawn worker threads with pre-assigned chunks
-            for (0..num_threads) |t| {
-                const chunk_start = t * chunk_size;
-                const chunk_end = @min(chunk_start + chunk_size, num_epochs);
-                threads[t] = try std.Thread.spawn(.{}, leafWorker.worker, .{ &leaf_ctx, chunk_start, chunk_end });
-            }
+                // Spawn worker threads with pre-assigned chunks
+                for (0..num_threads) |t| {
+                    const chunk_start = t * chunk_size;
+                    const chunk_end = @min(chunk_start + chunk_size, num_epochs);
+                    threads[t] = try std.Thread.spawn(.{}, leafWorker.worker, .{ &leaf_ctx, chunk_start, chunk_end });
+                }
 
-            // Wait for all threads
-            for (threads) |thread| {
-                thread.join();
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Fallback to heap allocation for large thread counts
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                // Spawn worker threads with pre-assigned chunks
+                for (0..num_threads) |t| {
+                    const chunk_start = t * chunk_size;
+                    const chunk_end = @min(chunk_start + chunk_size, num_epochs);
+                    threads[t] = try std.Thread.spawn(.{}, leafWorker.worker, .{ &leaf_ctx, chunk_start, chunk_end });
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
             }
 
             // Check for errors
@@ -1264,8 +1345,25 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Build bottom tree layers from leaf domains (shared with signing path)
         // CRITICAL: Store layers so they can be reused during signing (major performance optimization!)
+        if (profile_keygen) {
+            leaf_time_ns = leaf_timer.read();
+            tree_timer = try std.time.Timer.start();
+        }
         const bottom_layers = try self.buildBottomTreeLayersFromLeafDomains(leaf_domains, parameter, bottom_tree_index);
         // Don't defer free - we're transferring ownership to HashSubTree
+        if (profile_keygen) {
+            tree_time_ns = tree_timer.read();
+            const cache_sec = @as(f64, @floatFromInt(cache_time_ns)) / 1_000_000_000.0;
+            const leaf_sec = @as(f64, @floatFromInt(leaf_time_ns)) / 1_000_000_000.0;
+            const tree_sec = @as(f64, @floatFromInt(tree_time_ns)) / 1_000_000_000.0;
+            log.print("PROFILE_BTREE: tree={} cache={d:.3}ms leaf_gen={d:.3}ms tree_build={d:.3}ms total={d:.3}ms\n", .{
+                bottom_tree_index,
+                cache_sec * 1000.0,
+                leaf_sec * 1000.0,
+                tree_sec * 1000.0,
+                (cache_sec + leaf_sec + tree_sec) * 1000.0,
+            });
+        }
 
         if (bottom_layers.len == 0 or bottom_layers[bottom_layers.len - 1].nodes.len == 0) {
             for (bottom_layers) |layer| self.allocator.free(layer.nodes);
@@ -1293,6 +1391,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         }
 
         if (self.bottom_tree_cache.enabled) {
+            if (profile_keygen) {
+                cache_timer.reset();
+            }
             self.bottom_tree_cache.store(
                 self.lifetime_params.log_lifetime,
                 prf_key,
@@ -1301,6 +1402,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 bottom_root,
                 bottom_layers,
             );
+            if (profile_keygen) {
+                const store_time_ns = cache_timer.read();
+                const store_sec = @as(f64, @floatFromInt(store_time_ns)) / 1_000_000_000.0;
+                log.print("PROFILE_BTREE: tree={} cache_store={d:.3}ms\n", .{ bottom_tree_index, store_sec * 1000.0 });
+            }
         }
 
         // Store layers in HashSubTree so they can be reused during signing (major optimization!)
@@ -1470,7 +1576,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     }
 
     /// Apply Poseidon2 chain tweak hash (matching Rust chain_tweak)
-    pub fn applyPoseidonChainTweakHash(
+    /// CRITICAL OPTIMIZATION: Uses stack allocation instead of heap allocation for hot path
+    pub inline fn applyPoseidonChainTweakHash(
         self: *GeneralizedXMSSSignatureScheme,
         input: [8]FieldElement,
         epoch: u32,
@@ -1478,10 +1585,6 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         pos_in_chain: u8,
         parameter: [5]FieldElement,
     ) ![8]FieldElement {
-        // Debug: log inputs for first chain, position 7 (the step that fails during verification)
-        if (chain_index == 0 and pos_in_chain == 7) {
-            log.debugPrint("ZIG_CHAIN_HASH_DEBUG: applyPoseidonChainTweakHash called with epoch={} chain_index={} pos_in_chain={} input[0]=0x{x:0>8} param[0]=0x{x:0>8}\n", .{ epoch, chain_index, pos_in_chain, input[0].value, parameter[0].value });
-        }
         // Convert epoch, chain_index, and pos_in_chain to field elements for tweak using Rust's encoding
         // ChainTweak: ((epoch as u128) << 24) | ((chain_index as u128) << 16) | ((pos_in_chain as u128) << 8) | TWEAK_SEPARATOR_FOR_CHAIN_HASH
         const field = @import("../../core/field.zig");
@@ -1498,23 +1601,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         var sanitized_input: [8]FieldElement = input;
         @memset(sanitized_input[hash_len..8], FieldElement.zero());
 
-        // Prepare combined input: parameter + tweak + input (all already in Montgomery form)
-        // Rust's poseidon_compress expects input.len() >= OUT_LEN, and pads to WIDTH_16
-        // We allocate exactly what we need, then applyPoseidon2_16 will pad to WIDTH_16
-        // Rust's poseidon_compress pads input to WIDTH, so we need to ensure our input matches exactly
+        // OPTIMIZATION: Use stack allocation instead of heap allocation (max size: 5+2+8=15 elements)
+        // This eliminates heap allocations in the hot path, significantly improving performance
         const total_input_len = 5 + 2 + hash_len;
-        var combined_input = try self.allocator.alloc(FieldElement, total_input_len);
-        defer self.allocator.free(combined_input);
-        // Zero-initialize to ensure no garbage values (though we'll overwrite all elements)
-        @memset(combined_input, FieldElement.zero());
+        var combined_input: [15]FieldElement = undefined;
+        const combined_input_slice = combined_input[0..total_input_len];
 
         // Parameter and tweak are already stored in Montgomery form.
         // Rust: parameter.iter().chain(tweak_fe.iter()).chain(single.iter())
         for (0..5) |i| {
-            combined_input[i] = parameter[i];
+            combined_input_slice[i] = parameter[i];
         }
         for (0..2) |i| {
-            combined_input[5 + i] = tweak[i];
+            combined_input_slice[5 + i] = tweak[i];
         }
 
         // Copy input (already in Montgomery form) - only hash_len_fe elements
@@ -1522,23 +1621,46 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // CRITICAL: Only use the first hash_len elements from input[8]FieldElement
         // For lifetime 2^18: hash_len=7, so we only use input[0..7]
         // For lifetime 2^8/2^32: hash_len=8, so we use input[0..8]
-        @memcpy(combined_input[7 .. 7 + hash_len], sanitized_input[0..hash_len]);
+        @memcpy(combined_input_slice[7 .. 7 + hash_len], sanitized_input[0..hash_len]);
 
-        // Apply Poseidon2-16 hash (matching Rust's poseidon_compress with CHAIN_COMPRESSION_WIDTH=16, OUT_LEN=hash_len)
-        // Rust uses poseidon2_16() for chain hashing, not poseidon2_24()
-        // Rust's poseidon_compress returns exactly HASH_LEN elements (7 for lifetime 2^18, 8 for lifetime 2^8/2^32)
-        // hashFieldElements16 now returns exactly hash_len elements to match Rust
-        const hash_result = try self.poseidon2.hashFieldElements16(self.allocator, combined_input, hash_len);
-        defer self.allocator.free(hash_result);
+        // OPTIMIZATION: Use direct Poseidon2-16 compression with stack-allocated state
+        // This avoids the heap allocation in hashFieldElements16
+        // CRITICAL: combined_input_slice values are already in Montgomery form (FieldElement.value)
+        // We need to convert them to the KoalaBearField type which also uses Montgomery form
+        const poseidon2_root = @import("../../poseidon2/root.zig");
+        const F = poseidon2_root.Poseidon2KoalaBear16.Field;
+        var state: [16]F = undefined;
+        var padded_input: [16]F = undefined;
+
+        // combined_input_slice values are already in Montgomery form, so we can use them directly
+        // Store both in state and padded_input for feed-forward
+        for (0..total_input_len) |i| {
+            // FieldElement.value is already in Montgomery form, so create F directly
+            state[i] = F{ .value = combined_input_slice[i].value };
+            padded_input[i] = state[i]; // Store for feed-forward
+        }
+        // Pad remaining with zeros
+        for (total_input_len..16) |i| {
+            state[i] = F.zero;
+            padded_input[i] = F.zero;
+        }
+
+        // Apply Poseidon2-16 permutation
+        poseidon2_root.Poseidon2KoalaBear16.permutation(&state);
+
+        // Feed-forward: Add the input back into the state element-wise (matching Rust's poseidon_compress)
+        for (0..16) |i| {
+            state[i] = state[i].add(padded_input[i]);
+        }
 
         // Return type is [8]FieldElement, so pad with zeros if hash_len < 8
+        // CRITICAL: state[i].value is already in Montgomery form, so use it directly
+        // Don't use toU32() which converts to canonical - we need Montgomery form
         var result: [8]FieldElement = undefined;
         for (0..hash_len) |i| {
-            result[i] = hash_result[i];
+            result[i] = FieldElement{ .value = state[i].value };
         }
-        for (hash_len..8) |i| {
-            result[i] = FieldElement{ .value = 0 };
-        }
+        @memset(result[hash_len..8], FieldElement{ .value = 0 });
         return result;
     }
 
@@ -1615,7 +1737,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
         // This matches Rust's approach: let mut packed_input = [PackedF::ZERO; CHAIN_COMPRESSION_WIDTH];
-        var packed_combined_input: [CHAIN_COMPRESSION_WIDTH]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const SIMD_WIDTH_LOCAL = simd_utils.SIMD_WIDTH;
+        const align_bytes_combined = if (SIMD_WIDTH_LOCAL == 8) 32 else 16;
+        var packed_combined_input: [CHAIN_COMPRESSION_WIDTH]simd_utils.PackedF align(align_bytes_combined) = undefined;
 
         // Copy parameter (already packed)
         @memcpy(packed_combined_input[0..5], &packed_parameter);
@@ -1626,9 +1751,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Copy input (already packed)
         @memcpy(packed_combined_input[7 .. 7 + hash_len], packed_input[0..hash_len]);
 
-        // Pad remaining with zeros if needed
-        for (7 + hash_len..CHAIN_COMPRESSION_WIDTH) |i| {
-            packed_combined_input[i] = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+        // OPTIMIZATION: Pad remaining with zeros using @memset for better performance
+        // Only pad if there's actually something to pad (hash_len < 8)
+        if (7 + hash_len < CHAIN_COMPRESSION_WIDTH) {
+            const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+            // Use loop for small range (typically 0-1 iterations)
+            for (7 + hash_len..CHAIN_COMPRESSION_WIDTH) |i| {
+                packed_combined_input[i] = zero_packed;
+            }
         }
 
         // Use SIMD Poseidon2 compression - write directly to output buffer (no allocation!)
@@ -1652,7 +1782,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // CRITICAL OPTIMIZATION: Use stack-allocated buffer for packed_next
         // hash_len is at most 8, so 8 PackedF = 128 bytes (safe for stack)
         // This avoids 64 chains × 7 steps = 448 allocations per batch!
-        var packed_next_stack: [8]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_next = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_next_stack: [8]simd_utils.PackedF align(align_bytes_next) = undefined;
 
         // OPTIMIZATION: Pre-compute all tweaks for all steps once
         // This avoids recomputing tweaks in applyPoseidonChainTweakHashSIMD for each step
@@ -1660,8 +1792,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const num_steps = chain_length - 1;
         // Max 256 steps × 2 tweaks × SIMD_WIDTH lanes (4 or 8) = 2-4KB (safe for stack)
         // Use a comptime switch to select the correct array type based on SIMD_WIDTH
+        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
         const PrecomputedTweaksType = if (SIMD_WIDTH == 8) [256][2][8]u32 else [256][2][4]u32;
-        var precomputed_tweaks: PrecomputedTweaksType = undefined;
+        const align_bytes = if (SIMD_WIDTH == 8) 32 else 16;
+        var precomputed_tweaks: PrecomputedTweaksType align(align_bytes) = undefined;
         const tweaks_slice = precomputed_tweaks[0..num_steps];
 
         // Pre-compute tweaks for all steps and all lanes
@@ -1682,13 +1816,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         for (0..num_steps) |step| {
             const pos_in_chain = @as(u8, @intCast(step + 1));
 
-            // Use pre-computed tweaks
-            // Convert array to vector for PackedF initialization
-            const tweak0_vec: @Vector(SIMD_WIDTH, u32) = tweaks_slice[step][0];
-            const tweak1_vec: @Vector(SIMD_WIDTH, u32) = tweaks_slice[step][1];
+            // OPTIMIZATION: Use pre-computed tweaks directly without intermediate conversion
+            // The tweaks are already stored as arrays, convert to PackedF directly
             const packed_tweaks = [2]simd_utils.PackedF{
-                simd_utils.PackedF{ .values = tweak0_vec },
-                simd_utils.PackedF{ .values = tweak1_vec },
+                simd_utils.PackedF{ .values = tweaks_slice[step][0] },
+                simd_utils.PackedF{ .values = tweaks_slice[step][1] },
             };
 
             // Apply SIMD hash to advance chain for all epochs simultaneously
@@ -1845,7 +1977,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const p: u128 = 2130706433; // KoalaBear field modulus
 
         // OPTIMIZATION: Stack-allocate packed input (max size known: 5+2+8+8=23)
-        var packed_input: [23]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_input = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_input: [23]simd_utils.PackedF align(align_bytes_input) = undefined;
         const packed_input_slice = packed_input[0..total_input_len];
 
         // OPTIMIZATION: Pack directly without intermediate buffers (reduce memory overhead)
@@ -1915,7 +2049,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // Use SIMD Poseidon2-24 compression
         // CRITICAL OPTIMIZATION: Use stack-allocated buffer instead of heap allocation
         // hash_len is at most 8, so 8 PackedF = 128 bytes (safe for stack)
-        var packed_hash_results_stack: [8]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_results = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_hash_results_stack: [8]simd_utils.PackedF align(align_bytes_results) = undefined;
         // OPTIMIZATION: Use passed instance instead of creating new one
         try simd_poseidon2.compress24SIMD(packed_input_slice, hash_len, packed_hash_results_stack[0..hash_len]);
 
@@ -2014,17 +2150,33 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             };
 
             const num_threads = @min(num_cpus, parents_len);
-            var threads = try self.allocator.alloc(std.Thread, num_threads);
-            defer self.allocator.free(threads);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
 
-            // Spawn worker threads
-            for (0..num_threads) |t| {
-                threads[t] = try std.Thread.spawn(.{}, pairProcessWorker, .{&ctx});
-            }
+                // Spawn worker threads
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, pairProcessWorker, .{&ctx});
+                }
 
-            // Wait for all threads
-            for (threads) |thread| {
-                thread.join();
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                // Spawn worker threads
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, pairProcessWorker, .{&ctx});
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
             }
 
             // Check for errors
@@ -2785,7 +2937,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         const original_input_len = packed_leaf_input.len;
         const extra_elements = (RATE - (original_input_len % RATE)) % RATE;
         const padded_input_len = original_input_len + extra_elements;
-        var padded_leaf_input_stack: [600]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        const align_bytes_input = if (SIMD_WIDTH == 8) 32 else 16;
+        var padded_leaf_input_stack: [600]simd_utils.PackedF align(align_bytes_input) = undefined;
         const padded_leaf_input = padded_leaf_input_stack[0..padded_input_len];
         @memcpy(padded_leaf_input[0..original_input_len], packed_leaf_input);
         // Pad with zeros
@@ -2795,8 +2949,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Initialize state: capacity in capacity part, zeros in rate part
         // OPTIMIZATION: Initialize all to zero first, then set capacity part
-        // OPTIMIZATION: Align for SIMD (16-byte alignment for NEON/SSE, 32-byte for AVX-512)
-        var packed_state: [24]simd_utils.PackedF = undefined;
+        // OPTIMIZATION: Explicitly align for SIMD (16-byte for NEON/SSE, 32-byte for AVX-512)
+        // Note: SIMD_WIDTH is already declared in function scope above
+        const align_bytes = if (SIMD_WIDTH == 8) 32 else 16;
+        var packed_state: [24]simd_utils.PackedF align(align_bytes) = undefined;
         const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
         // Initialize all elements to zero (loop unrolled for efficiency)
         for (&packed_state) |*elem| {
@@ -3843,17 +3999,32 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             // Reset the atomic counter to 0 for remaining trees (indices 2+)
             ctx.next_index.store(0, .monotonic);
 
-            // Spawn worker threads
-            var threads = try self.allocator.alloc(std.Thread, num_threads);
-            defer self.allocator.free(threads);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
 
-            for (0..num_threads) |t| {
-                threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
-            }
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
+                }
 
-            // Wait for all threads
-            for (threads) |thread| {
-                thread.join();
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Spawn worker threads
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                for (0..num_threads) |t| {
+                    threads[t] = try std.Thread.spawn(.{}, treeWorker.worker, .{&ctx});
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
             }
 
             // CRITICAL: Verify all trees were built and roots stored
@@ -4333,7 +4504,6 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             log.print("ZIG_ENCODING_DEBUG: Failed after {} attempts\n", .{MAX_TRIES});
             return error.EncodingAttemptsExceeded;
         }
-        defer self.allocator.free(x);
 
         // Generate hashes for chains using PRF-derived starts and message-derived steps x
         // Match Rust: Rust stores hashes internally in Montgomery form (TH::Domain = [KoalaBear; HASH_LEN])
@@ -4341,88 +4511,228 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // We need to store hashes in Montgomery form to match Rust's internal representation
         const hashes = try self.allocator.alloc([8]FieldElement, self.lifetime_params.dimension);
         const hash_len = self.lifetime_params.hash_len_fe;
-        for (0..self.lifetime_params.dimension) |chain_index| {
-            // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
-            const domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
-            var current: [8]FieldElement = undefined;
-            // domain_elements are already in Montgomery form, store directly for hash_len elements
-            for (0..hash_len) |j| {
-                current[j] = FieldElement{ .value = domain_elements[j] };
-            }
-            // Pad remaining entries with zeros
-            for (hash_len..8) |j| {
-                current[j] = FieldElement{ .value = 0 };
-            }
+        const dimension = self.lifetime_params.dimension;
 
-            // Walk chain for x[chain_index] steps
-            const steps: u8 = x[chain_index];
-            if (chain_index == 0) {
-                log.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
-            }
-            if (steps > 0) {
-                var s: u8 = 1;
-                while (s <= steps) : (s += 1) {
-                    if (chain_index == 0) {
-                        // Debug: print every step for chain 0 during signing
-                        log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, s, current[0].value, current[0].toCanonical() });
-                    }
-                    const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
-                    // Batch copy using memcpy for better performance
-                    @memcpy(current[0..hash_len], next[0..hash_len]);
-                    @memset(current[hash_len..8], FieldElement{ .value = 0 });
-                    if (chain_index == 0) {
-                        log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, next[0].value, next[0].toCanonical() });
-                    }
-                }
-            }
-            // Store hashes in Montgomery form (matching Rust's internal representation)
-            hashes[chain_index] = current;
-            if (chain_index == 0) {
-                // Debug: print full stored hash with detailed info
-                log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Montgomery, x[{}]={}, steps={}): ", .{ chain_index, chain_index, steps, steps });
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].value});
-                }
-                log.debugPrint("\n", .{});
-                log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Canonical): ", .{chain_index});
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
-                }
-                log.debugPrint("\n", .{});
-                // Also print what position in chain this represents
-                log.debugPrint("ZIG_SIGN_DEBUG: Chain {} stored at position {} in chain (walked {} steps from position 0)\n", .{ chain_index, steps, steps });
+        // OPTIMIZATION: Parallelize chain computation since chains are independent
+        // Use parallel processing for large workloads (64+ chains)
+        const num_cpus = std.Thread.getCpuCount() catch 1;
+        const min_parallel_chains = 64; // Threshold for parallel processing
 
-                // CRITICAL VERIFICATION: For chain 0, verify that continuing the walk from position steps to base_minus_one
-                // gives the same result as computeHashChainDomain would produce
-                log.print("ZIG_SIGN_VERIFY_START: chain_index={}, epoch={}, steps={}\n", .{ chain_index, epoch, steps });
-                if (epoch == 0) {
-                    const base_minus_one = self.lifetime_params.base - 1;
-                    const remaining_steps = base_minus_one - steps;
-                    log.debugPrint("ZIG_SIGN_VERIFY: base_minus_one={}, remaining_steps={}\n", .{ base_minus_one, remaining_steps });
-                    if (remaining_steps > 0) {
-                        var verify_current: [8]FieldElement = undefined;
-                        @memcpy(&verify_current, &current);
-                        // Continue walk from position steps to base_minus_one
-                        for (0..remaining_steps) |j| {
-                            const pos_in_chain: u8 = steps + @as(u8, @intCast(j)) + 1;
-                            const next = try self.applyPoseidonChainTweakHash(verify_current, epoch, @as(u8, @intCast(chain_index)), pos_in_chain, secret_key.parameter);
-                            @memcpy(verify_current[0..hash_len], next[0..hash_len]);
-                            @memset(verify_current[hash_len..8], FieldElement{ .value = 0 });
+        if (dimension < min_parallel_chains or num_cpus <= 1) {
+            // Sequential processing for small workloads
+            for (0..dimension) |chain_index| {
+                // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
+                const domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, @as(u64, @intCast(chain_index)));
+                var current: [8]FieldElement = undefined;
+                // domain_elements are already in Montgomery form, store directly for hash_len elements
+                for (0..hash_len) |j| {
+                    current[j] = FieldElement{ .value = domain_elements[j] };
+                }
+                // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                @memset(current[hash_len..8], FieldElement{ .value = 0 });
+
+                // Walk chain for x[chain_index] steps
+                const steps: u8 = x[chain_index];
+                if (chain_index == 0) {
+                    log.print("ZIG_SIGN_DEBUG: Chain {} starting from PRF (position 0), x[{}]={}, steps={}, initial[0]=0x{x:0>8}\n", .{ chain_index, chain_index, steps, steps, current[0].value });
+                }
+                if (steps > 0) {
+                    var s: u8 = 1;
+                    while (s <= steps) : (s += 1) {
+                        if (chain_index == 0) {
+                            // Debug: print every step for chain 0 during signing
+                            log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, s, current[0].value, current[0].toCanonical() });
                         }
-                        log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continued from position {} to {}: verify_current[0]=0x{x:0>8}\n", .{ steps, base_minus_one, verify_current[0].value });
-
-                        // Now compute from scratch using computeHashChainDomain
-                        const verify_domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, 0);
-                        const full_chain = try self.computeHashChainDomain(verify_domain_elements, epoch, 0, secret_key.parameter);
-                        log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 computed from scratch to position {}: full_chain[0]=0x{x:0>8}\n", .{ base_minus_one, full_chain[0].value });
-
-                        if (!verify_current[0].eql(full_chain[0])) {
-                            log.debugPrint("ZIG_SIGN_ERROR: Chain 0 continuation mismatch! continued[0]=0x{x:0>8} vs full[0]=0x{x:0>8}\n", .{ verify_current[0].value, full_chain[0].value });
-                        } else {
-                            log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continuation matches ✓\n", .{});
+                        const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(chain_index)), s, secret_key.parameter);
+                        // Batch copy using memcpy for better performance
+                        @memcpy(current[0..hash_len], next[0..hash_len]);
+                        @memset(current[hash_len..8], FieldElement{ .value = 0 });
+                        if (chain_index == 0) {
+                            log.debugPrint("ZIG_SIGN_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ chain_index, s - 1, next[0].value, next[0].toCanonical() });
                         }
                     }
                 }
+                // Store hashes in Montgomery form (matching Rust's internal representation)
+                hashes[chain_index] = current;
+
+                // Debug logging for chain 0
+                if (chain_index == 0) {
+                    // Debug: print full stored hash with detailed info
+                    log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Montgomery, x[{}]={}, steps={}): ", .{ chain_index, chain_index, steps, steps });
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.debugPrint("\n", .{});
+                    log.debugPrint("ZIG_SIGN_DEBUG: Chain {} final stored (Canonical): ", .{chain_index});
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
+                    }
+                    log.debugPrint("\n", .{});
+                    // Also print what position in chain this represents
+                    log.debugPrint("ZIG_SIGN_DEBUG: Chain {} stored at position {} in chain (walked {} steps from position 0)\n", .{ chain_index, steps, steps });
+
+                    // CRITICAL VERIFICATION: For chain 0, verify that continuing the walk from position steps to base_minus_one
+                    // gives the same result as computeHashChainDomain would produce
+                    log.print("ZIG_SIGN_VERIFY_START: chain_index={}, epoch={}, steps={}\n", .{ chain_index, epoch, steps });
+                    if (epoch == 0) {
+                        const base_minus_one = self.lifetime_params.base - 1;
+                        const remaining_steps = base_minus_one - steps;
+                        log.debugPrint("ZIG_SIGN_VERIFY: base_minus_one={}, remaining_steps={}\n", .{ base_minus_one, remaining_steps });
+                        if (remaining_steps > 0) {
+                            var verify_current: [8]FieldElement = undefined;
+                            @memcpy(&verify_current, &current);
+                            // Continue walk from position steps to base_minus_one
+                            for (0..remaining_steps) |j| {
+                                const pos_in_chain: u8 = steps + @as(u8, @intCast(j)) + 1;
+                                const next = try self.applyPoseidonChainTweakHash(verify_current, epoch, @as(u8, @intCast(chain_index)), pos_in_chain, secret_key.parameter);
+                                @memcpy(verify_current[0..hash_len], next[0..hash_len]);
+                                @memset(verify_current[hash_len..8], FieldElement{ .value = 0 });
+                            }
+                            log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continued from position {} to {}: verify_current[0]=0x{x:0>8}\n", .{ steps, base_minus_one, verify_current[0].value });
+
+                            // Now compute from scratch using computeHashChainDomain
+                            const verify_domain_elements = self.prfDomainElement(secret_key.prf_key, epoch, 0);
+                            const full_chain = try self.computeHashChainDomain(verify_domain_elements, epoch, 0, secret_key.parameter);
+                            log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 computed from scratch to position {}: full_chain[0]=0x{x:0>8}\n", .{ base_minus_one, full_chain[0].value });
+
+                            if (!verify_current[0].eql(full_chain[0])) {
+                                log.debugPrint("ZIG_SIGN_ERROR: Chain 0 continuation mismatch! continued[0]=0x{x:0>8} vs full[0]=0x{x:0>8}\n", .{ verify_current[0].value, full_chain[0].value });
+                            } else {
+                                log.debugPrint("ZIG_SIGN_VERIFY: Chain 0 continuation matches ✓\n", .{});
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Parallel processing for large workloads
+            const ChainSignContext = struct {
+                scheme: *GeneralizedXMSSSignatureScheme,
+                prf_key: [32]u8,
+                epoch: u32,
+                parameter: [5]FieldElement,
+                x: []const u8,
+                dimension: usize,
+                hash_len: usize,
+                hashes: [][8]FieldElement,
+                next_index: std.atomic.Value(usize),
+                error_flag: std.atomic.Value(bool),
+                error_mutex: std.Thread.Mutex,
+                stored_error: ?anyerror,
+            };
+
+            const chainSignWorker = struct {
+                fn worker(ctx: *ChainSignContext) void {
+                    while (true) {
+                        const chain_index = ctx.next_index.fetchAdd(1, .monotonic);
+                        if (chain_index >= ctx.dimension) {
+                            break;
+                        }
+
+                        // PRF start state (domain_elements are in Montgomery form from ShakePRFtoF)
+                        const domain_elements = ctx.scheme.prfDomainElement(ctx.prf_key, ctx.epoch, @as(u64, @intCast(chain_index)));
+                        var current: [8]FieldElement = undefined;
+                        // domain_elements are already in Montgomery form, store directly for hash_len elements
+                        for (0..ctx.hash_len) |j| {
+                            current[j] = FieldElement{ .value = domain_elements[j] };
+                        }
+                        // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                        @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+
+                        // Walk chain for x[chain_index] steps
+                        const steps: u8 = ctx.x[chain_index];
+                        if (steps > 0) {
+                            var s: u8 = 1;
+                            while (s <= steps) : (s += 1) {
+                                const next = ctx.scheme.applyPoseidonChainTweakHash(current, ctx.epoch, @as(u8, @intCast(chain_index)), s, ctx.parameter) catch |err| {
+                                    ctx.error_mutex.lock();
+                                    defer ctx.error_mutex.unlock();
+                                    if (!ctx.error_flag.load(.monotonic)) {
+                                        ctx.error_flag.store(true, .monotonic);
+                                        ctx.stored_error = err;
+                                    }
+                                    return;
+                                };
+                                @memcpy(current[0..ctx.hash_len], next[0..ctx.hash_len]);
+                                @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+                            }
+                        }
+                        // Store hashes in Montgomery form (matching Rust's internal representation)
+                        ctx.hashes[chain_index] = current;
+                    }
+                }
+            };
+
+            var chain_ctx = ChainSignContext{
+                .scheme = self,
+                .prf_key = secret_key.prf_key,
+                .epoch = epoch,
+                .parameter = secret_key.parameter,
+                .x = x,
+                .dimension = dimension,
+                .hash_len = hash_len,
+                .hashes = hashes,
+                .next_index = std.atomic.Value(usize).init(0),
+                .error_flag = std.atomic.Value(bool).init(false),
+                .error_mutex = .{},
+                .stored_error = null,
+            };
+
+            const num_threads = @min(num_cpus, dimension);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainSignWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Fallback to heap allocation for large thread counts
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainSignWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            }
+
+            // Check for errors
+            if (chain_ctx.error_flag.load(.monotonic)) {
+                chain_ctx.error_mutex.lock();
+                defer chain_ctx.error_mutex.unlock();
+                if (chain_ctx.stored_error) |err| {
+                    return err;
+                }
+                return error.UnknownError;
             }
         }
 
@@ -4527,6 +4837,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // Free the original hashes allocation after copying (done in init)
         self.allocator.free(hashes);
+        self.allocator.free(x);
 
         return signature;
     }
@@ -4635,64 +4946,235 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.debugPrint("ZIG_VERIFY_DEBUG: Starting chain computation, hashes.len={}, x[0]={}, base_minus_one={}\n", .{ hashes.len, x[0], base_minus_one });
 
         const hash_len = self.lifetime_params.hash_len_fe; // 7 for lifetime 2^18, 8 for lifetime 2^8
-        for (hashes, 0..) |domain, i| {
-            var current: [8]FieldElement = undefined;
-            @memcpy(current[0..hash_len], domain[0..hash_len]);
-            // Pad remaining elements with zeros
-            for (hash_len..8) |j| {
-                current[j] = FieldElement{ .value = 0 };
-            }
-            const start_pos_in_chain: u8 = x[i];
-            const steps: u8 = base_minus_one - start_pos_in_chain;
 
-            // Debug: print starting state for first chain with detailed comparison
-            if (i == 0) {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Montgomery): ", .{i});
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].value});
-                }
-                log.debugPrint("(x[{}]={}, steps={}, base_minus_one={})\n", .{ i, start_pos_in_chain, steps, base_minus_one });
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Canonical): ", .{i});
-                for (0..hash_len) |h| {
-                    log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
-                }
-                log.debugPrint("\n", .{});
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting at position {} in chain, need to walk {} steps to reach position {}\n", .{ i, start_pos_in_chain, steps, base_minus_one });
-                // Also print what domain[0] contains directly
-                log.debugPrint("ZIG_VERIFY_DEBUG: domain[0] directly (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ domain[0].value, domain[0].toCanonical() });
-            }
+        // OPTIMIZATION: Parallelize chain computation since chains are independent
+        // Use parallel processing for large workloads (64+ chains)
+        const num_cpus = std.Thread.getCpuCount() catch 1;
+        const min_parallel_chains = 64; // Threshold for parallel processing
 
-            if (i == 0 or i == 2) {
-                // domain[0] is in Montgomery form (we read it as Montgomery)
-                const initial_monty = domain[0].value;
-                const initial_canonical = domain[0].toCanonical();
-                log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical });
-            }
+        if (hashes.len < min_parallel_chains or num_cpus <= 1) {
+            // Sequential processing for small workloads
+            for (hashes, 0..) |domain, i| {
+                var current: [8]FieldElement = undefined;
+                @memcpy(current[0..hash_len], domain[0..hash_len]);
+                // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                @memset(current[hash_len..8], FieldElement{ .value = 0 });
+                const start_pos_in_chain: u8 = x[i];
+                const steps: u8 = base_minus_one - start_pos_in_chain;
 
-            // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
-            // Rust: for j in 0..steps { tweak = chain_tweak(epoch, chain_index, start_pos_in_chain + j + 1) }
-            for (0..steps) |j| {
-                const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                // Debug: print starting state for first chain with detailed comparison
                 if (i == 0) {
-                    // Debug: print every step for chain 0
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, pos_in_chain, current[0].value, current[0].toCanonical() });
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Montgomery): ", .{i});
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.debugPrint("(x[{}]={}, steps={}, base_minus_one={})\n", .{ i, start_pos_in_chain, steps, base_minus_one });
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Canonical): ", .{i});
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
+                    }
+                    log.debugPrint("\n", .{});
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting at position {} in chain, need to walk {} steps to reach position {}\n", .{ i, start_pos_in_chain, steps, base_minus_one });
+                    // Also print what domain[0] contains directly
+                    log.debugPrint("ZIG_VERIFY_DEBUG: domain[0] directly (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ domain[0].value, domain[0].toCanonical() });
                 }
-                const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
-                // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
-                @memcpy(current[0..hash_len], next[0..hash_len]);
-                // Pad remaining elements with zeros
-                for (hash_len..8) |k| {
-                    current[k] = FieldElement{ .value = 0 };
+
+                if (i == 0 or i == 2) {
+                    // domain[0] is in Montgomery form (we read it as Montgomery)
+                    const initial_monty = domain[0].value;
+                    const initial_canonical = domain[0].toCanonical();
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} starting from position {} (x[i]={}), steps={}, initial_monty[0]=0x{x:0>8} initial_canonical[0]=0x{x:0>8}\n", .{ i, start_pos_in_chain, start_pos_in_chain, steps, initial_monty, initial_canonical });
+                }
+
+                // Walk 'steps' steps from start_pos_in_chain (matching Rust exactly)
+                // Rust: for j in 0..steps { tweak = chain_tweak(epoch, chain_index, start_pos_in_chain + j + 1) }
+                for (0..steps) |j| {
+                    const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                    if (i == 0) {
+                        // Debug: print every step for chain 0
+                        log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {}: pos_in_chain={}, current[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, pos_in_chain, current[0].value, current[0].toCanonical() });
+                    }
+                    const next = try self.applyPoseidonChainTweakHash(current, epoch, @as(u8, @intCast(i)), pos_in_chain, public_key.parameter);
+                    // Only use hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+                    @memcpy(current[0..hash_len], next[0..hash_len]);
+                    // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                    @memset(current[hash_len..8], FieldElement{ .value = 0 });
+                    if (i == 0) {
+                        log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, next[0].value, next[0].toCanonical() });
+                    }
+                }
+
+                final_chain_domains[i] = current;
+
+                // Debug: print first chain final value for comparison
+                if (i == 0) {
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} final domain after walking {} steps (Montgomery): ", .{ i, steps });
+                    for (0..hash_len) |h| {
+                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.debugPrint("\n", .{});
+                    // Compare with tree building
+                    if (epoch == 0) {
+                        log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain 0 final domain at position {} (Montgomery, should match tree building): ", .{base_minus_one});
+                        for (0..hash_len) |h| {
+                            log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                        }
+                        log.debugPrint("\n", .{});
+                    }
+                }
+                // Debug: print a few more chains for epoch 0 to verify they're all correct
+                if (epoch == 0 and (i == 1 or i == 2 or i == 63)) {
+                    log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain {} final domain[0] at position {}: 0x{x:0>8} (x[{}]={}, steps={})\n", .{ i, base_minus_one, current[0].value, i, x[i], steps });
                 }
                 if (i == 0) {
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} step {} result: next[0]=0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, j, next[0].value, next[0].toCanonical() });
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i});
+                    for (0..hash_len) |j| {
+                        log.print("0x{x:0>8} ", .{current[j].toCanonical()});
+                    }
+                    log.print("\n", .{});
+                }
+                if (i == 0 or i == 2) {
+                    // Convert Montgomery to canonical for comparison with Rust
+                    const monty_f = F{ .value = current[0].value };
+                    const canonical = monty_f.toU32();
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} final[0]=0x{x:0>8} (Montgomery) = 0x{x:0>8} (canonical)\n", .{ i, current[0].value, canonical });
+                }
+            }
+        } else {
+            // Parallel processing for large workloads
+            const ChainVerifyContext = struct {
+                scheme: *GeneralizedXMSSSignatureScheme,
+                hashes: [][8]FieldElement,
+                x: []const u8,
+                epoch: u32,
+                parameter: [5]FieldElement,
+                base_minus_one: u8,
+                hash_len: usize,
+                final_chain_domains: [][8]FieldElement,
+                next_index: std.atomic.Value(usize),
+                error_flag: std.atomic.Value(bool),
+                error_mutex: std.Thread.Mutex,
+                stored_error: ?anyerror,
+            };
+
+            const chainVerifyWorker = struct {
+                fn worker(ctx: *ChainVerifyContext) void {
+                    while (true) {
+                        const i = ctx.next_index.fetchAdd(1, .monotonic);
+                        if (i >= ctx.hashes.len) {
+                            break;
+                        }
+
+                        const domain = ctx.hashes[i];
+                        var current: [8]FieldElement = undefined;
+                        @memcpy(current[0..ctx.hash_len], domain[0..ctx.hash_len]);
+                        // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                        @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+                        const start_pos_in_chain: u8 = ctx.x[i];
+                        const steps: u8 = ctx.base_minus_one - start_pos_in_chain;
+
+                        // Walk 'steps' steps from start_pos_in_chain
+                        for (0..steps) |j| {
+                            const pos_in_chain: u8 = start_pos_in_chain + @as(u8, @intCast(j)) + 1;
+                            const next = ctx.scheme.applyPoseidonChainTweakHash(current, ctx.epoch, @as(u8, @intCast(i)), pos_in_chain, ctx.parameter) catch |err| {
+                                ctx.error_mutex.lock();
+                                defer ctx.error_mutex.unlock();
+                                if (!ctx.error_flag.load(.monotonic)) {
+                                    ctx.error_flag.store(true, .monotonic);
+                                    ctx.stored_error = err;
+                                }
+                                return;
+                            };
+                            @memcpy(current[0..ctx.hash_len], next[0..ctx.hash_len]);
+                            // OPTIMIZATION: Use @memset instead of loop for zero-padding
+                            @memset(current[ctx.hash_len..8], FieldElement{ .value = 0 });
+                        }
+
+                        ctx.final_chain_domains[i] = current;
+                    }
+                }
+            };
+
+            var chain_ctx = ChainVerifyContext{
+                .scheme = self,
+                .hashes = hashes,
+                .x = x,
+                .epoch = epoch,
+                .parameter = public_key.parameter,
+                .base_minus_one = base_minus_one,
+                .hash_len = hash_len,
+                .final_chain_domains = final_chain_domains,
+                .next_index = std.atomic.Value(usize).init(0),
+                .error_flag = std.atomic.Value(bool).init(false),
+                .error_mutex = .{},
+                .stored_error = null,
+            };
+
+            const num_threads = @min(num_cpus, hashes.len);
+            // OPTIMIZATION: Use stack allocation for small thread counts
+            if (num_threads <= 16) {
+                var threads_stack: [16]std.Thread = undefined;
+                const threads = threads_stack[0..num_threads];
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainVerifyWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
+                }
+            } else {
+                // Fallback to heap allocation for large thread counts
+                var threads = try self.allocator.alloc(std.Thread, num_threads);
+                defer self.allocator.free(threads);
+
+                for (0..num_threads) |t| {
+                    threads[t] = std.Thread.spawn(.{}, chainVerifyWorker.worker, .{&chain_ctx}) catch |err| {
+                        chain_ctx.error_mutex.lock();
+                        defer chain_ctx.error_mutex.unlock();
+                        if (!chain_ctx.error_flag.load(.monotonic)) {
+                            chain_ctx.error_flag.store(true, .monotonic);
+                            chain_ctx.stored_error = err;
+                        }
+                        // Continue spawning remaining threads
+                        continue;
+                    };
+                }
+
+                // Wait for all threads
+                for (threads) |thread| {
+                    thread.join();
                 }
             }
 
-            final_chain_domains[i] = current;
-            // Debug: print first chain final value for comparison
+            // Check for errors
+            if (chain_ctx.error_flag.load(.monotonic)) {
+                chain_ctx.error_mutex.lock();
+                defer chain_ctx.error_mutex.unlock();
+                if (chain_ctx.stored_error) |err| {
+                    return err;
+                }
+                return error.UnknownError;
+            }
+        }
+
+        // Debug: print first chain final value for comparison (only for parallel path)
+        if (hashes.len >= min_parallel_chains and num_cpus > 1 and final_chain_domains.len > 0) {
+            const i: usize = 0;
+            const current = final_chain_domains[i];
+            const debug_steps = base_minus_one - x[i];
             if (i == 0) {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} final domain after walking {} steps (Montgomery): ", .{ i, steps });
+                log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} final domain after walking {} steps (Montgomery): ", .{ i, debug_steps });
                 for (0..hash_len) |h| {
                     log.debugPrint("0x{x:0>8} ", .{current[h].value});
                 }
@@ -4708,7 +5190,8 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
             // Debug: print a few more chains for epoch 0 to verify they're all correct
             if (epoch == 0 and (i == 1 or i == 2 or i == 63)) {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain {} final domain[0] at position {}: 0x{x:0>8} (x[{}]={}, steps={})\n", .{ i, base_minus_one, current[0].value, i, x[i], steps });
+                const debug_steps2 = base_minus_one - x[i];
+                log.debugPrint("ZIG_VERIFY_DEBUG: Epoch 0 chain {} final domain[0] at position {}: 0x{x:0>8} (x[{}]={}, steps={})\n", .{ i, base_minus_one, current[0].value, i, x[i], debug_steps2 });
             }
             if (i == 0) {
                 log.print("ZIG_VERIFY_DEBUG: Chain {} final (canonical): ", .{i});
@@ -4749,13 +5232,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.debugPrint("\n", .{});
         // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
         // hash_len is already declared above (line 2643)
+        // OPTIMIZATION: Use @memcpy and @memset for efficient copying
         var current_domain: [8]FieldElement = undefined;
-        for (0..hash_len) |i| {
-            current_domain[i] = leaf_domain_slice[i];
-        }
-        for (hash_len..8) |i| {
-            current_domain[i] = FieldElement{ .value = 0 };
-        }
+        @memcpy(current_domain[0..hash_len], leaf_domain_slice[0..hash_len]);
+        @memset(current_domain[hash_len..8], FieldElement{ .value = 0 });
 
         // Debug: log leaf domain
         log.print("ZIG_VERIFY_DEBUG: Leaf domain after reduction (canonical): ", .{});
