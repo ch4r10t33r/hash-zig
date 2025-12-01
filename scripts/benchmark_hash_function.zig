@@ -6,9 +6,7 @@ const hash_zig = @import("hash-zig");
 const Allocator = std.mem.Allocator;
 const FieldElement = hash_zig.FieldElement;
 const Poseidon2RustCompat = hash_zig.Poseidon2RustCompat;
-// Import directly to avoid module conflicts (benchmark is separate executable)
 const poseidon2_simd = @import("../src/hash/poseidon2_hash_simd.zig");
-const simd_utils = @import("../src/signature/native/simd_utils.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -26,7 +24,7 @@ pub fn main() !void {
     // Test parameters
     const num_iterations = 10000;
     const hash_len = 8; // HASH_LEN_FE
-    const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
+    const SIMD_WIDTH = poseidon2_simd.SIMD_WIDTH_CONST;
 
     std.debug.print("Configuration:\n", .{});
     std.debug.print("  SIMD Width: {}\n", .{SIMD_WIDTH});
@@ -34,7 +32,7 @@ pub fn main() !void {
     std.debug.print("  Iterations: {}\n\n", .{num_iterations});
 
     // Benchmark: compress16SIMD with SIMD-packed input
-    var packed_input: [16]simd_utils.PackedF = undefined;
+    var packed_input: [16]poseidon2_simd.PackedF = undefined;
     
     // Initialize with test data
     for (0..16) |i| {
@@ -42,11 +40,11 @@ pub fn main() !void {
         for (0..SIMD_WIDTH) |lane| {
             values[lane] = @as(u32, @intCast((i * 1000) + lane));
         }
-        packed_input[i] = simd_utils.PackedF{ .values = values };
+        packed_input[i] = poseidon2_simd.PackedF{ .values = values };
     }
 
     // Warmup
-    var output_stack: [8]simd_utils.PackedF = undefined;
+    var output_stack: [8]poseidon2_simd.PackedF = undefined;
     for (0..100) |_| {
         _ = try simd_poseidon2.compress16SIMD(&packed_input, hash_len, output_stack[0..hash_len]);
     }

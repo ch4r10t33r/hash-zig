@@ -16,6 +16,10 @@ const Poseidon2KoalaBear24 = @import("../poseidon2/root.zig").Poseidon2KoalaBear
 const WIDTH_16 = 16;
 const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
 
+// Re-export SIMD utilities for external benchmarks without importing simd_utils directly
+pub const PackedF = simd_utils.PackedF;
+pub const SIMD_WIDTH_CONST: u32 = SIMD_WIDTH;
+
 /// SIMD-aware Poseidon2 compression function
 /// Processes multiple states simultaneously using SIMD operations
 pub const Poseidon2SIMD = struct {
