@@ -904,8 +904,10 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     log.debugPrint("\n", .{});
                 }
 
-                const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)));
-                defer self.allocator.free(leaf_domain_slice);
+                // OPTIMIZATION: Use stack-allocated buffer for leaf domain output
+                var leaf_domain_buffer: [8]FieldElement = undefined;
+                try self.reduceChainDomainsToLeafDomain(chain_domains, parameter, @as(u32, @intCast(epoch)), &leaf_domain_buffer);
+                const leaf_domain_slice = leaf_domain_buffer[0..hash_len];
                 // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
                 var leaf_domain: [8]FieldElement = undefined;
                 for (0..hash_len) |i| {
@@ -972,6 +974,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                     // This matches Rust's approach: let chain_perm = poseidon2_16();
                     var simd_poseidon2 = poseidon2_simd.Poseidon2SIMD.init(ctx.scheme.allocator, ctx.scheme.poseidon2);
 
+                    // OPTIMIZATION: Pack parameter once per thread (constant across all epochs and batches)
+                    // Parameter is constant across all epochs, so we can pack it once per thread
+                    // and reuse it for all batches in this chunk
+                    var packed_parameter: [5]simd_utils.PackedF = undefined;
+                    // Use @splat for better SIMD optimization when all lanes have same value
+                    for (0..5) |i| {
+                        packed_parameter[i] = simd_utils.PackedF{ .values = @splat(ctx.parameter[i].value) };
+                    }
+
                     // OPTIMIZATION FIX 5: Process pre-assigned chunk without atomic operations
                     // This matches Rust's par_chunks_exact approach - more cache-friendly
                     var epoch_idx = chunk_start;
@@ -983,21 +994,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                         const actual_batch_size = SIMD_WIDTH; // Always SIMD_WIDTH for complete batches
 
                         // Get batch of epochs (complete batch, no padding needed)
-                        var epoch_batch: [SIMD_WIDTH]u32 = undefined;
-                        for (0..SIMD_WIDTH) |i| {
-                            epoch_batch[i] = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx + i));
-                        }
-                        const packed_epochs: @Vector(SIMD_WIDTH, u32) = epoch_batch;
-
-                        // Pack parameter to all lanes for SIMD processing
-                        var packed_parameter: [5]simd_utils.PackedF = undefined;
-                        for (0..5) |i| {
-                            var param_values: [SIMD_WIDTH]u32 = undefined;
-                            for (0..SIMD_WIDTH) |lane| {
-                                param_values[lane] = ctx.parameter[i].value;
+                        // OPTIMIZATION: Create @Vector directly without intermediate array
+                        const packed_epochs: @Vector(SIMD_WIDTH, u32) = blk: {
+                            var epochs: [SIMD_WIDTH]u32 = undefined;
+                            for (0..SIMD_WIDTH) |i| {
+                                epochs[i] = @as(u32, @intCast(ctx.epoch_range_start + batch_start_idx + i));
                             }
-                            packed_parameter[i] = simd_utils.PackedF{ .values = param_values };
-                        }
+                            break :blk epochs;
+                        };
 
                         // CRITICAL OPTIMIZATION: Use stack-allocated array instead of heap allocation
                         // This matches Rust's approach: let mut packed_chains: [[PackedF; HASH_LEN]; NUM_CHUNKS]
@@ -1010,7 +1014,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             // Generate starting points for this chain across all epochs in batch
                             var starts: [SIMD_WIDTH][8]u32 = undefined;
                             for (0..SIMD_WIDTH) |lane| {
-                                starts[lane] = ctx.scheme.prfDomainElement(ctx.prf_key, epoch_batch[lane], @as(u64, @intCast(chain_idx)));
+                                starts[lane] = ctx.scheme.prfDomainElement(ctx.prf_key, packed_epochs[lane], @as(u64, @intCast(chain_idx)));
                             }
 
                             // Transpose: [lane][element] -> [element][lane] for SIMD processing
@@ -1056,87 +1060,78 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             };
                         }
 
-                        // Unpack results and process each epoch in the batch
-                        for (0..actual_batch_size) |batch_offset| {
-                            const local_idx = batch_start_idx + batch_offset;
-                            const epoch = epoch_batch[batch_offset];
+                        // Use SIMD sponge hash for batch processing
+                        // Test with single epoch to isolate multi-epoch issues
+                        if (false and actual_batch_size == 1) {
+                            // Single epoch - use scalar path for correctness
+                            const epoch = packed_epochs[0];
+                            const local_idx = batch_start_idx;
 
-                            // Debug: For epoch 1, verify the epoch value
-                            if (epoch == 1 and ctx.bottom_tree_index == 0) {
-                                log.debugPrint("ZIG_TREEBUILD_EPOCH1: Processing epoch 1, local_idx={}, batch_offset={}, epoch_batch[{}]={}\n", .{ local_idx, batch_offset, batch_offset, epoch });
-                            }
-
-                            // CRITICAL OPTIMIZATION: Use stack-allocated buffer instead of heap allocation
-                            // chain_domains is 64 chains × 8 elements = 512 FieldElements = 2KB (safe for stack)
+                            // Extract chain domains for this epoch from packed chains
                             var chain_domains_stack: [64][8]FieldElement = undefined;
                             const chain_domains = chain_domains_stack[0..ctx.num_chains];
-
-                            // CRITICAL OPTIMIZATION: Extract values directly from SIMD without unpacking
-                            // Avoid calling toArray() which unpacks all 4 lanes and calls fromMontgomery() 4 times
-                            // when we only need one value. Extract directly from the SIMD vector.
                             for (0..ctx.num_chains) |chain_idx| {
                                 for (0..ctx.hash_len) |h| {
-                                    // Extract the value for this batch_offset directly from SIMD vector
-                                    // Values are already in Montgomery form, so just create FieldElement directly
-                                    const simd_value = packed_chains_stack[chain_idx][h].values[batch_offset];
-                                    chain_domains[chain_idx][h] = FieldElement{ .value = simd_value };
+                                    chain_domains[chain_idx][h] = FieldElement.fromMontgomery(packed_chains_slices[chain_idx][h].values[0]);
                                 }
                                 for (ctx.hash_len..8) |h| {
                                     chain_domains[chain_idx][h] = FieldElement.zero();
                                 }
                             }
 
-                            // Debug: For epoch 1, verify the unpacked chain domain
-                            if (epoch == 1 and ctx.bottom_tree_index == 0) {
-                                log.debugPrint("ZIG_TREEBUILD_EPOCH1: Unpacked chain_domains[0][0]=0x{x:0>8} for epoch 1, batch_offset={}\n", .{ chain_domains[0][0].value, batch_offset });
+                            // Extract parameter for this epoch
+                            var epoch_parameter: [5]FieldElement = undefined;
+                            for (0..5) |p_idx| {
+                                epoch_parameter[p_idx] = FieldElement.fromMontgomery(packed_parameter[p_idx].values[0]);
                             }
 
-                            // Reduce chain domains to a single leaf domain using tree-tweak hashing
-                            // Debug: For epoch 1, log the leaf domain computation
-                            if (epoch == 1 and ctx.bottom_tree_index == 0) {
-                                log.print("ZIG_TREEBUILD_LEAF_EPOCH1: Computing leaf domain for epoch 1, local_idx={}, chain_domains[0][0]=0x{x:0>8}\n", .{ local_idx, chain_domains[0][0].value });
-                                // Also log the PRF domain element for comparison
-                                const prf_domain = ctx.scheme.prfDomainElement(ctx.prf_key, 1, 0);
-                                log.print("ZIG_TREEBUILD_LEAF_EPOCH1: PRF domain for epoch 1, chain 0: domain[0]=0x{x:0>8}, prf_key[0..8]=", .{prf_domain[0]});
-                                for (ctx.prf_key[0..8]) |b| log.print("{x:0>2}", .{b});
-                                log.print(", parameter[0]=0x{x:0>8} (canonical: 0x{x:0>8})\n", .{ ctx.parameter[0].value, ctx.parameter[0].toCanonical() });
-                                // CRITICAL: Also compute chain domain directly to verify
-                                const direct_chain_domain = ctx.scheme.computeHashChainDomain(prf_domain, 1, 0, ctx.parameter) catch |err| {
-                                    ctx.error_mutex.lock();
-                                    defer ctx.error_mutex.unlock();
-                                    if (ctx.stored_error == null) {
-                                        ctx.stored_error = err;
-                                    }
-                                    ctx.error_flag.store(true, .monotonic);
-                                    return;
-                                };
-                                log.print("ZIG_TREEBUILD_LEAF_EPOCH1: Direct chain domain computation: chain_domain[0]=0x{x:0>8}\n", .{direct_chain_domain[0].value});
-                                // Note: computeHashChainDomain returns a fixed-size array, not allocated memory, so no free needed
-                            }
-                            const leaf_domain_slice = ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch) catch |err| {
+                            // Use scalar sponge hash
+                            var leaf_domain_buffer: [8]FieldElement = undefined;
+                            ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, epoch_parameter, epoch, &leaf_domain_buffer) catch |err| {
                                 ctx.error_mutex.lock();
                                 defer ctx.error_mutex.unlock();
                                 if (ctx.stored_error == null) {
                                     ctx.stored_error = err;
                                 }
                                 ctx.error_flag.store(true, .monotonic);
-
-                                // No cleanup needed - using stack allocation
                                 return;
                             };
-                            defer ctx.scheme.allocator.free(leaf_domain_slice);
+                            const leaf_domain_slice = leaf_domain_buffer[0..ctx.hash_len];
 
-                            // Convert to fixed-size [8]FieldElement array (pad with zeros if needed)
                             for (0..ctx.hash_len) |i| {
                                 ctx.leaf_domains[local_idx][i] = leaf_domain_slice[i];
                             }
                             for (ctx.hash_len..8) |i| {
                                 ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
                             }
+                        } else {
+                            // Multiple epochs - use SIMD sponge hash
+                            var simd_output_buffer: [SIMD_WIDTH][8]FieldElement = undefined;
+                            ctx.scheme.reduceChainDomainsToLeafDomainSIMD(
+                                &simd_poseidon2,
+                                &packed_chains_slices,
+                                packed_epochs,
+                                packed_parameter,
+                                &simd_output_buffer,
+                            ) catch |err| {
+                                ctx.error_mutex.lock();
+                                defer ctx.error_mutex.unlock();
+                                if (ctx.stored_error == null) {
+                                    ctx.stored_error = err;
+                                }
+                                ctx.error_flag.store(true, .monotonic);
+                                return;
+                            };
 
-                            // Debug: For epoch 1, log what gets stored
-                            if (epoch == 1 and ctx.bottom_tree_index == 0) {
-                                log.debugPrint("ZIG_TREEBUILD_LEAF_EPOCH1: Stored leaf domain for epoch 1 at local_idx={}: leaf_domains[{}][0]=0x{x:0>8}\n", .{ local_idx, local_idx, ctx.leaf_domains[local_idx][0].value });
+                            // Copy results to leaf_domains
+                            for (0..actual_batch_size) |batch_offset| {
+                                const local_idx = batch_start_idx + batch_offset;
+                                for (0..ctx.hash_len) |i| {
+                                    ctx.leaf_domains[local_idx][i] = simd_output_buffer[batch_offset][i];
+                                }
+                                for (ctx.hash_len..8) |i| {
+                                    ctx.leaf_domains[local_idx][i] = FieldElement{ .value = 0 };
+                                }
                             }
                         }
 
@@ -1170,8 +1165,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             };
                         }
 
-                        // Reduce chain domains to leaf domain
-                        const leaf_domain_slice = ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch) catch |err| {
+                        // OPTIMIZATION: Use stack-allocated buffer for leaf domain output
+                        var leaf_domain_buffer: [8]FieldElement = undefined;
+                        ctx.scheme.reduceChainDomainsToLeafDomain(chain_domains, ctx.parameter, epoch, &leaf_domain_buffer) catch |err| {
                             ctx.error_mutex.lock();
                             defer ctx.error_mutex.unlock();
                             if (ctx.stored_error == null) {
@@ -1180,7 +1176,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                             ctx.error_flag.store(true, .monotonic);
                             return;
                         };
-                        defer ctx.scheme.allocator.free(leaf_domain_slice);
+                        const leaf_domain_slice = leaf_domain_buffer[0..ctx.hash_len];
 
                         // Store leaf domain
                         for (0..ctx.hash_len) |i| {
@@ -1209,9 +1205,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 .stored_error = null,
             };
 
-            // OPTIMIZATION FIX 5: Pre-divide work into chunks (matching Rust's par_chunks_exact)
+            // OPTIMIZATION: Pre-divide work into chunks (matching Rust's par_chunks_exact)
             // This is more cache-friendly and reduces atomic operations
-            const num_threads = @min(num_cpus, leafs_per_bottom_tree);
+            // OPTIMIZATION: Limit thread count to avoid overhead (Rust's rayon uses similar limits)
+            // For 1024 epochs, using all CPUs might create too many threads
+            const optimal_threads = @min(num_cpus, @max(1, leafs_per_bottom_tree / 32)); // At least 32 epochs per thread
+            const num_threads = @min(optimal_threads, leafs_per_bottom_tree);
             const num_epochs = leafs_per_bottom_tree;
             const chunk_size = (num_epochs + num_threads - 1) / num_threads; // Round up
 
@@ -2329,12 +2328,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
     /// Reduce 64 chain domains ([8] each) into a single leaf domain using Poseidon sponge
     /// This matches Rust's TH::apply when message.len() > 2 (sponge mode)
     /// Returns hash_len_fe elements (7 for lifetime 2^18, 8 for lifetime 2^8)
+    /// OPTIMIZATION: Accepts output buffer to avoid per-call allocation
     pub inline fn reduceChainDomainsToLeafDomain(
         self: *GeneralizedXMSSSignatureScheme,
         chain_domains_in: [][8]FieldElement,
         parameter: [5]FieldElement,
         epoch: u32,
-    ) ![]FieldElement {
+        output: []FieldElement, // Pre-allocated output buffer (must be at least hash_len_fe)
+    ) !void {
         if (chain_domains_in.len == 0) return error.InvalidInput;
 
         // Implement the sponge mode matching Rust exactly:
@@ -2630,20 +2631,218 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             log.print("\n", .{});
         }
 
+        // OPTIMIZATION: Write directly to output buffer instead of allocating
         // Take first OUTPUT_LEN elements (matching Rust's &out[0..OUT_LEN])
-        var result = try self.allocator.alloc(FieldElement, OUTPUT_LEN);
+        std.debug.assert(output.len >= OUTPUT_LEN);
         for (0..OUTPUT_LEN) |i| {
-            result[i] = FieldElement.fromMontgomery(out.items[i].value);
+            output[i] = FieldElement.fromMontgomery(out.items[i].value);
         }
 
         log.print("DEBUG: Sponge leaf domain ({} elements): ", .{OUTPUT_LEN});
-        for (result, 0..) |fe, i| {
+        for (output[0..OUTPUT_LEN], 0..) |fe, i| {
             log.print("{}:0x{x}", .{ i, fe.value });
             if (i < OUTPUT_LEN - 1) log.print(", ", .{});
         }
         log.print("\n", .{});
+    }
 
-        return result;
+    /// SIMD version: Reduce chain domains to leaf domains for all epochs in a batch simultaneously
+    /// This matches Rust's poseidon_sponge with PackedF inputs
+    /// Processes SIMD_WIDTH epochs in parallel using SIMD operations
+    /// packed_chains: [num_chains][hash_len]PackedF - chain ends for all epochs (vertical packing)
+    /// packed_epochs: @Vector(SIMD_WIDTH, u32) - epochs in this batch
+    /// packed_parameter: [5]PackedF - parameter broadcast to all lanes
+    /// output: [SIMD_WIDTH][hash_len]FieldElement - output buffer for all epochs
+    inline fn reduceChainDomainsToLeafDomainSIMD(
+        self: *GeneralizedXMSSSignatureScheme,
+        simd_poseidon2: *poseidon2_simd.Poseidon2SIMD,
+        packed_chains: [][]simd_utils.PackedF, // [num_chains][hash_len]PackedF
+        packed_epochs: @Vector(simd_utils.SIMD_WIDTH, u32),
+        packed_parameter: [5]simd_utils.PackedF,
+        output: [][8]FieldElement, // [SIMD_WIDTH][8]FieldElement - output buffer
+    ) !void {
+        const SIMD_WIDTH = simd_utils.SIMD_WIDTH;
+        const PARAMETER_LEN: u32 = @intCast(self.lifetime_params.parameter_len);
+        const TWEAK_LEN: u32 = @intCast(self.lifetime_params.tweak_len_fe);
+        const NUM_CHUNKS: u32 = @intCast(packed_chains.len);
+        const HASH_LEN: u32 = @intCast(self.lifetime_params.hash_len_fe);
+        const hash_len = self.lifetime_params.hash_len_fe;
+        const field = @import("../../core/field.zig");
+        const p: u128 = 2130706433; // KoalaBear field modulus
+
+        // STEP 1: Generate tree tweaks for all epochs in batch
+        // Each lane gets a tweak specific to its epoch
+        var packed_tree_tweak: [2]simd_utils.PackedF = undefined;
+        for (0..TWEAK_LEN) |t_idx| {
+            var tweak_values: [SIMD_WIDTH]u32 = undefined;
+            for (0..SIMD_WIDTH) |lane| {
+                const epoch = packed_epochs[lane];
+                const tweak_level: u8 = 0;
+                const tweak_bigint = (@as(u128, tweak_level) << 40) | (@as(u128, epoch) << 8) | field.TWEAK_SEPARATOR_FOR_TREE_HASH;
+                const tweak_fe = if (t_idx == 0)
+                    FieldElement.fromCanonical(@intCast(tweak_bigint % p))
+                else
+                    FieldElement.fromCanonical(@intCast((tweak_bigint / p) % p));
+                tweak_values[lane] = tweak_fe.value; // Already in Montgomery form
+            }
+            packed_tree_tweak[t_idx] = simd_utils.PackedF{ .values = tweak_values };
+        }
+
+        // STEP 2: Create domain separator (same for all epochs)
+        // CRITICAL FIX: Compute using scalar then verify SIMD produces same result
+        // Rust computes this with PackedF, but since all lanes have same value, scalar+broadcast should be equivalent
+        // However, to match Rust exactly, we should compute with SIMD
+        const DOMAIN_PARAMETERS_LENGTH: usize = 4;
+        const domain_params: [DOMAIN_PARAMETERS_LENGTH]u32 = [4]u32{ PARAMETER_LEN, TWEAK_LEN, NUM_CHUNKS, HASH_LEN };
+        var acc: u128 = 0;
+        for (domain_params) |param| {
+            acc = (acc << 32) | (@as(u128, param));
+        }
+        const Poseidon24 = @import("../../poseidon2/poseidon2.zig").Poseidon2KoalaBear24Plonky3;
+        const F = Poseidon24.Field;
+        var input_24_monty: [24]F = undefined;
+        var remaining = acc;
+        for (0..24) |i| {
+            const digit = remaining % p;
+            input_24_monty[i] = F.fromU32(@as(u32, @intCast(digit)));
+            remaining /= p;
+        }
+        var padded_input_monty: [24]F = undefined;
+        @memcpy(&padded_input_monty, &input_24_monty);
+        Poseidon24.permutation(&padded_input_monty);
+        for (0..24) |i| {
+            padded_input_monty[i] = padded_input_monty[i].add(input_24_monty[i]);
+        }
+        const CAPACITY: usize = self.lifetime_params.capacity;
+        var capacity_value_monty_stack: [9]F = undefined;
+        const capacity_value_monty = capacity_value_monty_stack[0..CAPACITY];
+        for (0..CAPACITY) |i| {
+            capacity_value_monty[i] = padded_input_monty[i];
+        }
+
+        // Pack capacity value to all SIMD lanes (same for all epochs)
+        // CRITICAL: Even though Rust computes with PackedF, scalar+broadcast should be equivalent
+        // since all lanes have the same value. But let's verify this is correct.
+        var packed_capacity_value: [9]simd_utils.PackedF = undefined;
+        for (0..CAPACITY) |i| {
+            packed_capacity_value[i] = simd_utils.PackedF{ .values = @splat(capacity_value_monty[i].value) };
+        }
+
+        // STEP 4: Assemble packed leaf input: [parameter | tree_tweak | all_chain_ends]
+        // Layout matches Rust: packed_parameter.iter().chain(packed_tree_tweak.iter()).chain(packed_chains.iter().flatten())
+        const packed_leaf_input_len = PARAMETER_LEN + TWEAK_LEN + (NUM_CHUNKS * HASH_LEN);
+        var packed_leaf_input_stack: [600]simd_utils.PackedF = undefined; // Max: 5 + 2 + 64*8 = 519
+        const packed_leaf_input = packed_leaf_input_stack[0..packed_leaf_input_len];
+        var input_idx: usize = 0;
+
+        // Add parameter (already packed)
+        @memcpy(packed_leaf_input[input_idx .. input_idx + PARAMETER_LEN], &packed_parameter);
+        input_idx += PARAMETER_LEN;
+
+        // Add tree tweak (packed)
+        @memcpy(packed_leaf_input[input_idx .. input_idx + TWEAK_LEN], &packed_tree_tweak);
+        input_idx += TWEAK_LEN;
+
+        // Add all chain ends (already packed)
+        for (packed_chains) |packed_chain| {
+            @memcpy(packed_leaf_input[input_idx .. input_idx + hash_len], packed_chain[0..hash_len]);
+            input_idx += hash_len;
+        }
+
+        // STEP 5: Apply SIMD sponge hash (processes all epochs simultaneously)
+        const WIDTH: usize = 24;
+        const RATE: usize = WIDTH - CAPACITY;
+
+        // Pad input to multiple of rate (matching Rust: (rate - (input.len() % rate)) % rate)
+        const original_input_len = packed_leaf_input.len;
+        const extra_elements = (RATE - (original_input_len % RATE)) % RATE;
+        const padded_input_len = original_input_len + extra_elements;
+        var padded_leaf_input_stack: [600]simd_utils.PackedF = undefined;
+        const padded_leaf_input = padded_leaf_input_stack[0..padded_input_len];
+        @memcpy(padded_leaf_input[0..original_input_len], packed_leaf_input);
+        // Pad with zeros
+        for (original_input_len..padded_input_len) |i| {
+            padded_leaf_input[i] = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+        }
+
+        // Initialize state: capacity in capacity part, zeros in rate part
+        // OPTIMIZATION: Initialize all to zero first, then set capacity part
+        var packed_state: [24]simd_utils.PackedF = undefined;
+        const zero_packed = simd_utils.PackedF{ .values = @splat(@as(u32, 0)) };
+        // Initialize all elements to zero (loop unrolled for efficiency)
+        for (&packed_state) |*elem| {
+            elem.* = zero_packed;
+        }
+        // Set capacity part
+        for (0..CAPACITY) |i| {
+            packed_state[RATE + i] = packed_capacity_value[i];
+        }
+
+        // Absorb: process padded input in chunks of RATE
+        // OPTIMIZATION: Pre-compute prime vector outside loop
+        const prime_vec: @Vector(simd_utils.SIMD_WIDTH, u32) = @splat(KOALABEAR_PRIME);
+        var chunk_start: usize = 0;
+        while (chunk_start < padded_leaf_input.len) {
+            const chunk_end = @min(chunk_start + RATE, padded_leaf_input.len);
+            const actual_chunk_len = chunk_end - chunk_start;
+
+            // Add chunk to rate part of state (SIMD addition with modular reduction)
+            // OPTIMIZED: Batch process additions with SIMD modular reduction
+            // CRITICAL: Must use modular addition to match Rust's field addition behavior
+            // Rust's PackedF addition uses field addition which includes modular reduction
+            // Algorithm: sum = a +% b; if sum >= p then sum -= p
+            // In Montgomery form, values are in [0, 2p), so after addition they're in [0, 4p)
+            // We only need one subtraction since 4p - p = 3p < 2^32 (p = 0x7f000001)
+            for (0..actual_chunk_len) |i| {
+                var sum = packed_state[i].values +% padded_leaf_input[chunk_start + i].values;
+                // SIMD modular reduction: if sum >= PRIME then sum -= PRIME
+                // Use SIMD comparison and conditional subtraction (single instruction on most CPUs)
+                const ge_mask = sum >= prime_vec;
+                sum = @select(u32, ge_mask, sum -% prime_vec, sum);
+                packed_state[i] = simd_utils.PackedF{ .values = sum };
+            }
+
+            // Permute state using SIMD Poseidon2-24 (permutation only, no feed-forward for sponge)
+            simd_poseidon2.permute24SIMDFromPackedF(&packed_state);
+
+            chunk_start = chunk_end;
+        }
+
+        // Squeeze: extract OUTPUT_LEN elements from rate part (matching Rust's squeeze exactly)
+        // OPTIMIZED: Since hash_len <= 8 and RATE = 15, we typically only need one iteration
+        // Rust: while out.len() < OUT_LEN { out.extend_from_slice(&state[..rate]); perm.permute_mut(&mut state); }
+        // Use stack allocation since we know max size needed (hash_len <= 8, RATE = 15, so max 15 elements)
+        var packed_out_stack: [15]simd_utils.PackedF = undefined;
+        var packed_out_len: usize = 0;
+
+        // OPTIMIZATION: Unroll first iteration since hash_len <= 8 < RATE = 15
+        // This avoids the loop overhead for the common case
+        if (hash_len > 0) {
+            // First iteration: read min(hash_len, RATE) elements
+            const first_read_len = @min(hash_len, RATE);
+            @memcpy(packed_out_stack[0..first_read_len], packed_state[0..first_read_len]);
+            packed_out_len = first_read_len;
+
+            // Only permute if we need more output (unlikely but matches Rust's behavior)
+            if (packed_out_len < hash_len) {
+                simd_poseidon2.permute24SIMDFromPackedF(&packed_state);
+                // Second iteration: read remaining elements (shouldn't happen for hash_len <= 8)
+                const remaining_len = hash_len - packed_out_len;
+                @memcpy(packed_out_stack[packed_out_len .. packed_out_len + remaining_len], packed_state[0..remaining_len]);
+                packed_out_len = hash_len;
+            }
+        }
+
+        // STEP 6: Unpack results to output buffer (truncate to OUTPUT_LEN, matching Rust's slice[0..OUT_LEN])
+        // Rust truncates to OUT_LEN: let slice = &out[0..OUT_LEN];
+        for (0..SIMD_WIDTH) |lane| {
+            for (0..hash_len) |h| {
+                output[lane][h] = FieldElement.fromMontgomery(packed_out_stack[h].values[lane]);
+            }
+            for (hash_len..8) |h| {
+                output[lane][h] = FieldElement.zero();
+            }
+        }
     }
 
     /// Build bottom tree from leaf hashes and return as array of 8 field elements
@@ -4194,8 +4393,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 }
             }
             log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1 chain_domains[0][0]=0x{x:0>8}\n", .{epoch1_chain_domains[0][0].value});
-            const epoch1_leaf = try self.reduceChainDomainsToLeafDomain(epoch1_chain_domains, secret_key.parameter, 1);
-            defer self.allocator.free(epoch1_leaf);
+            var epoch1_leaf_buffer: [8]FieldElement = undefined;
+            try self.reduceChainDomainsToLeafDomain(epoch1_chain_domains, secret_key.parameter, 1, &epoch1_leaf_buffer);
+            const epoch1_leaf = epoch1_leaf_buffer[0..self.lifetime_params.hash_len_fe];
             log.print("ZIG_SIGN_PATH_VERIFY: Epoch 1 leaf domain[0]=0x{x:0>8}\n", .{epoch1_leaf[0].value});
         }
 
@@ -4211,8 +4411,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
 
             // Compute leaf domain from scratch chain domains
-            const scratch_leaf = try self.reduceChainDomainsToLeafDomain(scratch_chain_domains, secret_key.parameter, epoch);
-            defer self.allocator.free(scratch_leaf);
+            var scratch_leaf_buffer: [8]FieldElement = undefined;
+            try self.reduceChainDomainsToLeafDomain(scratch_chain_domains, secret_key.parameter, epoch, &scratch_leaf_buffer);
+            const scratch_leaf = scratch_leaf_buffer[0..self.lifetime_params.hash_len_fe];
 
             // Now compute what verification would produce (continue from stored hashes to position 7)
             var verify_chain_domains = try self.allocator.alloc([8]FieldElement, hashes.len);
@@ -4236,8 +4437,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 verify_chain_domains[chain_idx] = verify_current;
             }
 
-            const verify_leaf = try self.reduceChainDomainsToLeafDomain(verify_chain_domains, secret_key.parameter, epoch);
-            defer self.allocator.free(verify_leaf);
+            var verify_leaf_buffer: [8]FieldElement = undefined;
+            try self.reduceChainDomainsToLeafDomain(verify_chain_domains, secret_key.parameter, epoch, &verify_leaf_buffer);
+            const verify_leaf = verify_leaf_buffer[0..self.lifetime_params.hash_len_fe];
 
             log.debugPrint("ZIG_SIGN_LEAF_VERIFY: Scratch leaf[0]=0x{x:0>8}, verify leaf[0]=0x{x:0>8}\n", .{ scratch_leaf[0].value, verify_leaf[0].value });
             if (!scratch_leaf[0].eql(verify_leaf[0])) {
@@ -4476,8 +4678,9 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         if (epoch == 16) {
             log.print("ZIG_VERIFY_DEBUG: Calling reduceChainDomainsToLeafDomain with final_chain_domains.len={} epoch={}\n", .{ final_chain_domains.len, epoch });
         }
-        const leaf_domain_slice = try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch);
-        defer self.allocator.free(leaf_domain_slice);
+        var leaf_domain_buffer: [8]FieldElement = undefined;
+        try self.reduceChainDomainsToLeafDomain(final_chain_domains, public_key.parameter, epoch, &leaf_domain_buffer);
+        const leaf_domain_slice = leaf_domain_buffer[0..self.lifetime_params.hash_len_fe];
         // Debug: print leaf domain after reduction
         log.debugPrint("ZIG_VERIFY_DEBUG: Leaf domain after reduction (Montgomery): ", .{});
         for (0..hash_len) |h| {

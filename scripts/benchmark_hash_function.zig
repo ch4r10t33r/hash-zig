@@ -6,6 +6,7 @@ const hash_zig = @import("hash-zig");
 const Allocator = std.mem.Allocator;
 const FieldElement = hash_zig.FieldElement;
 const Poseidon2RustCompat = hash_zig.Poseidon2RustCompat;
+// Import directly to avoid module conflicts (benchmark is separate executable)
 const poseidon2_simd = @import("../src/hash/poseidon2_hash_simd.zig");
 const simd_utils = @import("../src/signature/native/simd_utils.zig");
 
