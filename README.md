@@ -165,7 +165,9 @@ See [Performance Benchmarks](#performance-benchmarks) for detailed timing inform
 
 ## Performance Benchmarks
 
-Performance measurements are taken using `zig build test-lifetimes` with ReleaseFast optimization. All benchmarks are run with debug logging disabled for accurate performance measurements.
+Performance measurements are taken using ReleaseFast builds with debug logging disabled. For lifetime `2^32` with 1024 active epochs, key generation time is measured using the dedicated profiler:
+
+- `zig build profile-keygen -Doptimize=ReleaseFast -Denable-profile-keygen=true -Ddebug-logs=false`
 
 ### Lifetime 2^8 (256 Active Epochs)
 
@@ -209,9 +211,9 @@ Performance measurements are taken using `zig build test-lifetimes` with Release
 ### Lifetime 2^32 (1024 Active Epochs) - With Parallel Tree Generation
 
 **Key Generation:**
-- Time: **~51.7 seconds** (with parallel tree generation)
-- Previous baseline: **~96.6 seconds** (sequential generation)
-- **Improvement: 46.5% faster (1.87x speedup)**
+- Time: **~7.1 seconds** (measured with `profile-keygen`, 1024 active epochs, ReleaseFast)
+- Previous baseline (sequential, no full SIMD / cache optimisations): **~96.6 seconds**
+- **Improvement vs. baseline: ~92.6% faster (~13.6x speedup)**
 
 **Performance Optimization:**
 - Parallel bottom tree generation utilizes all available CPU cores
@@ -249,9 +251,9 @@ This section provides a summary of optimizations implemented in the Zig implemen
 
 **Current Performance (2^32, 1024 epochs):**
 - Rust: **~2.0-3.2s**
-- Zig: **~17.9s** (after full SIMD implementation, down from 57.9s baseline)
-- Gap: **~5.6-9x slower** (down from ~18x)
-- **Note**: Full SIMD Poseidon2 is implemented and enabled, providing 69% improvement from baseline
+- Zig: **~7.1s** (measured with `profile-keygen`, 1024 active epochs)
+- Gap: **~2.2-3.6x slower** (down from ~18x)
+- **Note**: Full SIMD Poseidon2 is implemented and enabled, plus bottom-tree caching and parallel tree generation
 
 **Current Performance (2^32, 256 epochs) - ✅ VERIFIED:**
 - Rust: **2.000s**

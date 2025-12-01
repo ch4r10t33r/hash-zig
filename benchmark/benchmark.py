@@ -420,15 +420,10 @@ def run_scenario(cfg: ScenarioConfig, timeout_2_32: int) -> tuple[Dict[str, Oper
     results["zig_sign"] = run_zig_sign(cfg, paths, timeout_2_32)
     results["zig_self"] = run_zig_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Zig verify")
     
-    # Rust verifies using Zig's public key
-    # NOTE: For lifetime 2^18, the Rust helper currently cannot deserialize the
-    # Zig-generated public key JSON due to a serde_json compatibility issue.
-    # The underlying trees/roots are still fully compatible, so we verify the
-    # Zig-generated signature against the Rust-generated public key instead.
-    zig_to_rust_pk = paths["zig_pk"]
-    if cfg.lifetime == "2^18":
-        zig_to_rust_pk = paths["rust_pk"]
-    results["zig_to_rust"] = run_rust_verify(cfg, zig_to_rust_pk, paths["zig_sig"], "Zig sign → Rust verify")
+    # Rust verifies using Zig's public key (same behavior for all lifetimes)
+    # This exercises full cross-language compatibility: Zig-generated public key and
+    # signature must be accepted by the Rust verifier.
+    results["zig_to_rust"] = run_rust_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Rust verify")
 
     return results, paths
 

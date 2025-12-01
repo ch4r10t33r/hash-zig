@@ -311,7 +311,9 @@ pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXM
     // Serialize root first to match Rust format
     try result.appendSlice("\"root\":");
     const root = public_key.getRoot();
-    const root_json = try serializeFieldElementArray(allocator, &root);
+    const active_len = public_key.getHashLenFe();
+    const root_slice = root[0..active_len];
+    const root_json = try serializeFieldElementArray(allocator, root_slice);
     defer allocator.free(root_json);
     try result.appendSlice(root_json);
 
@@ -370,7 +372,7 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
         parameter[i] = try parseFieldElementFromJsonValue(item);
     }
 
-    return GeneralizedXMSSPublicKey.init(root, parameter);
+    return GeneralizedXMSSPublicKey.init(root, parameter, root_len);
 }
 
 /// Serialize a secret key (simplified - just the essential data for testing)
