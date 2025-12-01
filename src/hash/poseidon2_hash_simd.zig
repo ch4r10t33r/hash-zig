@@ -724,12 +724,14 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware double operation - 4-wide
-    fn doubleSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn doubleSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
         return addSIMD4(x, x);
     }
 
     /// SIMD-aware double operation - 8-wide
-    fn doubleSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn doubleSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
         return addSIMD8(x, x);
     }
 
@@ -743,7 +745,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware halve operation - 4-wide
-    fn halveSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn halveSIMD4(x: @Vector(4, u32)) @Vector(4, u32) {
         const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001;
         var result: @Vector(4, u32) = undefined;
         inline for (0..4) |i| {
@@ -756,7 +759,8 @@ pub const Poseidon2SIMD = struct {
     }
 
     /// SIMD-aware halve operation - 8-wide
-    fn halveSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
+    /// OPTIMIZATION: Inline for hot path
+    inline fn halveSIMD8(x: @Vector(8, u32)) @Vector(8, u32) {
         const KOALABEAR_HALF_P_PLUS_1: u32 = 0x3f800001;
         var result: @Vector(8, u32) = undefined;
         inline for (0..8) |i| {
