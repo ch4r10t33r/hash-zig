@@ -6,7 +6,34 @@ pub fn build(b: *std.Build) void {
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
     const enable_debug_logs = b.option(bool, "debug-logs", "Enable verbose std.debug logging") orelse false;
     const enable_profile_keygen = b.option(bool, "enable-profile-keygen", "Enable detailed keygen profiling logs") orelse false;
-    const simd_width = b.option(u32, "simd-width", "SIMD width (4 or 8, default: 4)") orelse 4;
+    
+    // Auto-detect SIMD width based on target CPU features
+    // If user explicitly sets simd-width, use that; otherwise auto-detect
+    const explicit_simd_width = b.option(u32, "simd-width", "SIMD width (4 or 8, default: auto-detect)");
+    const simd_width: u32 = if (explicit_simd_width) |width| width else blk: {
+        // Auto-detect based on target architecture and CPU features
+        const target_info = target.result;
+        
+        // Only x86_64 can support AVX-512 (8-wide SIMD)
+        if (target_info.cpu.arch == .x86_64) {
+            // Check if AVX-512F feature is enabled in the target
+            const avx512f_feature = @intFromEnum(std.Target.x86.Feature.avx512f);
+            const has_avx512_feature = target_info.cpu.features.isEnabled(avx512f_feature);
+            
+            if (has_avx512_feature) {
+                std.debug.print("Build: Auto-detected AVX-512 support, using 8-wide SIMD\n", .{});
+                break :blk 8;
+            } else {
+                std.debug.print("Build: No AVX-512 detected, using 4-wide SIMD (SSE4.1)\n", .{});
+                std.debug.print("Build: To enable AVX-512, specify CPU model with AVX-512 support (e.g., -mcpu=skylake-avx512) or use -Dsimd-width=8\n", .{});
+                break :blk 4;
+            }
+        } else {
+            // ARM/other architectures: always use 4-wide
+            std.debug.print("Build: Non-x86_64 architecture ({s}), using 4-wide SIMD\n", .{@tagName(target_info.cpu.arch)});
+            break :blk 4;
+        }
+    };
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_debug_logs", enable_debug_logs);

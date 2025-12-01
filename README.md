@@ -203,20 +203,38 @@ zig build benchmark-parallel -Doptimize=ReleaseFast
 
 ## AVX-512 Optimization (8-wide SIMD)
 
-For x86-64 systems with AVX-512 support, you can build with 8-wide SIMD for approximately 2x performance improvement:
+The build script automatically detects AVX-512 support based on the target CPU features. For x86-64 systems with AVX-512 support, you can build with 8-wide SIMD for approximately 2x performance improvement.
+
+### Automatic Detection
+
+The build script will automatically detect and use 8-wide SIMD if:
+- The target architecture is x86-64
+- The target CPU has AVX-512F feature enabled (e.g., when using `-mcpu=skylake-avx512`)
 
 ```bash
-# Build with 8-wide SIMD (AVX-512)
-zig build profile-keygen -Doptimize=ReleaseFast -Dsimd-width=8 -Denable-profile-keygen=true -Ddebug-logs=false
+# Build with auto-detection (will use 8-wide if AVX-512 is detected)
+zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
 
-# Or for all targets
+# Or explicitly specify CPU model with AVX-512 support
+zig build install -Doptimize=ReleaseFast -Ddebug-logs=false --cpu skylake-avx512
+```
+
+### Manual Override
+
+You can also explicitly set the SIMD width:
+
+```bash
+# Force 8-wide SIMD (AVX-512)
 zig build install -Doptimize=ReleaseFast -Dsimd-width=8 -Ddebug-logs=false
+
+# Force 4-wide SIMD (SSE4.1/NEON)
+zig build install -Doptimize=ReleaseFast -Dsimd-width=4 -Ddebug-logs=false
 ```
 
 **Requirements:**
 - x86-64 CPU with AVX-512F support
 - Zig compiler (0.14.1+)
-- Build with `-Dsimd-width=8` flag
+- Build with `-Dsimd-width=8` flag or specify CPU model with AVX-512 support
 
 **Performance Impact:**
 - 4-wide SIMD (default): ~7.1-7.4s for 2^32 (1024 epochs)
