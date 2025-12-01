@@ -422,6 +422,67 @@ pub const HashTreeOpening = struct {
     pub fn getNodes(self: *const HashTreeOpening) [][8]FieldElement {
         return self.nodes;
     }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const HashTreeOpening, l: *std.ArrayList(u8)) !void {
+        // Convert nodes to canonical u32 arrays
+        var nodes_canonical = try self.allocator.alloc([8]u32, self.nodes.len);
+        defer self.allocator.free(nodes_canonical);
+
+        for (self.nodes, 0..) |node, i| {
+            for (node, 0..) |fe, j| {
+                nodes_canonical[i][j] = fe.toCanonical();
+            }
+        }
+
+        // Use generic slice serialization for variable-length list
+        try ssz.serialize([]const [8]u32, nodes_canonical, l);
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *HashTreeOpening, allocator: ?std.mem.Allocator) !usize {
+        const alloc = allocator orelse return error.AllocatorRequired;
+
+        // Decode canonical u32 arrays
+        // First, we need to determine the length from SSZ List encoding
+        if (serialized.len < 4) return error.InvalidLength;
+        const offset = std.mem.readInt(u32, serialized[0..4], .little);
+        if (offset > serialized.len) return error.InvalidOffset;
+
+        // For fixed-size items ([8]u32 = 32 bytes), calculate number of items
+        const data_start = offset;
+        const data_len = serialized.len - data_start;
+        const num_items = data_len / 32;
+
+        var nodes_canonical = try alloc.alloc([8]u32, num_items);
+        defer alloc.free(nodes_canonical);
+
+        var pos = data_start;
+        for (0..num_items) |i| {
+            try ssz.deserialize([8]u32, serialized[pos .. pos + 32], &nodes_canonical[i], null);
+            pos += 32;
+        }
+
+        // Convert back to FieldElement arrays
+        var nodes = try alloc.alloc([8]FieldElement, num_items);
+        for (nodes_canonical, 0..) |node_canonical, i| {
+            for (node_canonical, 0..) |val, j| {
+                nodes[i][j] = FieldElement.fromCanonical(val);
+            }
+        }
+
+        out.* = HashTreeOpening{
+            .nodes = nodes,
+            .allocator = alloc,
+        };
+
+        // Return the number of bytes consumed
+        return pos;
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return false; // Variable size
+    }
 };
 
 // Signature structure matching Rust exactly
@@ -519,6 +580,59 @@ pub const GeneralizedXMSSPublicKey = struct {
     pub fn serialize(self: *const GeneralizedXMSSPublicKey, allocator: std.mem.Allocator) ![]u8 {
         return serialization.serializePublicKey(allocator, self);
     }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const GeneralizedXMSSPublicKey, l: *std.ArrayList(u8)) !void {
+        // Convert root to canonical u32 array and serialize
+        var root_canonical: [8]u32 = undefined;
+        for (self.root, 0..) |fe, i| {
+            root_canonical[i] = fe.toCanonical();
+        }
+        try ssz.serialize([8]u32, root_canonical, l);
+
+        // Convert parameter to canonical u32 array and serialize
+        var param_canonical: [5]u32 = undefined;
+        for (self.parameter, 0..) |fe, i| {
+            param_canonical[i] = fe.toCanonical();
+        }
+        try ssz.serialize([5]u32, param_canonical, l);
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSPublicKey, allocator: ?std.mem.Allocator) !void {
+        _ = allocator; // Not needed for fixed-size types
+
+        // Decode root (32 bytes for 8 u32s)
+        var root_canonical: [8]u32 = undefined;
+        try ssz.deserialize([8]u32, serialized[0..32], &root_canonical, null);
+        var root: [8]FieldElement = undefined;
+        for (root_canonical, 0..) |val, i| {
+            root[i] = FieldElement.fromCanonical(val);
+        }
+
+        // Decode parameter (20 bytes for 5 u32s)
+        var param_canonical: [5]u32 = undefined;
+        try ssz.deserialize([5]u32, serialized[32..52], &param_canonical, null);
+        var parameter: [5]FieldElement = undefined;
+        for (param_canonical, 0..) |val, i| {
+            parameter[i] = FieldElement.fromCanonical(val);
+        }
+
+        // Determine hash_len_fe from root (count non-zero elements, or use 8 if all non-zero)
+        var hash_len_fe: usize = 8;
+        for (root, 0..) |fe, i| {
+            if (fe.isZero() and i > 0) {
+                hash_len_fe = i;
+                break;
+            }
+        }
+
+        out.* = GeneralizedXMSSPublicKey.init(root, parameter, hash_len_fe);
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return true; // 32 + 20 = 52 bytes
+    }
 };
 
 // Secret key structure matching Rust exactly
@@ -588,6 +702,60 @@ pub const GeneralizedXMSSSecretKey = struct {
 
     pub fn getParameter(self: *const GeneralizedXMSSSecretKey) [5]FieldElement {
         return self.parameter;
+    }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const GeneralizedXMSSSecretKey, l: *std.ArrayList(u8)) !void {
+        // Encode prf_key (32 bytes, fixed-size)
+        try ssz.serialize([32]u8, self.prf_key, l);
+
+        // Convert parameter to canonical u32 array and serialize (20 bytes for 5 u32s)
+        var param_canonical: [5]u32 = undefined;
+        for (self.parameter, 0..) |fe, i| {
+            param_canonical[i] = fe.toCanonical();
+        }
+        try ssz.serialize([5]u32, param_canonical, l);
+
+        // Encode activation_epoch as u64 (8 bytes)
+        try ssz.serialize(u64, @as(u64, @intCast(self.activation_epoch)), l);
+
+        // Encode num_active_epochs as u64 (8 bytes)
+        try ssz.serialize(u64, @as(u64, @intCast(self.num_active_epochs)), l);
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSecretKey, allocator: ?std.mem.Allocator) !void {
+        const alloc = allocator orelse return error.AllocatorRequired;
+        _ = alloc; // Note: Secret key requires trees which are not serialized
+
+        var offset: usize = 0;
+
+        // Decode prf_key (32 bytes)
+        if (serialized.len < offset + 32) return error.InvalidLength;
+        var prf_key: [32]u8 = undefined;
+        try ssz.deserialize([32]u8, serialized[offset .. offset + 32], &prf_key, null);
+        offset += 32;
+
+        // Decode parameter (20 bytes for 5 u32s)
+        if (serialized.len < offset + 20) return error.InvalidLength;
+        var param_canonical: [5]u32 = undefined;
+        try ssz.deserialize([5]u32, serialized[offset .. offset + 20], &param_canonical, null);
+        offset += 20;
+        var parameter: [5]FieldElement = undefined;
+        for (param_canonical, 0..) |val, i| {
+            parameter[i] = FieldElement.fromCanonical(val);
+        }
+
+        // Validate remaining bytes exist (activation_epoch + num_active_epochs = 16 bytes)
+        // Note: We don't decode these fields since trees are not serialized and can't be reconstructed
+        // The caller must call keyGen to reconstruct the full secret key with trees
+        if (serialized.len < offset + 16) return error.InvalidLength;
+        _ = out;
+        return error.SecretKeyRequiresKeyGen; // Indicate that keyGen is needed
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return true; // 32 + 20 + 8 + 8 = 68 bytes
     }
 
     // Serialization method using controlled access
