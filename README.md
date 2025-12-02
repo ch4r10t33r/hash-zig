@@ -4,15 +4,15 @@
 [![Zig](https://img.shields.io/badge/zig-0.14.1-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible behavior against the Rust reference implementation ([leanSig](https://github.com/leanEthereum/leanSig)). Keys, signatures, and Merkle paths interchange freely between the two ecosystems for lifetimes `2^8`, `2^18`, and `2^32`.
+Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible behavior against the Rust reference implementation ([leanSig](https://github.com/leanEthereum/leanSig)). Keys, signatures, and Merkle paths interchange freely between the two ecosystems for lifetimes `2^8`, `2^18`, and `2^32` for both **bincode** and **SSZ** encodings.
 
-**✅ Cross-Language Compatibility**: All cross-language compatibility tests pass for lifetimes `2^8` and `2^32` in both directions (Rust↔Zig). For lifetime `2^18`, all flows pass except **Zig sign → Rust verify**, which currently fails only on the Rust side; this is being tracked as a known limitation of the 2^18 instantiation.
+**✅ Cross-Language Compatibility**: All cross-language compatibility tests now pass for lifetimes `2^8`, `2^18`, and `2^32` in both directions (Rust↔Zig), for both the original **bincode** format and the new **SSZ** format (using `ethereum_ssz` on the Rust side and `ssz.zig` on the Zig side).
 
 **⚠️ Prototype Status**: This is a prototype implementation for research and development purposes. Use at your own risk.
 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
-- **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^32`. Locally, test all lifetimes (`2^8`, `2^18`, `2^32`) via `--lifetime` and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
+- **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^32` (bincode by default). Locally, you can test all lifetimes (`2^8`, `2^18`, `2^32`) and both encodings by passing `--lifetime` and optionally `--ssz`, and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
 - **Performance optimizations** – Parallel tree generation, SIMD optimizations, and AVX-512 support for improved key generation performance (~7.1s for 2^32 with 1024 active epochs).
 - **Pure Zig** – minimal dependencies, explicit memory management, ReleaseFast-ready.
 
@@ -318,7 +318,12 @@ The repository includes GitHub Actions workflows that automatically exercise **c
 cd hash-zig
 zig build lint
 zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
-python3 benchmark/benchmark.py --lifetime "2^8,2^32"
+
+# Bincode encoding (default)
+python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32"
+
+# SSZ encoding (matches ethereum_ssz on Rust side)
+python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32" --ssz
 ```
 
 - **Windows (PowerShell)**:
