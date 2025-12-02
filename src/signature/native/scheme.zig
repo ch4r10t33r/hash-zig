@@ -5115,6 +5115,7 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         // - For 2^32: bottom (16) + top (16) = 32 nodes
         // Concatenate bottom and top co-paths for all lifetimes
         var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
+        defer self.allocator.free(nodes_concat); // Free after HashTreeOpening.init() copies it
         @memcpy(nodes_concat[0..bottom_copath.len], bottom_copath);
         @memcpy(nodes_concat[bottom_copath.len..], top_copath);
         const path = try HashTreeOpening.init(self.allocator, nodes_concat);
