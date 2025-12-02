@@ -99,6 +99,11 @@ def parse_args() -> argparse.Namespace:
         default=2400,
         help="Timeout (seconds) for Zig signing when exercising lifetime 2^32.",
     )
+    parser.add_argument(
+        "--ssz",
+        action="store_true",
+        help="(Deprecated: SSZ is now always used) Kept for backward compatibility.",
+    )
     args = parser.parse_args()
 
     if args.lifetimes is None:
