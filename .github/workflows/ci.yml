@@ -100,7 +100,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.89.0
+          # Use nightly toolchain to support Rust edition 2024 required by leansig dependency
+          # This matches rust-toolchain.toml in benchmark/rust_benchmark/
+          toolchain: nightly
+          components: clippy, rustfmt
       
       - name: Clear Zig cache and fetch dependencies
         shell: bash

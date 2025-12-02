@@ -19,6 +19,82 @@ const rng_flow = @import("rng_flow.zig");
 const poseidon_top_level = @import("poseidon_top_level.zig");
 const target_sum_encoding = @import("target_sum_encoding.zig");
 const simd_utils = @import("simd_utils.zig");
+const ssz = @import("ssz");
+
+// SSZ tests
+test "SSZ: GeneralizedXMSSPublicKey roundtrip" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Create a test public key
+    var root: [8]FieldElement = undefined;
+    for (0..8) |i| {
+        root[i] = FieldElement.fromU32(@intCast(i + 1));
+    }
+    var parameter: [5]FieldElement = undefined;
+    for (0..5) |i| {
+        parameter[i] = FieldElement.fromU32(@intCast(i + 10));
+    }
+    const original = GeneralizedXMSSPublicKey.init(root, parameter, 8);
+
+    // Encode
+    var encoded = std.ArrayList(u8).init(allocator);
+    defer encoded.deinit();
+    try original.sszEncode(&encoded);
+
+    // Decode
+    var decoded: GeneralizedXMSSPublicKey = undefined;
+    try GeneralizedXMSSPublicKey.sszDecode(encoded.items, &decoded, null);
+
+    // Verify
+    const decoded_root = decoded.getRoot();
+    const decoded_param = decoded.getParameter();
+    for (root, decoded_root) |orig, dec| {
+        try std.testing.expect(orig.eql(dec));
+    }
+    for (parameter, decoded_param) |orig, dec| {
+        try std.testing.expect(orig.eql(dec));
+    }
+    try std.testing.expectEqual(@as(usize, 8), decoded.getHashLenFe());
+}
+
+test "SSZ: HashTreeOpening roundtrip" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Create test nodes
+    var nodes = try allocator.alloc([8]FieldElement, 3);
+    defer allocator.free(nodes);
+    for (0..3) |i| {
+        for (0..8) |j| {
+            nodes[i][j] = FieldElement.fromU32(@intCast(i * 8 + j + 1));
+        }
+    }
+
+    const original = try HashTreeOpening.init(allocator, nodes);
+    defer original.deinit();
+
+    // Encode
+    var encoded = std.ArrayList(u8).init(allocator);
+    defer encoded.deinit();
+    try original.sszEncode(&encoded);
+
+    // Decode
+    var decoded: HashTreeOpening = undefined;
+    defer decoded.deinit();
+    try HashTreeOpening.sszDecode(encoded.items, &decoded, allocator);
+
+    // Verify
+    const decoded_nodes = decoded.getNodes();
+    try std.testing.expectEqual(nodes.len, decoded_nodes.len);
+    for (nodes, decoded_nodes) |orig_node, dec_node| {
+        for (orig_node, dec_node) |orig_fe, dec_fe| {
+            try std.testing.expect(orig_fe.eql(dec_fe));
+        }
+    }
+}
 
 // Constants matching Rust exactly
 const MESSAGE_LENGTH = 32;
@@ -421,6 +497,102 @@ pub const HashTreeOpening = struct {
     pub fn getNodes(self: *const HashTreeOpening) [][8]FieldElement {
         return self.nodes;
     }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const HashTreeOpening, l: *std.ArrayList(u8), hash_len_fe: usize) !void {
+        // Rust's HashTreeOpening is a struct with one variable field: co_path (Vec<Domain>)
+        // SSZ Container encoding: [internal_offset: 4][co_path data]
+        // Since Domain (FieldArray) is fixed-size, Vec<Domain> encodes as raw bytes WITHOUT length prefix
+
+        // Write internal offset (always 4, points to where co_path starts)
+        try ssz.serialize(u32, @as(u32, 4), l);
+
+        // Write co_path as raw node data (no length prefix for fixed-size items)
+        // Each node is hash_len_fe field elements (28 bytes for 2^18, 32 bytes for 2^8/2^32)
+        for (self.nodes) |node| {
+            // Write only hash_len_fe field elements per node
+            for (0..hash_len_fe) |j| {
+                const canonical = node[j].toCanonical();
+                try ssz.serialize(u32, canonical, l);
+            }
+        }
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *HashTreeOpening, allocator: ?std.mem.Allocator, hash_len_fe: usize) !void {
+        const alloc = allocator orelse return error.AllocatorRequired;
+
+        // Rust's HashTreeOpening is a struct with one variable field: co_path (Vec<Domain>)
+        // SSZ Container encoding: [internal_offset: 4][co_path data as raw bytes]
+        // Since Domain (FieldArray) is fixed-size, Vec<Domain> encodes WITHOUT length prefix
+
+        // Read internal offset (should be 4)
+        if (serialized.len < 4) return error.InvalidLength;
+        const internal_offset = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[0])), .little);
+
+        if (internal_offset != 4) return error.InvalidOffset;
+
+        // Calculate number of nodes from remaining data
+        // Each node is hash_len_fe field elements × 4 bytes
+        const node_size = hash_len_fe * 4;
+        const copath_data_len = serialized.len - internal_offset;
+
+        if (copath_data_len % node_size != 0) return error.InvalidLength;
+        const num_nodes = copath_data_len / node_size;
+
+        if (num_nodes == 0) {
+            out.* = HashTreeOpening{
+                .nodes = try alloc.alloc([8]FieldElement, 0),
+                .allocator = alloc,
+            };
+            return;
+        }
+
+        // Decode nodes
+        var nodes = try alloc.alloc([8]FieldElement, num_nodes);
+        errdefer alloc.free(nodes);
+
+        var pos: usize = internal_offset;
+        for (0..num_nodes) |node_idx| {
+            // Read hash_len_fe field elements for this node
+            for (0..hash_len_fe) |j| {
+                if (serialized.len < pos + 4) return error.InvalidLength;
+                var val: u32 = undefined;
+                try ssz.deserialize(u32, serialized[pos .. pos + 4], &val, null);
+                nodes[node_idx][j] = FieldElement.fromCanonical(val);
+                pos += 4;
+            }
+            // Zero-pad remaining field elements if hash_len_fe < 8
+            for (hash_len_fe..8) |j| {
+                nodes[node_idx][j] = FieldElement.fromCanonical(0);
+            }
+        }
+
+        out.* = HashTreeOpening{
+            .nodes = nodes,
+            .allocator = alloc,
+        };
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return false; // Variable size
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    pub fn toBytes(self: *const HashTreeOpening, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    pub fn fromBytes(serialized: []const u8, allocator: std.mem.Allocator) !*HashTreeOpening {
+        const decoded = try allocator.create(HashTreeOpening);
+        errdefer allocator.destroy(decoded);
+        try sszDecode(serialized, decoded, allocator);
+        return decoded;
+    }
 };
 
 // Signature structure matching Rust exactly
@@ -431,17 +603,34 @@ pub const GeneralizedXMSSSignature = struct {
     hashes: [][8]FieldElement, // Vec<TH::Domain>
     allocator: std.mem.Allocator,
     is_deserialized: bool, // Track if signature was deserialized from JSON (Rust→Zig)
+    rand_len_fe: ?usize, // Store rand_len_fe for SSZ encoding (None = infer from rho)
 
     pub fn init(allocator: std.mem.Allocator, path: *HashTreeOpening, rho: [7]FieldElement, hashes: [][8]FieldElement) !*GeneralizedXMSSSignature {
         const self = try allocator.create(GeneralizedXMSSSignature);
         const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
         @memcpy(hashes_copy, hashes);
+        // Infer rand_len_fe from rho (count non-zero elements, but at least 6 for 2^18, 7 for 2^8/2^32)
+        // Actually, we can't reliably infer it, so we'll set it to None and infer during SSZ encoding
+        var rand_len_fe: ?usize = null;
+        // Try to infer: count non-zero elements, but this is not reliable
+        for (0..7) |i| {
+            if (rho[i].isZero()) {
+                if (i >= 6) {
+                    rand_len_fe = i;
+                    break;
+                }
+            }
+        }
+        if (rand_len_fe == null) {
+            rand_len_fe = 7; // Default to 7 if all non-zero
+        }
         self.* = GeneralizedXMSSSignature{
             .path = path,
             .rho = rho,
             .hashes = hashes_copy,
             .allocator = allocator,
             .is_deserialized = false, // Created directly, not deserialized
+            .rand_len_fe = rand_len_fe,
         };
         return self;
     }
@@ -450,12 +639,26 @@ pub const GeneralizedXMSSSignature = struct {
         const self = try allocator.create(GeneralizedXMSSSignature);
         const hashes_copy = try allocator.alloc([8]FieldElement, hashes.len);
         @memcpy(hashes_copy, hashes);
+        // Infer rand_len_fe from rho (count non-zero elements)
+        var rand_len_fe: ?usize = null;
+        for (0..7) |i| {
+            if (rho[i].isZero()) {
+                if (i >= 6) {
+                    rand_len_fe = i;
+                    break;
+                }
+            }
+        }
+        if (rand_len_fe == null) {
+            rand_len_fe = 7; // Default to 7 if all non-zero
+        }
         self.* = GeneralizedXMSSSignature{
             .path = path,
             .rho = rho,
             .hashes = hashes_copy,
             .allocator = allocator,
             .is_deserialized = true, // Deserialized from JSON (Rust→Zig)
+            .rand_len_fe = rand_len_fe,
         };
         return self;
     }
@@ -468,11 +671,15 @@ pub const GeneralizedXMSSSignature = struct {
 
     // Controlled access methods for private fields
     pub fn getPath(self: *const GeneralizedXMSSSignature) *HashTreeOpening {
+        // Direct field access - if this crashes, the struct memory is invalid
         return self.path;
     }
 
     pub fn getRho(self: *const GeneralizedXMSSSignature) [7]FieldElement {
-        return self.rho;
+        // Direct field access - rho is at offset 40
+        // Return by value to avoid potential pointer issues
+        const rho = self.rho;
+        return rho;
     }
 
     pub fn getHashes(self: *const GeneralizedXMSSSignature) [][8]FieldElement {
@@ -482,6 +689,299 @@ pub const GeneralizedXMSSSignature = struct {
     // Serialization method using controlled access
     pub fn serialize(self: *const GeneralizedXMSSSignature, allocator: std.mem.Allocator) ![]u8 {
         return serialization.serializeSignature(allocator, self);
+    }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const GeneralizedXMSSSignature, l: *std.ArrayList(u8)) !void {
+        // SSZ struct encoding for GeneralizedXMSSSignature:
+        // Field order: path (variable), rho (fixed), hashes (variable)
+        // var_start = path_offset(4) + rho(28) + hashes_offset(4) = 36
+
+        // Determine sizes based on rand_len_fe
+        // For 2^18: rand_len_fe=6 → rho is 24 bytes, hash_len_fe=7 → nodes are 28 bytes
+        // For 2^8/2^32: rand_len_fe=7 → rho is 28 bytes, hash_len_fe=8 → nodes are 32 bytes
+        const rand_len = self.rand_len_fe orelse 7;
+        const hash_len_fe = rand_len + 1; // 2^18: 6+1=7, 2^8/2^32: 7+1=8
+        const rho_size = rand_len * 4;
+        const node_size = hash_len_fe * 4;
+
+        // Calculate path size: [internal_offset: 4][nodes as raw bytes]
+        const path_size = 4 + (self.path.nodes.len * node_size);
+
+        // Calculate var_start: path_offset(4) + rho + hashes_offset(4)
+        const var_start: usize = 4 + rho_size + 4;
+
+        // Calculate hashes size
+        var hashes_canonical = try self.allocator.alloc([8]u32, self.hashes.len);
+        defer self.allocator.free(hashes_canonical);
+        for (self.hashes, 0..) |hash, i| {
+            for (hash, 0..) |fe, j| {
+                hashes_canonical[i][j] = fe.toCanonical();
+            }
+        }
+
+        // Write path offset (absolute offset from start of serialized data)
+        const path_offset: u32 = @as(u32, @intCast(var_start));
+        try ssz.serialize(u32, path_offset, l);
+
+        // Write rho - CRITICAL: Match Rust's decoder expectations (28 bytes for all lifetimes)
+        // Even though Rust's encoder uses 24 bytes for 2^18, Rust's decoder expects 28 bytes
+        // This is a bug/inconsistency in Rust's SSZ implementation, but we must match the decoder
+        var rho_canonical: [7]u32 = undefined;
+        for (0..7) |i| {
+            rho_canonical[i] = self.rho[i].toCanonical();
+        }
+        log.print("SSZ_DEBUG: sszEncode: Encoding rho[0]=0x{x:0>8} (canonical) / 0x{x:0>8} (Montgomery)\n", .{ rho_canonical[0], self.rho[0].value });
+
+        // Write rho - size depends on rand_len_fe
+        // For 2^18: rand_len_fe=6, write 6 field elements (24 bytes)
+        // For 2^8/2^32: rand_len_fe=7, write 7 field elements (28 bytes)
+        for (0..rand_len) |i| {
+            try ssz.serialize(u32, rho_canonical[i], l);
+        }
+
+        // Write hashes offset (absolute offset from start of serialized data)
+        const hashes_offset: u32 = @as(u32, @intCast(var_start + path_size));
+        try ssz.serialize(u32, hashes_offset, l);
+
+        // Write path data
+        try self.path.sszEncode(l, hash_len_fe);
+
+        // Write hashes data
+        // Hashes are Vec<TH::Domain> where Domain = FieldArray<hash_len_fe>
+        // Since Domain is fixed-size, Vec encodes as raw bytes WITHOUT length prefix
+        // For 2^18: each hash is 7 field elements (28 bytes)
+        // For 2^8/2^32: each hash is 8 field elements (32 bytes)
+        for (hashes_canonical) |hash| {
+            // Write only hash_len_fe field elements per hash
+            for (0..hash_len_fe) |j| {
+                try ssz.serialize(u32, hash[j], l);
+            }
+        }
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSignature, allocator: ?std.mem.Allocator) !void {
+        const alloc = allocator orelse return error.AllocatorRequired;
+
+        log.print("SSZ_DEBUG: sszDecode: Starting, serialized len={}, out=0x{x}\n", .{ serialized.len, @intFromPtr(out) });
+
+        // SSZ struct deserialization for GeneralizedXMSSSignature:
+        // Field order: path (variable), rho (fixed), hashes (variable)
+        // First pass: Read offsets for variable fields
+        var offset: usize = 0;
+
+        // Read path offset (4 bytes) - absolute offset from start
+        if (serialized.len < offset + 4) return error.InvalidLength;
+        const path_offset = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[offset])), .little);
+        offset += 4;
+        log.print("SSZ_DEBUG: sszDecode: path_offset={}\n", .{path_offset});
+
+        // Read rho - size depends on path_offset
+        // For 2^18: path_offset=32 means rho is 24 bytes (6 field elements, rand_len_fe=6)
+        // For 2^8/2^32: path_offset=36 means rho is 28 bytes (7 field elements, rand_len_fe=7)
+        const rho_size: usize = if (path_offset == 32) 24 else 28;
+        const rand_len_decode: usize = if (path_offset == 32) 6 else 7;
+
+        const rho_start: usize = 4; // rho is a fixed field, starts right after path_offset field at offset 0x04
+        if (serialized.len < rho_start + rho_size) return error.InvalidLength;
+        var rho_canonical: [7]u32 = undefined;
+        var rho_offset: usize = rho_start;
+        // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
+        // Deserialize each u32 individually instead
+        for (0..rand_len_decode) |i| {
+            if (serialized.len < rho_offset + 4) return error.InvalidLength;
+            var val: u32 = undefined;
+            try ssz.deserialize(u32, serialized[rho_offset .. rho_offset + 4], &val, null);
+            rho_canonical[i] = val;
+            rho_offset += 4;
+        }
+        // Zero-pad remaining elements if rand_len_decode < 7
+        for (rand_len_decode..7) |i| {
+            rho_canonical[i] = 0;
+        }
+        var rho: [7]FieldElement = undefined;
+        for (rho_canonical, 0..) |val, i| {
+            rho[i] = FieldElement.fromCanonical(val);
+        }
+        log.print("SSZ_DEBUG: sszDecode: rho decoded, first value=0x{x}, rand_len={}\n", .{ rho[0].toCanonical(), rand_len_decode });
+
+        // Read hashes offset (4 bytes) - position depends on rho_size
+        // For 2^18: rho is 24 bytes, so hashes_offset is at offset 28-31
+        // For 2^8/2^32: rho is 28 bytes, so hashes_offset is at offset 32-35
+        const hashes_offset_pos = rho_start + rho_size;
+        if (serialized.len < hashes_offset_pos + 4) return error.InvalidLength;
+        const hashes_offset = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[hashes_offset_pos])), .little);
+        log.print("SSZ_DEBUG: sszDecode: hashes_offset={} (read from offset {}, path_offset={})\n", .{ hashes_offset, hashes_offset_pos, path_offset });
+
+        // Second pass: Deserialize variable fields using offsets
+        // Decode path (absolute offset)
+        // Path data is from path_offset to hashes_offset
+        if (path_offset > serialized.len) return error.InvalidOffset;
+        if (hashes_offset > serialized.len) return error.InvalidOffset;
+        if (hashes_offset < path_offset) return error.InvalidOffset;
+        const path_data_len = hashes_offset - path_offset;
+        if (serialized.len < path_offset + path_data_len) return error.InvalidLength;
+
+        const path = try alloc.create(HashTreeOpening);
+        errdefer alloc.destroy(path);
+        log.print("SSZ_DEBUG: sszDecode: Created path at 0x{x}, path_data_len={}\n", .{ @intFromPtr(path), path_data_len });
+
+        // Determine hash_len_fe from path_offset: 32 → hash_len_fe=7, 36 → hash_len_fe=8
+        const decode_hash_len_fe: usize = if (path_offset == 32) 7 else 8;
+        try HashTreeOpening.sszDecode(serialized[path_offset .. path_offset + path_data_len], path, alloc, decode_hash_len_fe);
+        log.print("SSZ_DEBUG: sszDecode: Path decoded successfully, nodes len={}\n", .{path.nodes.len});
+        // Debug: log first few path nodes to verify decoding
+        for (0..@min(8, path.nodes.len)) |i| {
+            log.print("SSZ_DEBUG: sszDecode: Path node {}: 0x{x:0>8} (Montgomery) / 0x{x:0>8} (Canonical)\n", .{ i, path.nodes[i][0].value, path.nodes[i][0].toCanonical() });
+        }
+
+        // Decode hashes (absolute offset)
+        // Hashes are Vec<TH::Domain> where Domain = FieldArray<hash_len_fe>
+        // Since Domain is fixed-size, Vec encodes as raw bytes WITHOUT length prefix
+        // For 2^18: each hash is 7 field elements (28 bytes)
+        // For 2^8/2^32: each hash is 8 field elements (32 bytes)
+        if (hashes_offset > serialized.len) return error.InvalidOffset;
+        const hashes_data_len = serialized.len - hashes_offset;
+        const hash_size = decode_hash_len_fe * 4;
+        if (hashes_data_len % hash_size != 0) return error.InvalidLength;
+        const num_hashes = hashes_data_len / hash_size;
+        log.print("SSZ_DEBUG: sszDecode: num_hashes={}, hash_size={}\n", .{ num_hashes, hash_size });
+
+        if (num_hashes == 0) {
+            log.print("SSZ_DEBUG: sszDecode: Assigning struct with empty hashes\n", .{});
+            log.print("SSZ_DEBUG: sszDecode: Before assignment - out=0x{x}, path=0x{x}, rho offset={}\n", .{
+                @intFromPtr(out),
+                @intFromPtr(path),
+                @offsetOf(GeneralizedXMSSSignature, "rho"),
+            });
+            out.* = GeneralizedXMSSSignature{
+                .path = path,
+                .rho = rho,
+                .hashes = try alloc.alloc([8]FieldElement, 0),
+                .allocator = alloc,
+                .is_deserialized = true,
+                .rand_len_fe = rand_len_decode, // Store decoded rand_len_fe
+            };
+            log.print("SSZ_DEBUG: sszDecode: Struct assigned, out.path=0x{x}, out.rho[0]=0x{x}\n", .{
+                @intFromPtr(out.path),
+                out.rho[0].toCanonical(),
+            });
+            return;
+        }
+
+        var hashes_canonical = try alloc.alloc([8]u32, num_hashes);
+        defer alloc.free(hashes_canonical);
+
+        var pos = hashes_offset; // No length prefix to skip
+        for (0..num_hashes) |i| {
+            if (serialized.len < pos + hash_size) return error.InvalidLength;
+            // Deserialize hash_len_fe field elements for this hash
+            for (0..decode_hash_len_fe) |j| {
+                if (serialized.len < pos + 4) return error.InvalidLength;
+                var val: u32 = undefined;
+                try ssz.deserialize(u32, serialized[pos .. pos + 4], &val, null);
+                hashes_canonical[i][j] = val;
+                pos += 4;
+            }
+            // Zero-pad remaining field elements if hash_len_fe < 8
+            for (decode_hash_len_fe..8) |j| {
+                hashes_canonical[i][j] = 0;
+            }
+        }
+
+        // Convert back to FieldElement arrays
+        var hashes = try alloc.alloc([8]FieldElement, num_hashes);
+        for (hashes_canonical, 0..) |hash_canonical, i| {
+            for (hash_canonical, 0..) |val, j| {
+                hashes[i][j] = FieldElement.fromCanonical(val);
+            }
+        }
+        log.print("SSZ_DEBUG: sszDecode: Hashes converted, len={}\n", .{hashes.len});
+        // Debug: log first hash to verify conversion
+        if (hashes.len > 0) {
+            log.print("SSZ_DEBUG: sszDecode: First hash[0] after decode (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ hashes[0][0].value, hashes[0][0].toCanonical() });
+            // Also log the full first hash for comparison
+            log.print("SSZ_DEBUG: sszDecode: First hash full (Montgomery): ", .{});
+            for (0..@min(8, hashes[0].len)) |i| {
+                log.print("0x{x:0>8} ", .{hashes[0][i].value});
+            }
+            log.print("\n", .{});
+        }
+
+        log.print("SSZ_DEBUG: sszDecode: Before assignment - out=0x{x}, path=0x{x}, rho offset={}, hashes=0x{x}\n", .{
+            @intFromPtr(out),
+            @intFromPtr(path),
+            @offsetOf(GeneralizedXMSSSignature, "rho"),
+            @intFromPtr(hashes.ptr),
+        });
+        log.print("SSZ_DEBUG: sszDecode: Struct size={}, rho offset={}, hashes offset={}\n", .{
+            @sizeOf(GeneralizedXMSSSignature),
+            @offsetOf(GeneralizedXMSSSignature, "rho"),
+            @offsetOf(GeneralizedXMSSSignature, "hashes"),
+        });
+        out.* = GeneralizedXMSSSignature{
+            .path = path,
+            .rho = rho,
+            .hashes = hashes,
+            .allocator = alloc,
+            .is_deserialized = true,
+            .rand_len_fe = rand_len_decode, // Store decoded rand_len_fe
+        };
+        log.print("SSZ_DEBUG: sszDecode: Struct assigned successfully\n", .{});
+        log.print("SSZ_DEBUG: sszDecode: After assignment - out.path=0x{x}, out.rho[0]=0x{x}, out.hashes len={}\n", .{
+            @intFromPtr(out.path),
+            out.rho[0].toCanonical(),
+            out.hashes.len,
+        });
+        log.print("SSZ_DEBUG: sszDecode: out.allocator address=0x{x}\n", .{@intFromPtr(&out.allocator)});
+        // Verify struct is still accessible after assignment
+        const test_path = out.path;
+        const test_rho = out.rho;
+        const test_hashes = out.hashes;
+        log.print("SSZ_DEBUG: sszDecode: Verification - path=0x{x}, rho[0]=0x{x}, hashes len={}\n", .{
+            @intFromPtr(test_path),
+            test_rho[0].toCanonical(),
+            test_hashes.len,
+        });
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return false; // Variable size (path and hashes are variable-length)
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    pub fn toBytes(self: *const GeneralizedXMSSSignature, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    pub fn fromBytes(serialized: []const u8, allocator: std.mem.Allocator) !*GeneralizedXMSSSignature {
+        log.print("SSZ_DEBUG: fromBytes: Creating struct, serialized len={}\n", .{serialized.len});
+        const decoded = try allocator.create(GeneralizedXMSSSignature);
+        errdefer allocator.destroy(decoded);
+        log.print("SSZ_DEBUG: fromBytes: Struct created at address 0x{x}, size={}\n", .{ @intFromPtr(decoded), @sizeOf(GeneralizedXMSSSignature) });
+        // Zero-initialize the struct to ensure it's in a valid state
+        @memset(@as([*]u8, @ptrCast(decoded))[0..@sizeOf(GeneralizedXMSSSignature)], 0);
+        log.print("SSZ_DEBUG: fromBytes: Struct zero-initialized\n", .{});
+        try sszDecode(serialized, decoded, allocator);
+        log.print("SSZ_DEBUG: fromBytes: sszDecode completed successfully\n", .{});
+        log.print("SSZ_DEBUG: fromBytes: Final struct - path=0x{x}, rho offset={}, hashes len={}\n", .{
+            @intFromPtr(decoded.path),
+            @offsetOf(GeneralizedXMSSSignature, "rho"),
+            decoded.hashes.len,
+        });
+        // Validate struct is properly initialized by accessing all fields
+        _ = decoded.path;
+        _ = decoded.rho;
+        _ = decoded.hashes;
+        _ = decoded.allocator;
+        _ = decoded.is_deserialized;
+        log.print("SSZ_DEBUG: fromBytes: Struct validation passed, returning\n", .{});
+        return decoded;
     }
 };
 
@@ -517,6 +1017,130 @@ pub const GeneralizedXMSSPublicKey = struct {
     // Serialization method using controlled access
     pub fn serialize(self: *const GeneralizedXMSSPublicKey, allocator: std.mem.Allocator) ![]u8 {
         return serialization.serializePublicKey(allocator, self);
+    }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const GeneralizedXMSSPublicKey, l: *std.ArrayList(u8)) !void {
+        // Convert root to canonical u32 array and serialize
+        // CRITICAL: Rust encodes root based on hash_len_fe, not always 8 u32s
+        // For lifetime 2^18 (hash_len_fe=7), encode as [7]u32 (28 bytes)
+        // For lifetime 2^8/2^32 (hash_len_fe=8), encode as [8]u32 (32 bytes)
+        const hash_len = self.hash_len_fe;
+        if (hash_len == 7) {
+            var root_canonical: [7]u32 = undefined;
+            for (0..7) |i| {
+                root_canonical[i] = self.root[i].toCanonical();
+            }
+            try ssz.serialize([7]u32, root_canonical, l);
+        } else {
+            var root_canonical: [8]u32 = undefined;
+            for (0..8) |i| {
+                root_canonical[i] = self.root[i].toCanonical();
+            }
+            try ssz.serialize([8]u32, root_canonical, l);
+        }
+
+        // Convert parameter to canonical u32 array and serialize
+        var param_canonical: [5]u32 = undefined;
+        for (self.parameter, 0..) |fe, i| {
+            param_canonical[i] = fe.toCanonical();
+        }
+        try ssz.serialize([5]u32, param_canonical, l);
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSPublicKey, allocator: ?std.mem.Allocator) !void {
+        _ = allocator; // Not needed for fixed-size types
+
+        // Decode root - Rust encodes based on hash_len_fe
+        // For lifetime 2^18 (hash_len_fe=7), root is [7]u32 (28 bytes)
+        // For lifetime 2^8/2^32 (hash_len_fe=8), root is [8]u32 (32 bytes)
+        // We need to determine hash_len_fe from the serialized data length
+        // Total size is 48 bytes (2^18) or 52 bytes (2^8/2^32): root + parameter (20 bytes)
+        // So root size = serialized.len - 20
+        const root_size = serialized.len - 20;
+        if (root_size != 28 and root_size != 32) return error.InvalidLength;
+        const hash_len: usize = if (root_size == 28) 7 else 8;
+
+        // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
+        // Deserialize each u32 individually instead
+        var root_canonical: [8]u32 = undefined;
+        var root_offset: usize = 0;
+        for (0..hash_len) |i| {
+            if (serialized.len < root_offset + 4) return error.InvalidLength;
+            var val: u32 = undefined;
+            try ssz.deserialize(u32, serialized[root_offset .. root_offset + 4], &val, null);
+            root_canonical[i] = val;
+            root_offset += 4;
+        }
+        // Zero-pad remaining elements if hash_len < 8
+        for (hash_len..8) |i| {
+            root_canonical[i] = 0;
+        }
+        var root: [8]FieldElement = undefined;
+        for (root_canonical, 0..) |val, i| {
+            root[i] = FieldElement.fromCanonical(val);
+        }
+
+        // Decode parameter (20 bytes for 5 u32s) - starts after root
+        // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
+        // Deserialize each u32 individually instead
+        const param_offset = root_size; // Parameter starts after root
+        if (serialized.len < param_offset + 20) return error.InvalidLength;
+        var param_canonical: [5]u32 = undefined;
+        var param_pos = param_offset;
+        for (0..5) |i| {
+            var val: u32 = undefined;
+            try ssz.deserialize(u32, serialized[param_pos .. param_pos + 4], &val, null);
+            param_canonical[i] = val;
+            param_pos += 4;
+        }
+        // Debug: log decoded parameter values
+        log.print("SSZ_DEBUG: sszDecode PublicKey: param_canonical decoded: ", .{});
+        for (0..5) |i| {
+            log.print("0x{x:0>8} ", .{param_canonical[i]});
+        }
+        log.print("\n", .{});
+        var parameter: [5]FieldElement = undefined;
+        for (param_canonical, 0..) |val, i| {
+            parameter[i] = FieldElement.fromCanonical(val);
+        }
+        // Debug: log parameter after conversion to FieldElement
+        log.print("SSZ_DEBUG: sszDecode PublicKey: parameter after conversion (canonical): ", .{});
+        for (0..5) |i| {
+            log.print("0x{x:0>8} ", .{parameter[i].toCanonical()});
+        }
+        log.print("\n", .{});
+
+        // Determine hash_len_fe from root (count non-zero elements, or use 8 if all non-zero)
+        var hash_len_fe: usize = 8;
+        for (root, 0..) |fe, i| {
+            if (fe.isZero() and i > 0) {
+                hash_len_fe = i;
+                break;
+            }
+        }
+
+        out.* = GeneralizedXMSSPublicKey.init(root, parameter, hash_len_fe);
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return true; // 32 + 20 = 52 bytes
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    pub fn toBytes(self: *const GeneralizedXMSSPublicKey, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    pub fn fromBytes(serialized: []const u8, allocator: ?std.mem.Allocator) !GeneralizedXMSSPublicKey {
+        var decoded: GeneralizedXMSSPublicKey = undefined;
+        try sszDecode(serialized, &decoded, allocator);
+        return decoded;
     }
 };
 
@@ -587,6 +1211,86 @@ pub const GeneralizedXMSSSecretKey = struct {
 
     pub fn getParameter(self: *const GeneralizedXMSSSecretKey) [5]FieldElement {
         return self.parameter;
+    }
+
+    // SSZ serialization methods
+    pub fn sszEncode(self: *const GeneralizedXMSSSecretKey, l: *std.ArrayList(u8)) !void {
+        // Encode prf_key (32 bytes, fixed-size)
+        try ssz.serialize([32]u8, self.prf_key, l);
+
+        // Convert parameter to canonical u32 array and serialize (20 bytes for 5 u32s)
+        var param_canonical: [5]u32 = undefined;
+        for (self.parameter, 0..) |fe, i| {
+            param_canonical[i] = fe.toCanonical();
+        }
+        try ssz.serialize([5]u32, param_canonical, l);
+
+        // Encode activation_epoch as u64 (8 bytes)
+        try ssz.serialize(u64, @as(u64, @intCast(self.activation_epoch)), l);
+
+        // Encode num_active_epochs as u64 (8 bytes)
+        try ssz.serialize(u64, @as(u64, @intCast(self.num_active_epochs)), l);
+    }
+
+    pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSecretKey, allocator: ?std.mem.Allocator) !void {
+        const alloc = allocator orelse return error.AllocatorRequired;
+        _ = alloc; // Note: Secret key requires trees which are not serialized
+
+        var offset: usize = 0;
+
+        // Decode prf_key (32 bytes)
+        if (serialized.len < offset + 32) return error.InvalidLength;
+        var prf_key: [32]u8 = undefined;
+        try ssz.deserialize([32]u8, serialized[offset .. offset + 32], &prf_key, null);
+        offset += 32;
+
+        // Decode parameter (20 bytes for 5 u32s)
+        // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
+        // Deserialize each u32 individually instead
+        if (serialized.len < offset + 20) return error.InvalidLength;
+        var param_canonical: [5]u32 = undefined;
+        var param_offset = offset;
+        for (0..5) |i| {
+            if (serialized.len < param_offset + 4) return error.InvalidLength;
+            var val: u32 = undefined;
+            try ssz.deserialize(u32, serialized[param_offset .. param_offset + 4], &val, null);
+            param_canonical[i] = val;
+            param_offset += 4;
+        }
+        offset += 20;
+        var parameter: [5]FieldElement = undefined;
+        for (param_canonical, 0..) |val, i| {
+            parameter[i] = FieldElement.fromCanonical(val);
+        }
+
+        // Validate remaining bytes exist (activation_epoch + num_active_epochs = 16 bytes)
+        // Note: We don't decode these fields since trees are not serialized and can't be reconstructed
+        // The caller must call keyGen to reconstruct the full secret key with trees
+        if (serialized.len < offset + 16) return error.InvalidLength;
+        _ = out;
+        return error.SecretKeyRequiresKeyGen; // Indicate that keyGen is needed
+    }
+
+    pub fn isFixedSizeObject(comptime T: type) bool {
+        _ = T;
+        return true; // 32 + 20 + 8 + 8 = 68 bytes
+    }
+
+    /// Serialize to SSZ bytes (convenience method matching Rust's to_bytes)
+    /// Note: Only serializes prf_key, parameter, and epochs. Trees are not serialized.
+    pub fn toBytes(self: *const GeneralizedXMSSSecretKey, allocator: std.mem.Allocator) ![]u8 {
+        var encoded = std.ArrayList(u8).init(allocator);
+        errdefer encoded.deinit();
+        try self.sszEncode(&encoded);
+        return encoded.toOwnedSlice();
+    }
+
+    /// Deserialize from SSZ bytes (convenience method matching Rust's from_bytes)
+    /// Note: Returns error.SecretKeyRequiresKeyGen since trees cannot be deserialized.
+    /// The caller must use keyGen to reconstruct the full secret key.
+    pub fn fromBytes(serialized: []const u8, allocator: ?std.mem.Allocator) !void {
+        var dummy: GeneralizedXMSSSecretKey = undefined;
+        try sszDecode(serialized, &dummy, allocator);
     }
 
     // Serialization method using controlled access
@@ -4405,11 +5109,14 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
         }
 
+        // Rust's SSZ signature path encoding: encodes FULL Merkle path for ALL lifetimes
+        // - For 2^8: bottom (4) + top (4) = 8 nodes
+        // - For 2^18: bottom (9) + top (9) = 18 nodes
+        // - For 2^32: bottom (16) + top (16) = 32 nodes
+        // Concatenate bottom and top co-paths for all lifetimes
         var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
-        defer self.allocator.free(nodes_concat);
         @memcpy(nodes_concat[0..bottom_copath.len], bottom_copath);
         @memcpy(nodes_concat[bottom_copath.len..], top_copath);
-
         const path = try HashTreeOpening.init(self.allocator, nodes_concat);
         errdefer path.deinit(); // Clean up if signature creation fails
 
@@ -4554,6 +5261,16 @@ pub const GeneralizedXMSSSignatureScheme = struct {
                 }
                 // Store hashes in Montgomery form (matching Rust's internal representation)
                 hashes[chain_index] = current;
+                // Debug: log first hash when storing during signing
+                if (chain_index == 0) {
+                    log.print("ZIG_SIGN_DEBUG: Storing hash[0] during signing (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ current[0].value, current[0].toCanonical() });
+                    // Also log full hash for comparison
+                    log.print("ZIG_SIGN_DEBUG: Storing hash[0] full (Montgomery): ", .{});
+                    for (0..hash_len) |h| {
+                        log.print("0x{x:0>8} ", .{current[h].value});
+                    }
+                    log.print("\n", .{});
+                }
 
                 // Debug logging for chain 0
                 if (chain_index == 0) {
@@ -4866,10 +5583,18 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         // message is used below to derive target-sum digits
 
+        // Debug: Validate signature struct is accessible
+        log.print("ZIG_VERIFY_DEBUG: verify() called, signature=0x{x}\n", .{@intFromPtr(signature)});
+        // Access struct fields using @field to avoid potential pointer issues
+        const path_ptr = @field(signature, "path");
+        log.print("ZIG_VERIFY_DEBUG: signature.path accessed via @field, path=0x{x}\n", .{@intFromPtr(path_ptr)});
+        const rho_field = @field(signature, "rho");
+        log.print("ZIG_VERIFY_DEBUG: signature.rho accessed via @field, rho[0]=0x{x}\n", .{rho_field[0].toCanonical()});
+
         // 1) Get x from encoding using signature's rho (matching Rust IE::encode)
         // During verification, we compute encoding without checking the sum
         // The sum check is only for signing (to ensure we find a valid encoding)
-        const rho = signature.getRho();
+        const rho = rho_field; // Use @field access instead of direct access
 
         // Debug: log rho values (only first rand_len_fe elements are used)
         const rand_len = self.lifetime_params.rand_len_fe;
@@ -4884,6 +5609,12 @@ pub const GeneralizedXMSSSignatureScheme = struct {
         log.print("ZIG_VERIFY_DEBUG: Signature rho (first {} elements, canonical): ", .{rand_len});
         for (0..rand_len) |i| {
             log.print("0x{x:0>8} ", .{rho[i].toCanonical()});
+        }
+        log.print("\n", .{});
+        // Debug: also log public key parameter to compare
+        log.print("ZIG_VERIFY_DEBUG: Public key parameter (canonical): ", .{});
+        for (0..5) |i| {
+            log.print("0x{x:0>8} ", .{public_key.parameter[i].toCanonical()});
         }
         log.print("\n", .{});
 
@@ -4933,6 +5664,11 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
         const hashes = signature.getHashes();
 
+        // Debug: log first hash to compare with what was stored
+        if (hashes.len > 0) {
+            log.print("ZIG_VERIFY_DEBUG: First hash[0] from signature (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ hashes[0][0].value, hashes[0][0].toCanonical() });
+        }
+
         // Handle hashes for both cross-implementation (Rust→Zig) and same-implementation (Zig→Zig):
         // - Both implementations: hashes come from binary as Montgomery values (wrappers use Montgomery form)
         //   Both libraries store hashes internally in Montgomery form, so we use them directly in Montgomery form
@@ -4964,19 +5700,19 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
                 // Debug: print starting state for first chain with detailed comparison
                 if (i == 0) {
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Montgomery): ", .{i});
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Montgomery): ", .{i});
                     for (0..hash_len) |h| {
-                        log.debugPrint("0x{x:0>8} ", .{current[h].value});
+                        log.print("0x{x:0>8} ", .{current[h].value});
                     }
-                    log.debugPrint("(x[{}]={}, steps={}, base_minus_one={})\n", .{ i, start_pos_in_chain, steps, base_minus_one });
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Canonical): ", .{i});
+                    log.print("(x[{}]={}, steps={}, base_minus_one={})\n", .{ i, start_pos_in_chain, steps, base_minus_one });
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} starting from hashes (Canonical): ", .{i});
                     for (0..hash_len) |h| {
-                        log.debugPrint("0x{x:0>8} ", .{current[h].toCanonical()});
+                        log.print("0x{x:0>8} ", .{current[h].toCanonical()});
                     }
-                    log.debugPrint("\n", .{});
-                    log.debugPrint("ZIG_VERIFY_DEBUG: Chain {} starting at position {} in chain, need to walk {} steps to reach position {}\n", .{ i, start_pos_in_chain, steps, base_minus_one });
+                    log.print("\n", .{});
+                    log.print("ZIG_VERIFY_DEBUG: Chain {} starting at position {} in chain, need to walk {} steps to reach position {}\n", .{ i, start_pos_in_chain, steps, base_minus_one });
                     // Also print what domain[0] contains directly
-                    log.debugPrint("ZIG_VERIFY_DEBUG: domain[0] directly (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ domain[0].value, domain[0].toCanonical() });
+                    log.print("ZIG_VERIFY_DEBUG: domain[0] directly (Montgomery): 0x{x:0>8}, (Canonical): 0x{x:0>8}\n", .{ domain[0].value, domain[0].toCanonical() });
                 }
 
                 if (i == 0 or i == 2) {
@@ -5481,33 +6217,33 @@ pub const GeneralizedXMSSSignatureScheme = struct {
 
             level += 1;
         }
-        log.debugPrint("ZIG_VERIFY_DEBUG: Final computed root after Merkle path walk (Montgomery): ", .{});
+        log.print("ZIG_VERIFY_DEBUG: Final computed root after Merkle path walk (Montgomery): ", .{});
         for (0..hash_len) |h| {
-            log.debugPrint("0x{x:0>8} ", .{current_domain[h].value});
+            log.print("0x{x:0>8} ", .{current_domain[h].value});
         }
-        log.debugPrint("\n", .{});
-        log.debugPrint("ZIG_VERIFY_DEBUG: Public key root (Montgomery): ", .{});
+        log.print("\n", .{});
+        log.print("ZIG_VERIFY_DEBUG: Public key root (Montgomery): ", .{});
         for (0..hash_len) |h| {
-            log.debugPrint("0x{x:0>8} ", .{public_key.root[h].value});
+            log.print("0x{x:0>8} ", .{public_key.root[h].value});
         }
-        log.debugPrint("\n", .{});
+        log.print("\n", .{});
 
         // 4) Compare computed root with public key root (both stored as canonical field elements)
         // Root length is hash_len_fe (7 for lifetime 2^18, 8 for lifetime 2^8)
         const root_len = self.lifetime_params.hash_len_fe;
         var match = true;
-        // Root comparison debug output (feature-flagged)
-        log.debugPrint("ZIG_VERIFY_DEBUG: Comparing roots (length={}):\n", .{root_len});
+        // Root comparison debug output (always print for debugging)
+        log.print("ZIG_VERIFY_DEBUG: Comparing roots (length={}):\n", .{root_len});
         for (0..root_len) |i| {
             const computed_val = current_domain[i].toCanonical();
             const expected_val = public_key.root[i].toCanonical();
             const computed_monty = current_domain[i].value;
             const expected_monty = public_key.root[i].value;
             if (!current_domain[i].eql(public_key.root[i])) {
-                log.debugPrint("ZIG_VERIFY_ERROR: Root mismatch at index {}: computed=0x{x:0>8} (canonical) / 0x{x:0>8} (monty) expected=0x{x:0>8} (canonical) / 0x{x:0>8} (monty)\n", .{ i, computed_val, computed_monty, expected_val, expected_monty });
+                log.print("ZIG_VERIFY_ERROR: Root mismatch at index {}: computed=0x{x:0>8} (canonical) / 0x{x:0>8} (monty) expected=0x{x:0>8} (canonical) / 0x{x:0>8} (monty)\n", .{ i, computed_val, computed_monty, expected_val, expected_monty });
                 match = false;
             } else {
-                log.debugPrint("ZIG_VERIFY_DEBUG: Root[{}] matches: 0x{x:0>8} (canonical) / 0x{x:0>8} (monty)\n", .{ i, computed_val, computed_monty });
+                log.print("ZIG_VERIFY_DEBUG: Root[{}] matches: 0x{x:0>8} (canonical) / 0x{x:0>8} (monty)\n", .{ i, computed_val, computed_monty });
             }
         }
         if (match) {

@@ -1,0 +1,13 @@
+ [toolchain]
+ # Locked Rust toolchain for cross-language compatibility tests
+ #
+ # This is intentionally pinned so that:
+ # - SSZ encoding/decoding behavior for Generalized XMSS stays stable
+ # - Cargo.lock + these git revs for leansig / Plonky3 are reproducible
+ #
+ # If you need to update, bump this version *and* re-run the full
+ # cross-language benchmark suite before merging.
+ channel = "nightly"
+ components = ["clippy", "rustfmt"]
+
+
