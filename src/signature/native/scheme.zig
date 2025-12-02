@@ -503,10 +503,10 @@ pub const HashTreeOpening = struct {
         // Rust's HashTreeOpening is a struct with one variable field: co_path (Vec<Domain>)
         // SSZ Container encoding: [internal_offset: 4][co_path data]
         // Since Domain (FieldArray) is fixed-size, Vec<Domain> encodes as raw bytes WITHOUT length prefix
-        
+
         // Write internal offset (always 4, points to where co_path starts)
         try ssz.serialize(u32, @as(u32, 4), l);
-        
+
         // Write co_path as raw node data (no length prefix for fixed-size items)
         // Each node is hash_len_fe field elements (28 bytes for 2^18, 32 bytes for 2^8/2^32)
         for (self.nodes) |node| {
@@ -524,21 +524,21 @@ pub const HashTreeOpening = struct {
         // Rust's HashTreeOpening is a struct with one variable field: co_path (Vec<Domain>)
         // SSZ Container encoding: [internal_offset: 4][co_path data as raw bytes]
         // Since Domain (FieldArray) is fixed-size, Vec<Domain> encodes WITHOUT length prefix
-        
+
         // Read internal offset (should be 4)
         if (serialized.len < 4) return error.InvalidLength;
         const internal_offset = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[0])), .little);
-        
+
         if (internal_offset != 4) return error.InvalidOffset;
-        
+
         // Calculate number of nodes from remaining data
         // Each node is hash_len_fe field elements × 4 bytes
         const node_size = hash_len_fe * 4;
         const copath_data_len = serialized.len - internal_offset;
-        
+
         if (copath_data_len % node_size != 0) return error.InvalidLength;
         const num_nodes = copath_data_len / node_size;
-        
+
         if (num_nodes == 0) {
             out.* = HashTreeOpening{
                 .nodes = try alloc.alloc([8]FieldElement, 0),
@@ -550,7 +550,7 @@ pub const HashTreeOpening = struct {
         // Decode nodes
         var nodes = try alloc.alloc([8]FieldElement, num_nodes);
         errdefer alloc.free(nodes);
-        
+
         var pos: usize = internal_offset;
         for (0..num_nodes) |node_idx| {
             // Read hash_len_fe field elements for this node
@@ -704,10 +704,10 @@ pub const GeneralizedXMSSSignature = struct {
         const hash_len_fe = rand_len + 1; // 2^18: 6+1=7, 2^8/2^32: 7+1=8
         const rho_size = rand_len * 4;
         const node_size = hash_len_fe * 4;
-        
+
         // Calculate path size: [internal_offset: 4][nodes as raw bytes]
         const path_size = 4 + (self.path.nodes.len * node_size);
-        
+
         // Calculate var_start: path_offset(4) + rho + hashes_offset(4)
         const var_start: usize = 4 + rho_size + 4;
 
@@ -732,7 +732,7 @@ pub const GeneralizedXMSSSignature = struct {
             rho_canonical[i] = self.rho[i].toCanonical();
         }
         log.print("SSZ_DEBUG: sszEncode: Encoding rho[0]=0x{x:0>8} (canonical) / 0x{x:0>8} (Montgomery)\n", .{ rho_canonical[0], self.rho[0].value });
-        
+
         // Write rho - size depends on rand_len_fe
         // For 2^18: rand_len_fe=6, write 6 field elements (24 bytes)
         // For 2^8/2^32: rand_len_fe=7, write 7 field elements (28 bytes)
@@ -825,7 +825,7 @@ pub const GeneralizedXMSSSignature = struct {
         const path = try alloc.create(HashTreeOpening);
         errdefer alloc.destroy(path);
         log.print("SSZ_DEBUG: sszDecode: Created path at 0x{x}, path_data_len={}\n", .{ @intFromPtr(path), path_data_len });
-        
+
         // Determine hash_len_fe from path_offset: 32 → hash_len_fe=7, 36 → hash_len_fe=8
         const decode_hash_len_fe: usize = if (path_offset == 32) 7 else 8;
         try HashTreeOpening.sszDecode(serialized[path_offset .. path_offset + path_data_len], path, alloc, decode_hash_len_fe);
