@@ -122,12 +122,12 @@ jobs:
       - name: Build library
         run: zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
 
-      - name: Run cross-language compatibility suite
+      - name: Run cross-language compatibility suite (SSZ)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Running benchmark/benchmark.py for cross-language compatibility (lifetimes 2^8 and 2^32) with SSZ serialization"
-          python3 benchmark/benchmark.py --lifetime "2^8,2^32" --ssz
+          echo "Running benchmark/benchmark.py for cross-language SSZ compatibility (lifetimes 2^8 and 2^32)"
+          python3 benchmark/benchmark.py --lifetime "2^8,2^32"
   
   cross-platform-build:
     name: Cross-Platform Build (${{ matrix.os }})
