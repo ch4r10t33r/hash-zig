@@ -99,18 +99,6 @@ def parse_args() -> argparse.Namespace:
         default=2400,
         help="Timeout (seconds) for Zig signing when exercising lifetime 2^32.",
     )
-    parser.add_argument(
-        "--ssz",
-        action="store_true",
-        default=True,
-        help="Use SSZ serialization (default). Use --no-ssz for JSON/bincode.",
-    )
-    parser.add_argument(
-        "--no-ssz",
-        dest="ssz",
-        action="store_false",
-        help="Use JSON/bincode serialization instead of SSZ.",
-    )
     args = parser.parse_args()
 
     if args.lifetimes is None:
@@ -240,22 +228,14 @@ def ensure_zig_binary() -> None:
         raise RuntimeError("Failed to build cross-lang-zig-tool")
 
 
-def scenario_paths(cfg: ScenarioConfig, use_ssz: bool = False) -> Dict[str, Path]:
+def scenario_paths(cfg: ScenarioConfig) -> Dict[str, Path]:
     tag = cfg.tag
-    if use_ssz:
-        return {
-            "rust_pk": TMP_DIR / f"rust_public_{tag}.key.ssz",
-            "rust_sig": TMP_DIR / f"rust_signature_{tag}.ssz",
-            "zig_pk": TMP_DIR / f"zig_public_{tag}.key.ssz",
-            "zig_sig": TMP_DIR / f"zig_signature_{tag}.ssz",
-        }
-    else:
-        return {
-            "rust_pk": TMP_DIR / f"rust_public_{tag}.key.json",
-            "rust_sig": TMP_DIR / f"rust_signature_{tag}.bin",
-            "zig_pk": TMP_DIR / f"zig_public_{tag}.key.json",
-            "zig_sig": TMP_DIR / f"zig_signature_{tag}.bin",
-        }
+    return {
+        "rust_pk": TMP_DIR / f"rust_public_{tag}.key.ssz",
+        "rust_sig": TMP_DIR / f"rust_signature_{tag}.ssz",
+        "zig_pk": TMP_DIR / f"zig_public_{tag}.key.ssz",
+        "zig_sig": TMP_DIR / f"zig_signature_{tag}.ssz",
+    }
 
 
 def prepare_tmp_files(paths: Dict[str, Path]) -> None:
@@ -269,7 +249,7 @@ def command_duration(start: float) -> float:
     return time.perf_counter() - start
 
 
-def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path], use_ssz: bool = False) -> OperationResult:
+def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResult:
     print(f"\n-- Rust key generation & signing ({cfg.lifetime}) --")
     
     # Setup tmp directory in project root
@@ -281,9 +261,7 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path], use_ssz: bool = F
     
     # Generate keypair first
     start = time.perf_counter()
-    keygen_cmd = [str(RUST_BIN), "keygen", cfg.seed_hex, cfg.lifetime]
-    if use_ssz:
-        keygen_cmd.append("--ssz")
+    keygen_cmd = [str(RUST_BIN), "keygen", cfg.seed_hex, cfg.lifetime, "--ssz"]
     keygen_result = run_command(
         keygen_cmd,
         cwd=RUST_PROJECT,
@@ -292,9 +270,7 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path], use_ssz: bool = F
         return OperationResult(False, command_duration(start), keygen_result.stdout, keygen_result.stderr)
     
     # Sign message
-    sign_cmd = [str(RUST_BIN), "sign", cfg.message, str(cfg.epoch)]
-    if use_ssz:
-        sign_cmd.append("--ssz")
+    sign_cmd = [str(RUST_BIN), "sign", cfg.message, str(cfg.epoch), "--ssz"]
     sign_result = run_command(
         sign_cmd,
         cwd=RUST_PROJECT,
@@ -305,23 +281,17 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path], use_ssz: bool = F
     # Copy files to /tmp with expected names
     if success:
         import shutil
-        if use_ssz:
-            if (tmp_dir / "rust_pk.ssz").exists():
-                shutil.copy2(tmp_dir / "rust_pk.ssz", paths["rust_pk"])
-            if (tmp_dir / "rust_sig.ssz").exists():
-                shutil.copy2(tmp_dir / "rust_sig.ssz", paths["rust_sig"])
-        else:
-            if (tmp_dir / "rust_pk.json").exists():
-                shutil.copy2(tmp_dir / "rust_pk.json", paths["rust_pk"])
-            if (tmp_dir / "rust_sig.bin").exists():
-                shutil.copy2(tmp_dir / "rust_sig.bin", paths["rust_sig"])
+        if (tmp_dir / "rust_pk.ssz").exists():
+            shutil.copy2(tmp_dir / "rust_pk.ssz", paths["rust_pk"])
+        if (tmp_dir / "rust_sig.ssz").exists():
+            shutil.copy2(tmp_dir / "rust_sig.ssz", paths["rust_sig"])
         print(f"Rust public key saved to: {paths['rust_pk']}")
         print(f"Rust signature saved to : {paths['rust_sig']}")
     
     return OperationResult(success, duration, sign_result.stdout, sign_result.stderr)
 
 
-def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int, use_ssz: bool = False) -> OperationResult:
+def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int) -> OperationResult:
     print(f"\n-- Zig key generation & signing ({cfg.lifetime}) --")
     
     # Setup tmp directory in project root
@@ -341,9 +311,7 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int,
     
     # Generate keypair first
     start = time.perf_counter()
-    keygen_cmd = [str(ZIG_BIN), "keygen", cfg.seed_hex, cfg.lifetime]
-    if use_ssz:
-        keygen_cmd.append("--ssz")
+    keygen_cmd = [str(ZIG_BIN), "keygen", cfg.seed_hex, cfg.lifetime, "--ssz"]
     keygen_result = run_command(
         keygen_cmd,
         cwd=REPO_ROOT,
@@ -352,10 +320,8 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int,
     if keygen_result.returncode != 0:
         return OperationResult(False, command_duration(start), keygen_result.stdout, keygen_result.stderr)
     
-    # Sign message (this will update tmp/zig_pk.json or tmp/zig_pk.ssz with the regenerated keypair)
-    sign_cmd = [str(ZIG_BIN), "sign", cfg.message, str(cfg.epoch)]
-    if use_ssz:
-        sign_cmd.append("--ssz")
+    # Sign message (this will update tmp/zig_pk.ssz with the regenerated keypair)
+    sign_cmd = [str(ZIG_BIN), "sign", cfg.message, str(cfg.epoch), "--ssz"]
     sign_result = run_command(
         sign_cmd,
         cwd=REPO_ROOT,
@@ -365,19 +331,13 @@ def run_zig_sign(cfg: ScenarioConfig, paths: Dict[str, Path], timeout_2_32: int,
     success = sign_result.returncode == 0
     
     # Copy files to /tmp with expected names
-    # IMPORTANT: Copy AFTER signing because signing updates zig_pk.json/zig_pk.ssz with the regenerated keypair
+    # IMPORTANT: Copy AFTER signing because signing updates zig_pk.ssz with the regenerated keypair
     if success:
         import shutil
-        if use_ssz:
-            if (tmp_dir / "zig_pk.ssz").exists():
-                shutil.copy2(tmp_dir / "zig_pk.ssz", paths["zig_pk"])
-            if (tmp_dir / "zig_sig.ssz").exists():
-                shutil.copy2(tmp_dir / "zig_sig.ssz", paths["zig_sig"])
-        else:
-            if (tmp_dir / "zig_pk.json").exists():
-                shutil.copy2(tmp_dir / "zig_pk.json", paths["zig_pk"])
-            if (tmp_dir / "zig_sig.bin").exists():
-                shutil.copy2(tmp_dir / "zig_sig.bin", paths["zig_sig"])
+        if (tmp_dir / "zig_pk.ssz").exists():
+            shutil.copy2(tmp_dir / "zig_pk.ssz", paths["zig_pk"])
+        if (tmp_dir / "zig_sig.ssz").exists():
+            shutil.copy2(tmp_dir / "zig_sig.ssz", paths["zig_sig"])
         print(f"Zig public key saved to: {paths['zig_pk']}")
         print(f"Zig signature saved to : {paths['zig_sig']}")
     
@@ -395,7 +355,6 @@ def run_zig_verify(
     pk_path: Path,
     sig_path: Path,
     label: str,
-    use_ssz: bool = False,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
     
@@ -412,9 +371,8 @@ def run_zig_verify(
         str(pk_path),
         cfg.message,
         str(cfg.epoch),
+        "--ssz",
     ]
-    if use_ssz:
-        verify_cmd.append("--ssz")
     result = run_command(
         verify_cmd,
         cwd=REPO_ROOT,
@@ -430,7 +388,6 @@ def run_rust_verify(
     pk_path: Path,
     sig_path: Path,
     label: str,
-    use_ssz: bool = False,
 ) -> OperationResult:
     print(f"\n-- {label} ({cfg.lifetime}) --")
     
@@ -442,9 +399,8 @@ def run_rust_verify(
         str(pk_path),
         cfg.message,
         str(cfg.epoch),
+        "--ssz",
     ]
-    if use_ssz:
-        verify_cmd.append("--ssz")
     result = run_command(
         verify_cmd,
         cwd=RUST_PROJECT,
@@ -455,27 +411,27 @@ def run_rust_verify(
     return OperationResult(success, duration, result.stdout, result.stderr)
 
 
-def run_scenario(cfg: ScenarioConfig, timeout_2_32: int, use_ssz: bool = False) -> tuple[Dict[str, OperationResult], Dict[str, Path]]:
+def run_scenario(cfg: ScenarioConfig, timeout_2_32: int) -> tuple[Dict[str, OperationResult], Dict[str, Path]]:
     print(f"\n=== Scenario: {cfg.label} ===")
-    paths = scenario_paths(cfg, use_ssz)
+    paths = scenario_paths(cfg)
     prepare_tmp_files(paths)
 
     results: Dict[str, OperationResult] = {}
     # Rust generates keypair and signs
-    results["rust_sign"] = run_rust_sign(cfg, paths, use_ssz)
-    results["rust_self"] = run_rust_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Rust verify", use_ssz)
+    results["rust_sign"] = run_rust_sign(cfg, paths)
+    results["rust_self"] = run_rust_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Rust verify")
     
     # Zig verifies using Rust's public key (no key generation needed)
-    results["rust_to_zig"] = run_zig_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Zig verify", use_ssz)
+    results["rust_to_zig"] = run_zig_verify(cfg, paths["rust_pk"], paths["rust_sig"], "Rust sign → Zig verify")
 
     # Zig generates keypair and signs (for reverse direction test)
-    results["zig_sign"] = run_zig_sign(cfg, paths, timeout_2_32, use_ssz)
-    results["zig_self"] = run_zig_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Zig verify", use_ssz)
+    results["zig_sign"] = run_zig_sign(cfg, paths, timeout_2_32)
+    results["zig_self"] = run_zig_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Zig verify")
     
     # Rust verifies using Zig's public key (same behavior for all lifetimes)
     # This exercises full cross-language compatibility: Zig-generated public key and
     # signature must be accepted by the Rust verifier.
-    results["zig_to_rust"] = run_rust_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Rust verify", use_ssz)
+    results["zig_to_rust"] = run_rust_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Rust verify")
 
     return results, paths
 
@@ -514,7 +470,7 @@ def main() -> int:
     overall_success = True
     for cfg in scenarios:
         try:
-            results, paths = run_scenario(cfg, args.timeout_2_32, args.ssz)
+            results, paths = run_scenario(cfg, args.timeout_2_32)
         except Exception as exc:
             print(f"\n❌ Scenario {cfg.lifetime} failed: {exc}")
             return 1
