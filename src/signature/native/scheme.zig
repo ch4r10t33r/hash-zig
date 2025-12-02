@@ -499,71 +499,47 @@ pub const HashTreeOpening = struct {
     }
 
     // SSZ serialization methods
-    pub fn sszEncode(self: *const HashTreeOpening, l: *std.ArrayList(u8)) !void {
-        // Rust's SSZ library encodes path as List<[16]u32> where each item contains 2 nodes
-        // For most lifetimes, the path contains all Merkle levels (e.g. 8 nodes → 4 items).
-        // For lifetime 2^32, Rust encodes the full 32-node path (16 items) but the length
-        // prefix is incorrectly set to 4 (a bug in Rust's SSZ implementation). We must match
-        // Rust's buggy behavior to maintain compatibility.
-        // Convert nodes to canonical u32 arrays
-        var nodes_canonical = try self.allocator.alloc([8]u32, self.nodes.len);
-        defer self.allocator.free(nodes_canonical);
-
-        for (self.nodes, 0..) |node, i| {
-            for (node, 0..) |fe, j| {
-                nodes_canonical[i][j] = fe.toCanonical();
+    pub fn sszEncode(self: *const HashTreeOpening, l: *std.ArrayList(u8), hash_len_fe: usize) !void {
+        // Rust's HashTreeOpening is a struct with one variable field: co_path (Vec<Domain>)
+        // SSZ Container encoding: [internal_offset: 4][co_path data]
+        // Since Domain (FieldArray) is fixed-size, Vec<Domain> encodes as raw bytes WITHOUT length prefix
+        
+        // Write internal offset (always 4, points to where co_path starts)
+        try ssz.serialize(u32, @as(u32, 4), l);
+        
+        // Write co_path as raw node data (no length prefix for fixed-size items)
+        // Each node is hash_len_fe field elements (28 bytes for 2^18, 32 bytes for 2^8/2^32)
+        for (self.nodes) |node| {
+            // Write only hash_len_fe field elements per node
+            for (0..hash_len_fe) |j| {
+                const canonical = node[j].toCanonical();
+                try ssz.serialize(u32, canonical, l);
             }
-        }
-
-        // Determine how many nodes/items to encode.
-        // For 2^32, Rust encodes all 32 nodes (16 items) but sets length prefix to 4.
-        // This is a bug in Rust's SSZ implementation, but we must match it for compatibility.
-        const total_nodes = self.nodes.len;
-        const nodes_to_encode: usize = total_nodes;
-        const num_items: usize = if (total_nodes % 2 == 0)
-            total_nodes / 2
-        else
-            (total_nodes / 2) + 1;
-
-        // CRITICAL: For 2^32 (32 nodes = 16 items), Rust incorrectly sets length prefix to 4
-        // instead of 16. We must match this buggy behavior for cross-language compatibility.
-        const length_prefix: u32 = if (total_nodes == 32) 4 else @as(u32, @intCast(num_items));
-
-        // Length prefix: number of [16]u32 items (buggy for 2^32).
-        try ssz.serialize(u32, length_prefix, l);
-
-        // Write items as [16]u32 (2 nodes concatenated per item)
-        var i: usize = 0;
-        while (i < nodes_to_encode) : (i += 2) {
-            var item: [16]u32 = undefined;
-            // First node (8 u32s)
-            for (nodes_canonical[i], 0..) |val, j| {
-                item[j] = val;
-            }
-            // Second node (8 u32s) if available, otherwise pad with zeros
-            if (i + 1 < nodes_to_encode) {
-                for (nodes_canonical[i + 1], 0..) |val, j| {
-                    item[8 + j] = val;
-                }
-            } else {
-                // Pad second half with zeros if odd number of nodes
-                for (0..8) |j| {
-                    item[8 + j] = 0;
-                }
-            }
-            try ssz.serialize([16]u32, item, l);
         }
     }
 
-    pub fn sszDecode(serialized: []const u8, out: *HashTreeOpening, allocator: ?std.mem.Allocator) !void {
+    pub fn sszDecode(serialized: []const u8, out: *HashTreeOpening, allocator: ?std.mem.Allocator, hash_len_fe: usize) !void {
         const alloc = allocator orelse return error.AllocatorRequired;
 
-        // Rust's SSZ library encodes path as List<[16]u32> where each item contains 2 nodes
-        // Read length prefix (number of items, each item = 2 nodes)
+        // Rust's HashTreeOpening is a struct with one variable field: co_path (Vec<Domain>)
+        // SSZ Container encoding: [internal_offset: 4][co_path data as raw bytes]
+        // Since Domain (FieldArray) is fixed-size, Vec<Domain> encodes WITHOUT length prefix
+        
+        // Read internal offset (should be 4)
         if (serialized.len < 4) return error.InvalidLength;
-        const num_items = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[0])), .little);
-
-        if (num_items == 0) {
+        const internal_offset = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[0])), .little);
+        
+        if (internal_offset != 4) return error.InvalidOffset;
+        
+        // Calculate number of nodes from remaining data
+        // Each node is hash_len_fe field elements × 4 bytes
+        const node_size = hash_len_fe * 4;
+        const copath_data_len = serialized.len - internal_offset;
+        
+        if (copath_data_len % node_size != 0) return error.InvalidLength;
+        const num_nodes = copath_data_len / node_size;
+        
+        if (num_nodes == 0) {
             out.* = HashTreeOpening{
                 .nodes = try alloc.alloc([8]FieldElement, 0),
                 .allocator = alloc,
@@ -571,61 +547,23 @@ pub const HashTreeOpening = struct {
             return;
         }
 
-        // Each item is [16]u32 = 64 bytes (2 nodes)
-        // Use available data length to determine actual number of items
-        // (in case we're decoding from a slice that might have extra data)
-        const available_data = serialized.len - 4;
-        const actual_num_items = available_data / 64;
-        if (actual_num_items == 0) {
-            out.* = HashTreeOpening{
-                .nodes = try alloc.alloc([8]FieldElement, 0),
-                .allocator = alloc,
-            };
-            return;
-        }
-
-        // CRITICAL: For 2^32, Rust incorrectly sets length prefix to 4 but encodes 16 items (32 nodes).
-        // We must decode all available items (16) even if length prefix says 4, to match Rust's buggy behavior.
-        // For other lifetimes, use the minimum of length prefix and actual available items.
-        const items_to_decode = if (num_items == 4 and actual_num_items == 16) actual_num_items else @min(num_items, actual_num_items);
-
-        // Decode items as [16]u32 and split into [8]u32 nodes
-        const num_nodes = items_to_decode * 2;
-        var nodes_canonical = try alloc.alloc([8]u32, num_nodes);
-        defer alloc.free(nodes_canonical);
-
-        var pos: usize = 4; // Skip length prefix
-        for (0..items_to_decode) |item_idx| {
-            if (serialized.len < pos + 64) return error.InvalidLength;
-            var item: [16]u32 = undefined;
-            // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
-            // Deserialize each u32 individually instead
-            var item_offset = pos;
-            for (0..16) |j| {
-                if (serialized.len < item_offset + 4) return error.InvalidLength;
-                var val: u32 = undefined;
-                try ssz.deserialize(u32, serialized[item_offset .. item_offset + 4], &val, null);
-                item[j] = val;
-                item_offset += 4;
-            }
-            pos += 64;
-
-            // Split item into 2 nodes
-            const node1_idx = item_idx * 2;
-            const node2_idx = node1_idx + 1;
-            for (0..8) |j| {
-                nodes_canonical[node1_idx][j] = item[j];
-                if (node2_idx < num_nodes) {
-                    nodes_canonical[node2_idx][j] = item[8 + j];
-                }
-            }
-        }
-
-        // Convert back to FieldElement arrays
+        // Decode nodes
         var nodes = try alloc.alloc([8]FieldElement, num_nodes);
-        for (nodes_canonical, 0..) |node_canonical, i| {
-            for (node_canonical, 0..) |val, j| {
-                nodes[i][j] = FieldElement.fromCanonical(val);
+        errdefer alloc.free(nodes);
+        
+        var pos: usize = internal_offset;
+        for (0..num_nodes) |node_idx| {
+            // Read hash_len_fe field elements for this node
+            for (0..hash_len_fe) |j| {
+                if (serialized.len < pos + 4) return error.InvalidLength;
+                var val: u32 = undefined;
+                try ssz.deserialize(u32, serialized[pos .. pos + 4], &val, null);
+                nodes[node_idx][j] = FieldElement.fromCanonical(val);
+                pos += 4;
+            }
+            // Zero-pad remaining field elements if hash_len_fe < 8
+            for (hash_len_fe..8) |j| {
+                nodes[node_idx][j] = FieldElement.fromCanonical(0);
             }
         }
 
@@ -759,11 +697,19 @@ pub const GeneralizedXMSSSignature = struct {
         // Field order: path (variable), rho (fixed), hashes (variable)
         // var_start = path_offset(4) + rho(28) + hashes_offset(4) = 36
 
-        // Calculate path size
-        // Rust encodes path as List<[16]u32> (2 nodes per item)
-        // Path size = 4 (length prefix) + number of items * 64 bytes per item
-        const num_items = if (self.path.nodes.len % 2 == 0) self.path.nodes.len / 2 else (self.path.nodes.len / 2) + 1;
-        const path_size = 4 + (num_items * 64);
+        // Determine sizes based on rand_len_fe
+        // For 2^18: rand_len_fe=6 → rho is 24 bytes, hash_len_fe=7 → nodes are 28 bytes
+        // For 2^8/2^32: rand_len_fe=7 → rho is 28 bytes, hash_len_fe=8 → nodes are 32 bytes
+        const rand_len = self.rand_len_fe orelse 7;
+        const hash_len_fe = rand_len + 1; // 2^18: 6+1=7, 2^8/2^32: 7+1=8
+        const rho_size = rand_len * 4;
+        const node_size = hash_len_fe * 4;
+        
+        // Calculate path size: [internal_offset: 4][nodes as raw bytes]
+        const path_size = 4 + (self.path.nodes.len * node_size);
+        
+        // Calculate var_start: path_offset(4) + rho + hashes_offset(4)
+        const var_start: usize = 4 + rho_size + 4;
 
         // Calculate hashes size
         var hashes_canonical = try self.allocator.alloc([8]u32, self.hashes.len);
@@ -773,15 +719,6 @@ pub const GeneralizedXMSSSignature = struct {
                 hashes_canonical[i][j] = fe.toCanonical();
             }
         }
-        // Calculate var_start - CRITICAL: Rust's SSZ has a bug/inconsistency:
-        // - Encoder: uses 24-byte rho for 2^18 (path_offset = 32 bytes)
-        // - Decoder: expects 28-byte rho but also expects path_offset = 32 bytes
-        // To match Rust's decoder (which is what matters for cross-language compatibility),
-        // we encode path_offset as 32 bytes (matching Rust's encoder expectation) but
-        // encode rho as 28 bytes (matching Rust's decoder expectation)
-        // This causes hashes_offset field to overlap with path data, but Rust's decoder handles this
-        const rand_len = self.rand_len_fe orelse 7;
-        const var_start: usize = if (rand_len == 6) 32 else 36; // 32 for 2^18 (bug workaround), 36 for 2^8/2^32
 
         // Write path offset (absolute offset from start of serialized data)
         const path_offset: u32 = @as(u32, @intCast(var_start));
@@ -795,41 +732,31 @@ pub const GeneralizedXMSSSignature = struct {
             rho_canonical[i] = self.rho[i].toCanonical();
         }
         log.print("SSZ_DEBUG: sszEncode: Encoding rho[0]=0x{x:0>8} (canonical) / 0x{x:0>8} (Montgomery)\n", .{ rho_canonical[0], self.rho[0].value });
-        try ssz.serialize([7]u32, rho_canonical, l);
-
-        // Write hashes offset (absolute offset from start of serialized data)
-        // CRITICAL: For 2^18, path_offset=32 means path data starts at offset 32.
-        // The hashes_offset field should be at offset 36, but that overlaps with path data.
-        // Rust's decoder calculates hashes_offset from path data, but validates offset 36 is non-zero.
-        // For 2^18, we write path data first, then write hashes_offset at the correct position.
-        // For 2^8 and 2^32, we write hashes_offset before path data.
-        if (var_start == 32) {
-            // For 2^18, write path data first (starts at offset 32)
-            try self.path.sszEncode(l);
-            // Now manually set bytes 36-39 (4 bytes into path data) to dummy non-zero value
-            // This satisfies Rust's validation without corrupting the path length prefix
-            const target_pos = 36;
-            if (l.items.len < target_pos + 4) {
-                // Pad if needed (shouldn't happen, but be safe)
-                try l.appendNTimes(0, target_pos + 4 - l.items.len);
-            }
-            // Overwrite bytes 36-39 with dummy non-zero value
-            // Rust writes garbage here (913379658), but we use a smaller value to avoid issues
-            // The value doesn't matter since Rust calculates hashes_offset from path data
-            const dummy: u32 = 292; // Use the calculated hashes_offset value to match expectations
-            std.mem.writeInt(u32, l.items[target_pos .. target_pos + 4], dummy, .little);
-        } else {
-            const hashes_offset: u32 = @as(u32, @intCast(var_start + path_size));
-            try ssz.serialize(u32, hashes_offset, l);
-            // Write path data
-            try self.path.sszEncode(l);
+        
+        // Write rho - size depends on rand_len_fe
+        // For 2^18: rand_len_fe=6, write 6 field elements (24 bytes)
+        // For 2^8/2^32: rand_len_fe=7, write 7 field elements (28 bytes)
+        for (0..rand_len) |i| {
+            try ssz.serialize(u32, rho_canonical[i], l);
         }
 
+        // Write hashes offset (absolute offset from start of serialized data)
+        const hashes_offset: u32 = @as(u32, @intCast(var_start + path_size));
+        try ssz.serialize(u32, hashes_offset, l);
+
+        // Write path data
+        try self.path.sszEncode(l, hash_len_fe);
+
         // Write hashes data
-        // Rust's SSZ library does NOT include length prefix for variable-length lists
-        // of fixed-size items when embedded in a struct. Write items directly.
+        // Hashes are Vec<TH::Domain> where Domain = FieldArray<hash_len_fe>
+        // Since Domain is fixed-size, Vec encodes as raw bytes WITHOUT length prefix
+        // For 2^18: each hash is 7 field elements (28 bytes)
+        // For 2^8/2^32: each hash is 8 field elements (32 bytes)
         for (hashes_canonical) |hash| {
-            try ssz.serialize([8]u32, hash, l);
+            // Write only hash_len_fe field elements per hash
+            for (0..hash_len_fe) |j| {
+                try ssz.serialize(u32, hash[j], l);
+            }
         }
     }
 
@@ -849,11 +776,11 @@ pub const GeneralizedXMSSSignature = struct {
         offset += 4;
         log.print("SSZ_DEBUG: sszDecode: path_offset={}\n", .{path_offset});
 
-        // Read rho - CRITICAL: Rust's decoder always expects [7]u32 (28 bytes), regardless of lifetime
-        // Even though Rust's encoder uses [6]u32 (24 bytes) for 2^18, Rust's decoder expects 28 bytes
-        // This is a bug/inconsistency in Rust's SSZ implementation, but we must match the decoder
-        const rho_size: usize = 28; // Always 28 bytes to match Rust's decoder expectations
-        const rand_len_decode: usize = 7; // Always decode all 7 elements, verification will use only first rand_len_fe
+        // Read rho - size depends on path_offset
+        // For 2^18: path_offset=32 means rho is 24 bytes (6 field elements, rand_len_fe=6)
+        // For 2^8/2^32: path_offset=36 means rho is 28 bytes (7 field elements, rand_len_fe=7)
+        const rho_size: usize = if (path_offset == 32) 24 else 28;
+        const rand_len_decode: usize = if (path_offset == 32) 6 else 7;
 
         const rho_start: usize = 4; // rho is a fixed field, starts right after path_offset field at offset 0x04
         if (serialized.len < rho_start + rho_size) return error.InvalidLength;
@@ -878,22 +805,13 @@ pub const GeneralizedXMSSSignature = struct {
         }
         log.print("SSZ_DEBUG: sszDecode: rho decoded, first value=0x{x}, rand_len={}\n", .{ rho[0].toCanonical(), rand_len_decode });
 
-        // Read hashes offset (4 bytes) - CRITICAL: For 2^18, Rust's decoder calculates hashes_offset from path data
-        // Due to the bug/inconsistency (28-byte rho but path_offset=32), hashes_offset field overlaps with path data
-        // For 2^18, we must calculate hashes_offset from the path data size instead of reading it
-        const hashes_offset: u32 = if (path_offset == 32) blk: {
-            // For 2^18, read path length prefix and calculate hashes_offset
-            if (serialized.len < path_offset + 4) return error.InvalidLength;
-            const path_length = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[path_offset])), .little);
-            const path_data_size = 4 + path_length * 64; // 4 bytes for length prefix + items
-            break :blk @as(u32, @intCast(path_offset + path_data_size));
-        } else blk: {
-            // For 2^8 and 2^32, read hashes_offset from after rho
-            const hashes_offset_pos = rho_start + rho_size;
-            if (serialized.len < hashes_offset_pos + 4) return error.InvalidLength;
-            break :blk std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[hashes_offset_pos])), .little);
-        };
-        log.print("SSZ_DEBUG: sszDecode: hashes_offset={} (path_offset={})\n", .{ hashes_offset, path_offset });
+        // Read hashes offset (4 bytes) - position depends on rho_size
+        // For 2^18: rho is 24 bytes, so hashes_offset is at offset 28-31
+        // For 2^8/2^32: rho is 28 bytes, so hashes_offset is at offset 32-35
+        const hashes_offset_pos = rho_start + rho_size;
+        if (serialized.len < hashes_offset_pos + 4) return error.InvalidLength;
+        const hashes_offset = std.mem.readInt(u32, @as(*const [4]u8, @ptrCast(&serialized[hashes_offset_pos])), .little);
+        log.print("SSZ_DEBUG: sszDecode: hashes_offset={} (read from offset {}, path_offset={})\n", .{ hashes_offset, hashes_offset_pos, path_offset });
 
         // Second pass: Deserialize variable fields using offsets
         // Decode path (absolute offset)
@@ -907,7 +825,10 @@ pub const GeneralizedXMSSSignature = struct {
         const path = try alloc.create(HashTreeOpening);
         errdefer alloc.destroy(path);
         log.print("SSZ_DEBUG: sszDecode: Created path at 0x{x}, path_data_len={}\n", .{ @intFromPtr(path), path_data_len });
-        try HashTreeOpening.sszDecode(serialized[path_offset .. path_offset + path_data_len], path, alloc);
+        
+        // Determine hash_len_fe from path_offset: 32 → hash_len_fe=7, 36 → hash_len_fe=8
+        const decode_hash_len_fe: usize = if (path_offset == 32) 7 else 8;
+        try HashTreeOpening.sszDecode(serialized[path_offset .. path_offset + path_data_len], path, alloc, decode_hash_len_fe);
         log.print("SSZ_DEBUG: sszDecode: Path decoded successfully, nodes len={}\n", .{path.nodes.len});
         // Debug: log first few path nodes to verify decoding
         for (0..@min(8, path.nodes.len)) |i| {
@@ -915,12 +836,16 @@ pub const GeneralizedXMSSSignature = struct {
         }
 
         // Decode hashes (absolute offset)
-        // Rust's SSZ library does NOT include length prefix for variable-length lists
-        // of fixed-size items when embedded in a struct. Data starts directly with items.
+        // Hashes are Vec<TH::Domain> where Domain = FieldArray<hash_len_fe>
+        // Since Domain is fixed-size, Vec encodes as raw bytes WITHOUT length prefix
+        // For 2^18: each hash is 7 field elements (28 bytes)
+        // For 2^8/2^32: each hash is 8 field elements (32 bytes)
         if (hashes_offset > serialized.len) return error.InvalidOffset;
         const hashes_data_len = serialized.len - hashes_offset;
-        const num_hashes = hashes_data_len / 32; // Each hash is 32 bytes
-        log.print("SSZ_DEBUG: sszDecode: num_hashes={}\n", .{num_hashes});
+        const hash_size = decode_hash_len_fe * 4;
+        if (hashes_data_len % hash_size != 0) return error.InvalidLength;
+        const num_hashes = hashes_data_len / hash_size;
+        log.print("SSZ_DEBUG: sszDecode: num_hashes={}, hash_size={}\n", .{ num_hashes, hash_size });
 
         if (num_hashes == 0) {
             log.print("SSZ_DEBUG: sszDecode: Assigning struct with empty hashes\n", .{});
@@ -949,18 +874,19 @@ pub const GeneralizedXMSSSignature = struct {
 
         var pos = hashes_offset; // No length prefix to skip
         for (0..num_hashes) |i| {
-            if (serialized.len < pos + 32) return error.InvalidLength;
-            // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
-            // Deserialize each u32 individually instead
-            var hash_offset = pos;
-            for (0..8) |j| {
-                if (serialized.len < hash_offset + 4) return error.InvalidLength;
+            if (serialized.len < pos + hash_size) return error.InvalidLength;
+            // Deserialize hash_len_fe field elements for this hash
+            for (0..decode_hash_len_fe) |j| {
+                if (serialized.len < pos + 4) return error.InvalidLength;
                 var val: u32 = undefined;
-                try ssz.deserialize(u32, serialized[hash_offset .. hash_offset + 4], &val, null);
+                try ssz.deserialize(u32, serialized[pos .. pos + 4], &val, null);
                 hashes_canonical[i][j] = val;
-                hash_offset += 4;
+                pos += 4;
             }
-            pos += 32;
+            // Zero-pad remaining field elements if hash_len_fe < 8
+            for (decode_hash_len_fe..8) |j| {
+                hashes_canonical[i][j] = 0;
+            }
         }
 
         // Convert back to FieldElement arrays
@@ -5183,28 +5109,15 @@ pub const GeneralizedXMSSSignatureScheme = struct {
             }
         }
 
-        // Rust's SSZ signature path encoding varies by lifetime:
-        // - For 2^8: encodes both bottom and top co-paths (8 nodes = 4 items)
-        // - For 2^18: encodes only bottom co-path, but only first 8 nodes (8 nodes = 4 items) - NOT 9 nodes!
-        // - For 2^32: encodes both bottom and top co-paths (32 nodes = 16 items)
-        // For 2^18, Rust encodes 4 items (8 nodes), not 9 items (18 nodes)
-        // This suggests Rust only encodes the first 8 nodes of the bottom co-path for 2^18
-        // Match Rust's behavior: for 2^18, only encode first 8 nodes of bottom co-path
-        const log_lifetime = self.lifetime_params.log_lifetime;
-        const path_nodes = if (log_lifetime == 18) blk: {
-            // For 2^18, Rust only encodes first 8 nodes of bottom co-path (not all 9)
-            const nodes_to_encode = @min(8, bottom_copath.len);
-            const nodes_slice = try self.allocator.alloc([8]FieldElement, nodes_to_encode);
-            @memcpy(nodes_slice, bottom_copath[0..nodes_to_encode]);
-            break :blk nodes_slice;
-        } else blk: {
-            // For 2^8 and 2^32, encode both bottom and top co-paths
-            var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
-            @memcpy(nodes_concat[0..bottom_copath.len], bottom_copath);
-            @memcpy(nodes_concat[bottom_copath.len..], top_copath);
-            break :blk nodes_concat;
-        };
-        const path = try HashTreeOpening.init(self.allocator, path_nodes);
+        // Rust's SSZ signature path encoding: encodes FULL Merkle path for ALL lifetimes
+        // - For 2^8: bottom (4) + top (4) = 8 nodes
+        // - For 2^18: bottom (9) + top (9) = 18 nodes
+        // - For 2^32: bottom (16) + top (16) = 32 nodes
+        // Concatenate bottom and top co-paths for all lifetimes
+        var nodes_concat = try self.allocator.alloc([8]FieldElement, bottom_copath.len + top_copath.len);
+        @memcpy(nodes_concat[0..bottom_copath.len], bottom_copath);
+        @memcpy(nodes_concat[bottom_copath.len..], top_copath);
+        const path = try HashTreeOpening.init(self.allocator, nodes_concat);
         errdefer path.deinit(); // Clean up if signature creation fails
 
         // Try encoding with different randomness attempts (matching Rust sign retry loop)
