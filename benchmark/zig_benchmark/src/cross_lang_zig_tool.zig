@@ -571,13 +571,22 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     
     var signature: *hash_zig.GeneralizedXMSSSignature = undefined;
     var public_key: hash_zig.GeneralizedXMSSPublicKey = undefined;
+    var sig_bytes_opt: ?[]u8 = null; // Keep sig_bytes alive if using SSZ
     
     if (use_ssz) {
         // Load signature from SSZ format
         const sig_bytes = try std.fs.cwd().readFileAlloc(allocator, sig_path, std.math.maxInt(usize));
-        defer allocator.free(sig_bytes);
+        sig_bytes_opt = sig_bytes; // Store to free later
+        std.debug.print("DEBUG: sig_bytes allocated at 0x{x}, len={}\n", .{ @intFromPtr(sig_bytes.ptr), sig_bytes.len });
         signature = try hash_zig.GeneralizedXMSSSignature.fromBytes(sig_bytes, allocator);
-        defer signature.deinit();
+        std.debug.print("DEBUG: signature allocated at 0x{x}\n", .{@intFromPtr(signature)});
+        
+        // Validate signature struct is accessible before verify
+        std.debug.print("DEBUG: Signature struct at 0x{x}, path=0x{x}, rho[0]=0x{x}\n", .{
+            @intFromPtr(signature),
+            @intFromPtr(signature.path),
+            signature.rho[0].toCanonical(),
+        });
         
         // Load public key from SSZ format
         const pk_bytes = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
@@ -594,7 +603,6 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
         
         // The readSignatureBincode function reads from file path directly
         signature = try remote_hash_tool.readSignatureBincode(sig_path, allocator, rand_len, max_path_len, hash_len, max_hashes);
-        defer signature.deinit();
         
         // Debug: print rho from signature right after reading (before verify)
         const rho_after_read = signature.getRho();
@@ -632,8 +640,18 @@ fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8
     @memset(msg_bytes[0..], 0);
     @memcpy(msg_bytes[0..len], message[0..len]);
 
+    // Debug: verify signature struct is still valid before calling verify
+    log.print("ZIG_VERIFY_DEBUG: Before verify call - signature=0x{x}\n", .{@intFromPtr(signature)});
+    // Don't access struct fields here - let verify() handle it
+    
     // Verify the signature
     const is_valid = try scheme.verify(&public_key, epoch, msg_bytes, signature);
+
+    // Clean up signature and sig_bytes after verify
+    signature.deinit();
+    if (sig_bytes_opt) |sig_bytes| {
+        allocator.free(sig_bytes);
+    }
 
     if (is_valid) {
         std.debug.print("✅ Signature verification PASSED!\n", .{});

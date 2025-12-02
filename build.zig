@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) void {
     const enable_docs = b.option(bool, "docs", "Enable docs generation") orelse false;
     const enable_debug_logs = b.option(bool, "debug-logs", "Enable verbose std.debug logging") orelse false;
     const enable_profile_keygen = b.option(bool, "enable-profile-keygen", "Enable detailed keygen profiling logs") orelse false;
+    const enable_sanitize = b.option(bool, "sanitize", "Enable AddressSanitizer (default: false)") orelse false;
     
     // Auto-detect SIMD width based on target CPU features
     // If user explicitly sets simd-width, use that; otherwise auto-detect
@@ -219,6 +220,14 @@ pub fn build(b: *std.Build) void {
         .name = "cross-lang-zig-tool",
         .root_module = cross_lang_zig_tool_module,
     });
+    if (enable_sanitize) {
+        // Enable AddressSanitizer
+        cross_lang_zig_tool_exe.root_module.sanitize_c = true;
+        // On Linux, we might need to link asan, but on macOS it's built-in
+        if (target.result.os.tag == .linux) {
+            cross_lang_zig_tool_exe.linkSystemLibrary("asan");
+        }
+    }
     b.installArtifact(cross_lang_zig_tool_exe);
 
     // Rust compatibility test step (for CI)
