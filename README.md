@@ -12,7 +12,7 @@ Pure Zig implementation of **Generalized XMSS** signatures with wire-compatible 
 
 - **Protocol fidelity** – Poseidon2 hashing, ShakePRF domain separation, target sum encoding, and Merkle construction match the Rust reference bit-for-bit.
 - **Multiple lifetimes** – `2^8`, `2^18`, `2^32` signatures per key with configurable activation windows (defaults to 256 epochs).
-- **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^32` (bincode by default). Locally, you can test all lifetimes (`2^8`, `2^18`, `2^32`) and both encodings by passing `--lifetime` and optionally `--ssz`, and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
+- **Interop-first CI & tooling** – `github/workflows/ci.yml` runs `benchmark/benchmark.py`, covering same-language and cross-language checks for lifetimes `2^8` and `2^32` (SSZ by default). Locally, you can test all lifetimes (`2^8`, `2^18`, `2^32`) and switch to bincode encoding with `--no-ssz`, and enable verbose logs only when needed with `BENCHMARK_DEBUG_LOGS=1`.
 - **Performance optimizations** – Parallel tree generation, SIMD optimizations, and AVX-512 support for improved key generation performance (~7.1s for 2^32 with 1024 active epochs).
 - **Pure Zig** – minimal dependencies, explicit memory management, ReleaseFast-ready.
 
@@ -319,11 +319,11 @@ cd hash-zig
 zig build lint
 zig build install -Doptimize=ReleaseFast -Ddebug-logs=false
 
-# Bincode encoding (default)
+# SSZ encoding (default, matches ethereum_ssz on Rust side)
 python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32"
 
-# SSZ encoding (matches ethereum_ssz on Rust side)
-python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32" --ssz
+# Bincode encoding (use --no-ssz flag)
+python3 benchmark/benchmark.py --lifetime "2^8,2^18,2^32" --no-ssz
 ```
 
 - **Windows (PowerShell)**:

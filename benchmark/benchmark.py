@@ -102,7 +102,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ssz",
         action="store_true",
-        help="Use SSZ serialization instead of JSON/bincode.",
+        default=True,
+        help="Use SSZ serialization (default). Use --no-ssz for JSON/bincode.",
+    )
+    parser.add_argument(
+        "--no-ssz",
+        dest="ssz",
+        action="store_false",
+        help="Use JSON/bincode serialization instead of SSZ.",
     )
     args = parser.parse_args()
 
