@@ -126,8 +126,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Running benchmark/benchmark.py for cross-language compatibility (lifetimes 2^8 and 2^32)"
-          python3 benchmark/benchmark.py --lifetime "2^8,2^32"
+          echo "Running benchmark/benchmark.py for cross-language compatibility (lifetimes 2^8 and 2^32) with SSZ serialization"
+          python3 benchmark/benchmark.py --lifetime "2^8,2^32" --ssz
   
   cross-platform-build:
     name: Cross-Platform Build (${{ matrix.os }})

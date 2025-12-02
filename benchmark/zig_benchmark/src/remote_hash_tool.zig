@@ -163,18 +163,18 @@ pub fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.Genera
         }
     }
 
-    // Write rho (7 u32 values in MONTGOMERY form, no length prefix for fixed array)
-    // CRITICAL: p3_field::PrimeField32 serializes in MONTGOMERY form (default Serialize)
-    // FieldArray serializes in canonical form, but rho is [F; RAND_LEN] which uses p3_field's default
+    // Write rho (7 u32 values in CANONICAL form, no length prefix for fixed array)
+    // CRITICAL: Rust's bincode serializes field elements in CANONICAL form (matching path and hashes)
+    // This must match Rust's FieldArray serialization which uses as_canonical_u32()
     const rho = signature.getRho();
     if (rand_len > rho.len) return BincodeError.InvalidRandLength;
-    // Debug: print rho values as written to file (for Zig→Zig debugging)
+    // Debug: print rho values as written to file (for cross-language debugging)
     const stderr = std.io.getStdErr().writer();
-    stderr.print("ZIG_WRITE_DEBUG: Writing rho to file (Montgomery): ", .{}) catch {};
+    stderr.print("ZIG_WRITE_DEBUG: Writing rho to file (Canonical): ", .{}) catch {};
     for (rho[0..rand_len]) |fe| {
-        const montgomery = fe.toMontgomery();
-        try writer.writeInt(u32, montgomery, .little);
-        stderr.print("0x{x:0>8} ", .{montgomery}) catch {};
+        const canonical = fe.toCanonical();
+        try writer.writeInt(u32, canonical, .little);
+        stderr.print("0x{x:0>8} ", .{canonical}) catch {};
     }
     stderr.print("\n", .{}) catch {};
 
@@ -240,23 +240,22 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     var path_ptr = try HashTreeOpening.init(allocator, path_nodes);
     allocator.free(path_nodes);
 
-    // Read rho (rand_len u32 values in MONTGOMERY form, no length prefix for fixed array)
-    // CRITICAL: Rust's bincode serializes field elements in MONTGOMERY form (internal representation)
-    // Rust deserializes and converts to canonical internally, but the file contains Montgomery form
-    // We need to read as Montgomery and the FieldElement will handle the conversion
+    // Read rho (rand_len u32 values in CANONICAL form, no length prefix for fixed array)
+    // CRITICAL: Rust's bincode serializes field elements in CANONICAL form (matching path and hashes)
+    // This must match Rust's FieldArray serialization which uses as_canonical_u32()
     // For lifetime 2^8/2^32: rand_len=7, for lifetime 2^18: rand_len=6
     if (rand_len > 7) {
         path_ptr.deinit();
         return BincodeError.InvalidRandLength;
     }
     var rho = [_]FieldElement{FieldElement.zero()} ** 7;
-    // Debug: print rho values as read from file (for Zig→Zig debugging)
+    // Debug: print rho values as read from file (for cross-language debugging)
     const stderr = std.io.getStdErr().writer();
-    stderr.print("ZIG_READ_DEBUG: Reading rho from file (Montgomery, rand_len={}): ", .{rand_len}) catch {};
+    stderr.print("ZIG_READ_DEBUG: Reading rho from file (Canonical, rand_len={}): ", .{rand_len}) catch {};
     for (0..rand_len) |i| {
-        const montgomery = try reader.readInt(u32, .little);
-        rho[i] = FieldElement.fromMontgomery(montgomery);
-        stderr.print("0x{x:0>8} ", .{montgomery}) catch {};
+        const canonical = try reader.readInt(u32, .little);
+        rho[i] = FieldElement.fromCanonical(canonical);
+        stderr.print("0x{x:0>8} ", .{canonical}) catch {};
     }
     stderr.print("\n", .{}) catch {};
 
@@ -288,10 +287,10 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
         }
     }
 
-    // Debug: print rho values before creating signature (for Zig→Zig debugging)
-    stderr.print("ZIG_READ_DEBUG: rho before signature creation (Montgomery): ", .{}) catch {};
+    // Debug: print rho values before creating signature (for cross-language debugging)
+    stderr.print("ZIG_READ_DEBUG: rho before signature creation (Canonical): ", .{}) catch {};
     for (0..rand_len) |i| {
-        stderr.print("0x{x:0>8} ", .{rho[i].toMontgomery()}) catch {};
+        stderr.print("0x{x:0>8} ", .{rho[i].toCanonical()}) catch {};
     }
     stderr.print("\n", .{}) catch {};
 
