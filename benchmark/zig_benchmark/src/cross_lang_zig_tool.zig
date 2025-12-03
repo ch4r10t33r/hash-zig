@@ -262,11 +262,11 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     // Tree structure: [depth:8][lowest_layer:8]...
                     if (sk_ssz.len < 96) return error.InvalidLength; // Need at least header + tree depth
                     const top_tree_offset = std.mem.readInt(u32, sk_ssz[68..72], .little);
-                    
+
                     // Validate top_tree_offset to prevent overflow and out-of-bounds access
                     if (top_tree_offset < 88 or top_tree_offset >= sk_ssz.len) return error.InvalidOffset;
                     if (sk_ssz.len - top_tree_offset < 8) return error.InvalidLength;
-                    
+
                     const tree_depth = std.mem.readInt(u64, sk_ssz[top_tree_offset .. top_tree_offset + 8][0..8], .little);
 
                     const actual_lifetime: KeyLifetime = switch (tree_depth) {
@@ -297,7 +297,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     };
                     const public_key = hash_zig.GeneralizedXMSSPublicKey.init(top_tree_root, secret_key.parameter, hash_len_fe);
 
-                    std.debug.print("✅ Loaded pre-generated key (lifetime 2^{}, {} active epochs)\n", .{tree_depth, secret_key.num_active_epochs});
+                    std.debug.print("✅ Loaded pre-generated key (lifetime 2^{}, {} active epochs)\n", .{ tree_depth, secret_key.num_active_epochs });
 
                     // Initialize scheme with just the lifetime - we don't need to pass PRF key as seed!
                     // The secret key already contains the PRF key, parameter, and all trees.
