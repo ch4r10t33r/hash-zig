@@ -214,6 +214,100 @@ pub const HashSubTree = struct {
     }
 };
 
+/// Helper function to deserialize HashSubTree from leansig SSZ format
+fn deserializeHashSubTree(allocator: std.mem.Allocator, serialized: []const u8) !*HashSubTree {
+    if (serialized.len < 20) return error.InvalidLength;
+    
+    var offset: usize = 0;
+    
+    // Decode depth (u64)
+    const depth = std.mem.readInt(u64, serialized[offset..offset+8][0..8], .little);
+    offset += 8;
+    
+    // Decode lowest_layer (u64)
+    const lowest_layer = std.mem.readInt(u64, serialized[offset..offset+8][0..8], .little);
+    offset += 8;
+    _ = lowest_layer; _ = depth;
+    
+    // Decode layers_offset (u32)
+    const layers_offset = std.mem.readInt(u32, serialized[offset..offset+4][0..4], .little);
+    offset += 4;
+    
+    // Layers array is a Vec<PaddedLayer>
+    const layers_data_start = @as(usize, layers_offset);
+    if (layers_data_start > serialized.len) return error.InvalidOffset;
+    
+    const layers_data = serialized[layers_data_start..];
+    
+    // Count number of layer offsets
+    const first_layer_offset = std.mem.readInt(u32, layers_data[0..4], .little);
+    const num_layers = first_layer_offset / 4;
+    
+    // Allocate layers array
+    const layers = try allocator.alloc(PaddedLayer, num_layers);
+    errdefer {
+        for (layers) |layer| {
+            allocator.free(layer.nodes);
+        }
+        allocator.free(layers);
+    }
+    
+    // Deserialize each layer
+    for (0..num_layers) |i| {
+        const layer_rel_offset = std.mem.readInt(u32, layers_data[i*4..(i+1)*4], .little);
+        const layer_start = layers_data_start + layer_rel_offset;
+        
+        // Determine layer end
+        const layer_end = if (i + 1 < num_layers) blk: {
+            const next_offset = std.mem.readInt(u32, layers_data[(i+1)*4..(i+2)*4], .little);
+            break :blk layers_data_start + next_offset;
+        } else serialized.len;
+        
+        const layer_bytes = serialized[layer_start..layer_end];
+        layers[i] = try deserializePaddedLayer(allocator, layer_bytes);
+    }
+    
+    // Extract root from the last layer's last node
+    const root_value = if (layers.len > 0 and layers[layers.len - 1].nodes.len > 0)
+        layers[layers.len - 1].nodes[layers[layers.len - 1].nodes.len - 1]
+    else
+        [_]FieldElement{FieldElement{ .value = 0 }} ** 8;
+    
+    return try HashSubTree.initWithLayers(allocator, root_value, layers);
+}
+
+/// Helper function to deserialize PaddedLayer from leansig SSZ format
+fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) !PaddedLayer {
+    if (serialized.len < 12) return error.InvalidLength;
+    
+    // Decode start_index (u64)
+    const start_index = std.mem.readInt(u64, serialized[0..8], .little);
+    
+    // Decode nodes_offset (u32)
+    const nodes_offset = std.mem.readInt(u32, serialized[8..12], .little);
+    
+    // Nodes array starts at nodes_offset
+    const nodes_data = serialized[nodes_offset..];
+    
+    // Each node is 8 x u32 = 32 bytes
+    const num_nodes = nodes_data.len / 32;
+    const nodes = try allocator.alloc([8]FieldElement, num_nodes);
+    errdefer allocator.free(nodes);
+    
+    // Deserialize nodes
+    for (0..num_nodes) |i| {
+        for (0..8) |j| {
+            const val = std.mem.readInt(u32, nodes_data[i*32 + j*4..i*32 + j*4 + 4][0..4], .little);
+            nodes[i][j] = FieldElement.fromCanonical(val);
+        }
+    }
+    
+    return PaddedLayer{
+        .start_index = @intCast(start_index),
+        .nodes = nodes,
+    };
+}
+
 const CACHE_MAGIC = @as(u32, 0x42544331); // "BTC1"
 const CACHE_VERSION: u8 = 2;
 
@@ -1215,6 +1309,13 @@ pub const GeneralizedXMSSSecretKey = struct {
 
     // SSZ serialization methods
     pub fn sszEncode(self: *const GeneralizedXMSSSecretKey, l: *std.ArrayList(u8)) !void {
+        // SSZ Container encoding for GeneralizedXMSSSecretKey:
+        // Fixed fields: prf_key(32) + parameter(20) + activation_epoch(8) + num_active_epochs(8) = 68 bytes
+        // Variable fields: top_tree, left_bottom_tree_index, left_bottom_tree, right_bottom_tree
+        
+        // Calculate fixed-size portion
+        const fixed_size: usize = 68 + 4 + 8 + 4 + 4; // fixed fields + offsets for 3 variable fields + left_bottom_tree_index
+        
         // Encode prf_key (32 bytes, fixed-size)
         try ssz.serialize([32]u8, self.prf_key, l);
 
@@ -1230,45 +1331,97 @@ pub const GeneralizedXMSSSecretKey = struct {
 
         // Encode num_active_epochs as u64 (8 bytes)
         try ssz.serialize(u64, @as(u64, @intCast(self.num_active_epochs)), l);
+        
+        // Encode offset for top_tree (u32)
+        try ssz.serialize(u32, @as(u32, @intCast(fixed_size)), l);
+        
+        // Encode left_bottom_tree_index (u64, fixed-size)
+        try ssz.serialize(u64, @as(u64, @intCast(self.left_bottom_tree_index)), l);
+        
+        // Calculate offset for left_bottom_tree
+        const top_tree_size = try calculateTreeSize(self.top_tree);
+        const left_tree_offset = fixed_size + top_tree_size;
+        try ssz.serialize(u32, @as(u32, @intCast(left_tree_offset)), l);
+        
+        // Calculate offset for right_bottom_tree
+        const left_tree_size = try calculateTreeSize(self.left_bottom_tree);
+        const right_tree_offset = left_tree_offset + left_tree_size;
+        try ssz.serialize(u32, @as(u32, @intCast(right_tree_offset)), l);
+        
+        // Encode variable-length trees
+        try encodeTree(self.top_tree, l);
+        try encodeTree(self.left_bottom_tree, l);
+        try encodeTree(self.right_bottom_tree, l);
     }
 
     pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSecretKey, allocator: ?std.mem.Allocator) !void {
         const alloc = allocator orelse return error.AllocatorRequired;
-        _ = alloc; // Note: Secret key requires trees which are not serialized
-
+        
+        if (serialized.len < 88) return error.InvalidLength;
+        
         var offset: usize = 0;
 
         // Decode prf_key (32 bytes)
-        if (serialized.len < offset + 32) return error.InvalidLength;
         var prf_key: [32]u8 = undefined;
-        try ssz.deserialize([32]u8, serialized[offset .. offset + 32], &prf_key, null);
+        @memcpy(&prf_key, serialized[offset .. offset + 32]);
         offset += 32;
 
         // Decode parameter (20 bytes for 5 u32s)
-        // CRITICAL FIX: ssz.deserialize doesn't work correctly for fixed-size arrays
-        // Deserialize each u32 individually instead
-        if (serialized.len < offset + 20) return error.InvalidLength;
         var param_canonical: [5]u32 = undefined;
-        var param_offset = offset;
         for (0..5) |i| {
-            if (serialized.len < param_offset + 4) return error.InvalidLength;
-            var val: u32 = undefined;
-            try ssz.deserialize(u32, serialized[param_offset .. param_offset + 4], &val, null);
-            param_canonical[i] = val;
-            param_offset += 4;
+            param_canonical[i] = std.mem.readInt(u32, serialized[offset .. offset + 4][0..4], .little);
+            offset += 4;
         }
-        offset += 20;
         var parameter: [5]FieldElement = undefined;
         for (param_canonical, 0..) |val, i| {
             parameter[i] = FieldElement.fromCanonical(val);
         }
 
-        // Validate remaining bytes exist (activation_epoch + num_active_epochs = 16 bytes)
-        // Note: We don't decode these fields since trees are not serialized and can't be reconstructed
-        // The caller must call keyGen to reconstruct the full secret key with trees
-        if (serialized.len < offset + 16) return error.InvalidLength;
-        _ = out;
-        return error.SecretKeyRequiresKeyGen; // Indicate that keyGen is needed
+        // Decode activation_epoch (u64)
+        const activation_epoch = std.mem.readInt(u64, serialized[offset .. offset + 8][0..8], .little);
+        offset += 8;
+
+        // Decode num_active_epochs (u64)
+        const num_active_epochs = std.mem.readInt(u64, serialized[offset .. offset + 8][0..8], .little);
+        offset += 8;
+
+        // Decode offsets for variable fields
+        const top_tree_offset = std.mem.readInt(u32, serialized[offset .. offset + 4][0..4], .little);
+        offset += 4;
+
+        const left_bottom_tree_index = std.mem.readInt(u64, serialized[offset .. offset + 8][0..8], .little);
+        offset += 8;
+
+        const left_bottom_tree_offset = std.mem.readInt(u32, serialized[offset .. offset + 4][0..4], .little);
+        offset += 4;
+
+        const right_bottom_tree_offset = std.mem.readInt(u32, serialized[offset .. offset + 4][0..4], .little);
+        offset += 4;
+
+        // Now offset should be 88, which matches top_tree_offset
+        if (offset != top_tree_offset) return error.InvalidSSZStructure;
+
+        // Deserialize top_tree
+        const top_tree = try deserializeHashSubTree(alloc, serialized[top_tree_offset..left_bottom_tree_offset]);
+
+        // Deserialize left_bottom_tree
+        const left_bottom_tree = try deserializeHashSubTree(alloc, serialized[left_bottom_tree_offset..right_bottom_tree_offset]);
+
+        // Deserialize right_bottom_tree
+        const right_bottom_tree = try deserializeHashSubTree(alloc, serialized[right_bottom_tree_offset..]);
+
+        // Initialize the secret key
+        out.* = GeneralizedXMSSSecretKey{
+            .prf_key = prf_key,
+            .parameter = parameter,
+            .activation_epoch = @intCast(activation_epoch),
+            .num_active_epochs = @intCast(num_active_epochs),
+            .top_tree = top_tree,
+            .left_bottom_tree_index = @intCast(left_bottom_tree_index),
+            .left_bottom_tree = left_bottom_tree,
+            .right_bottom_tree = right_bottom_tree,
+            .allocator = alloc,
+        };
     }
 
     pub fn isFixedSizeObject(comptime T: type) bool {
