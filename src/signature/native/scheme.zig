@@ -296,10 +296,22 @@ fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) 
     errdefer allocator.free(nodes);
 
     // Deserialize nodes
+    // CRITICAL: Leansig stores field elements in SSZ as Montgomery form, NOT canonical!
+    // This is different from how we encode (we use canonical), but we must match leansig's format
     for (0..num_nodes) |i| {
         for (0..8) |j| {
             const val = std.mem.readInt(u32, nodes_data[i * 32 + j * 4 .. i * 32 + j * 4 + 4][0..4], .little);
-            nodes[i][j] = FieldElement.fromCanonical(val);
+            // Leansig stores as Montgomery values directly, so use fromMontgomery
+            nodes[i][j] = FieldElement.fromMontgomery(val);
+
+            if (i == num_nodes - 1 and j == 0) {
+                // Debug last node first element (the root)
+                std.debug.print("TREE_SSZ_DECODE: Last layer last node first element: raw_u32=0x{x:0>8}, as_montgomery=0x{x:0>8}, as_canonical=0x{x:0>8}\n", .{
+                    val,
+                    nodes[i][j].value,
+                    nodes[i][j].toCanonical(),
+                });
+            }
         }
     }
 
