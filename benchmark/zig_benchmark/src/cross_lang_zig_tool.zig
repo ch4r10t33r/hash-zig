@@ -637,9 +637,29 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     const pk_bytes = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
     defer allocator.free(pk_bytes);
     
-    // Deserialize secret key to get parameters (using stack variable to avoid deinit issues)
-    var secret_key_data: hash_zig.GeneralizedXMSSSecretKey = undefined;
-    try hash_zig.GeneralizedXMSSSecretKey.sszDecode(sk_bytes, &secret_key_data, allocator);
+    // Parse metadata from SSZ header without fully deserializing trees
+    // SSZ format: [prf_key:32][parameter:20][activation_epoch:8][num_active_epochs:8][offsets...]
+    if (sk_bytes.len < 68) return error.InvalidLength;
+    
+    var offset: usize = 0;
+    
+    // Skip prf_key (32 bytes)
+    offset += 32;
+    
+    // Skip parameter (20 bytes for 5 u32s)
+    offset += 20;
+    
+    // Read activation_epoch (u64)
+    const activation_epoch = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
+    offset += 8;
+    
+    // Read num_active_epochs (u64)
+    const num_active_epochs = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
+    offset += 8;
+    
+    // Skip to left_bottom_tree_index (after top_tree_offset)
+    offset += 4; // skip top_tree_offset
+    const left_bottom_tree_index = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
     
     // Deserialize public key to verify it's valid
     _ = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_bytes, null);
@@ -653,14 +673,9 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     std.debug.print("✅ Successfully deserialized keys for lifetime {s}\n", .{lifetime_str});
     std.debug.print("  Public key size: {} bytes\n", .{pk_bytes.len});
     std.debug.print("  Secret key size: {} bytes\n", .{sk_bytes.len});
-    std.debug.print("  Activation epoch: {}\n", .{secret_key_data.activation_epoch});
-    std.debug.print("  Num active epochs: {}\n", .{secret_key_data.num_active_epochs});
-    std.debug.print("  Left bottom tree index: {}\n", .{secret_key_data.left_bottom_tree_index});
-    
-    // Clean up trees
-    secret_key_data.top_tree.deinit();
-    secret_key_data.left_bottom_tree.deinit();
-    secret_key_data.right_bottom_tree.deinit();
+    std.debug.print("  Activation epoch: {}\n", .{activation_epoch});
+    std.debug.print("  Num active epochs: {}\n", .{num_active_epochs});
+    std.debug.print("  Left bottom tree index: {}\n", .{left_bottom_tree_index});
     std.debug.print("  Public key (first 8 bytes): ", .{});
     for (pk_bytes[0..@min(8, pk_bytes.len)]) |byte| {
         std.debug.print("{x:0>2}", .{byte});

@@ -354,7 +354,23 @@ def main():
     selected_validator = random.choice(validator_ids)
     print(f"\n🎲 Randomly selected validator: {selected_validator}")
     
-    # Test the selected validator
+    # Test the selected validator and get actual_active_epochs
+    sk_path = PREGENERATED_KEYS_DIR / f"validator_{selected_validator}_sk.ssz"
+    pk_path = PREGENERATED_KEYS_DIR / f"validator_{selected_validator}_pk.ssz"
+    
+    # Quick inspection to get actual_active_epochs
+    returncode, stdout, stderr = run_command([
+        str(ZIG_BIN), "inspect", str(sk_path), str(pk_path), LIFETIME
+    ])
+    output = stderr if stderr else stdout
+    actual_active_epochs_value = None
+    for line in output.split('\n'):
+        if "Num active epochs:" in line:
+            parts = line.split(':')
+            if len(parts) > 1:
+                actual_active_epochs_value = int(parts[-1].strip())
+                break
+    
     all_passed = test_cross_language_with_pregenerated(selected_validator)
     
     # Summary
@@ -365,14 +381,14 @@ def main():
     # Print key information table
     print(f"\n📊 Pre-Generated Keys Information:")
     print(f"   Lifetime: {LIFETIME}")
-    print(f"   Active Epochs: {ACTIVE_EPOCHS}")
+    print(f"   Active Epochs: {actual_active_epochs_value if actual_active_epochs_value else 'Unknown'}")
     print(f"   Total Validators Available: {len(validator_ids)}")
     print(f"   Selected Validator: {selected_validator}")
     print(f"\n   Per-Validator Key Sizes:")
     print(f"   - Secret Key: 8,390,660 bytes (~8.0 MB)")
     print(f"   - Public Key: 52 bytes")
-    if actual_active_epochs:
-        print(f"   - Num Active Epochs: {actual_active_epochs}")
+    if actual_active_epochs_value:
+        print(f"   - Num Active Epochs: {actual_active_epochs_value}")
     
     print(f"\n🔐 Cross-Language Compatibility:")
     print(f"   ✅ Rust sign → Rust verify")
