@@ -1162,8 +1162,14 @@ pub const GeneralizedXMSSPublicKey = struct {
         var root_offset: usize = 0;
         for (0..hash_len) |i| {
             if (serialized.len < root_offset + 4) return error.InvalidLength;
-            var val: u32 = undefined;
-            try ssz.deserialize(u32, serialized[root_offset .. root_offset + 4], &val, null);
+            // Direct little-endian read instead of ssz.deserialize which may have issues
+            const bytes = serialized[root_offset .. root_offset + 4];
+            const val = std.mem.readInt(u32, bytes[0..4], .little);
+            if (i == 0) {
+                std.debug.print("PK_SSZ_DECODE: First 4 bytes: {x:0>2}{x:0>2}{x:0>2}{x:0>2} -> u32=0x{x:0>8}\n", .{
+                    bytes[0], bytes[1], bytes[2], bytes[3], val,
+                });
+            }
             root_canonical[i] = val;
             root_offset += 4;
         }
