@@ -243,7 +243,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         // For 2^8 lifetime, always regenerate from seed to avoid epoch configuration issues
         // The keygen -> sign flow for 2^8 can have mismatched active epochs in the SSZ file
         const skip_ssz_for_2_8 = (lifetime == .lifetime_2_8);
-        
+
         // Try to load SSZ secret key first if use_ssz is true and file exists
         if (use_ssz and !skip_ssz_for_2_8) {
             if (std.fs.cwd().readFileAlloc(allocator, "tmp/zig_sk.ssz", std.math.maxInt(usize))) |sk_ssz| {
