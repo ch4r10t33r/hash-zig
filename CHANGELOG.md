@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2025-12-03
+
+### Fixed
+- Fix Shake PRF to use 16 bytes per field element (matching Rust leansig)
+- Fix: Derive public key from secret key instead of loading separately
+- Add lifetime detection and warning when loading pre-generated keys
+- Extract lifetime from SSZ secret key and regenerate pre-generated keys
+- Fix SSZ secret key serialization to match Rust exactly
+
 ## [1.1.1] - 2025-12-02
 
 ### Fixed
@@ -54,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI/CD pipeline
 - Cross-platform support (Linux, macOS, Windows)
 
+[1.1.2]: https://github.com/blockblaz/hash-zig/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/blockblaz/hash-zig/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/blockblaz/hash-zig/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/blockblaz/hash-zig/releases/tag/v1.0.0
