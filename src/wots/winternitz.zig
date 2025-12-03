@@ -174,7 +174,7 @@ pub const WinternitzOTS = struct {
         // Allocate and ZERO the combined buffer to ensure deterministic results
         // Without zeroing, uninitialized memory causes non-deterministic hashes with Arena allocators
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
-        @memset(combined, 0); // CRITICAL: Zero the buffer first
+        @memset(combined, 0); // Zero the buffer first
         defer allocator.free(combined);
 
         for (public_parts, 0..) |part, i| {
@@ -264,7 +264,7 @@ pub const WinternitzOTS = struct {
 
         // Allocate and ZERO the combined buffer to ensure deterministic results
         var combined = try allocator.alloc(u8, public_parts.len * hash_output_len);
-        @memset(combined, 0); // CRITICAL: Zero the buffer first
+        @memset(combined, 0); // Zero the buffer first
         defer allocator.free(combined);
 
         for (public_parts, 0..) |part, i| {

@@ -361,7 +361,7 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
     }
 
     // Parse parameter
-    // CRITICAL: serializeFieldElement uses toCanonical(), so the JSON file contains canonical values.
+    // serializeFieldElement uses toCanonical(), so the JSON file contains canonical values
     // We must read them as canonical and convert to Montgomery internally via parseFieldElementFromJsonValue.
     const param_array = obj.get("parameter") orelse return error.MissingParameterField;
     if (param_array != .array or param_array.array.items.len != 5) return error.InvalidJsonFormat;
@@ -464,7 +464,7 @@ pub fn deserializeSecretKeyData(allocator: Allocator, json_str: []const u8) !Des
     };
 
     // Parse parameter
-    // CRITICAL: serializeFieldElement uses toCanonical(), so the JSON file contains canonical values.
+    // serializeFieldElement uses toCanonical(), so the JSON file contains canonical values
     // We must read them as canonical and convert to Montgomery internally via parseFieldElementFromJsonValue.
     const param_array = obj.get("parameter") orelse return error.MissingParameterField;
     if (param_array != .array or param_array.array.items.len != 5) return error.InvalidJsonFormat;

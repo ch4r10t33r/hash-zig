@@ -331,7 +331,6 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
             };
             defer seed_file.close();
 
-            // Read seed hex string
             var buf: [64]u8 = undefined;
             const read_len = try seed_file.readAll(&buf);
             const hex_slice = buf[0..read_len];
@@ -369,18 +368,13 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
 
         const sk_data = try hash_zig.serialization.deserializeSecretKeyData(allocator, sk_json);
 
-        // Use the original seed (not PRF key) to ensure RNG state matches original keygen
-        // The PRF key was generated from the seed, so we need to start from the seed
-        // and consume RNG state to match where we were after generating parameter and PRF key
         const seed_file = std.fs.cwd().openFile("tmp/zig_seed.hex", .{}) catch {
-            // If seed file is missing, fall back to using PRF key as seed (may not match exactly)
             scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, sk_data.prf_key);
             const kp = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key, false);
             break :blk kp;
         };
         defer seed_file.close();
 
-        // Read seed hex string
         var seed_buf: [64]u8 = undefined;
         const seed_read_len = try seed_file.readAll(&seed_buf);
         const seed_hex_slice = seed_buf[0..seed_read_len];
@@ -391,47 +385,13 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         }
         _ = try std.fmt.hexToBytes(&seed, seed_hex_slice);
 
-        // Initialize with original seed to match RNG state from keygen
         scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, seed);
 
-        // CRITICAL: We need to match the RNG state exactly as it was when keyGenWithParameter
-        // was called from keyGen(). In keyGen(), the flow is:
-        // 1. generateRandomParameter() - peeks 20 bytes (doesn't consume)
-        // 2. generateRandomPRFKey() - consumes 32 bytes
-        // 3. keyGenWithParameter() - consumes another 32 bytes (to match state after step 2)
-        //
-        // But wait - that's wrong! When keyGenWithParameter is called from keyGen(), the RNG
-        // state is already after consuming 32 bytes. So keyGenWithParameter shouldn't consume
-        // another 32 bytes when called from keyGen(). But it does, which means it's consuming
-        // 64 bytes total when called from keyGen().
-        //
-        // Actually, I think the issue is that keyGenWithParameter is designed to be called
-        // directly (not from keyGen()), so it consumes 32 bytes to match the state after
-        // parameter/PRF key generation. But when called from keyGen(), this causes double
-        // consumption.
-        //
-        // For now, let's NOT consume here, because keyGenWithParameter will consume 32 bytes
-        // internally. But we need to account for the peek (20 bytes) and PRF key (32 bytes).
-        // Actually, the peek doesn't consume, so we just need to consume 32 bytes for the PRF key.
-        // But keyGenWithParameter already does that, so we shouldn't consume here.
-        //
-        // Wait, let me re-read the code. keyGenWithParameter consumes 32 bytes to match the
-        // state AFTER parameter/PRF key generation. So when we call it directly, we need to
-        // have consumed 32 bytes already. But we're starting fresh, so we need to consume
-        // 32 bytes to get to the state after PRF key generation.
-        // CRITICAL: Simulate the exact RNG consumption from keyGen():
-        // 1. generateRandomParameter() - peeks 20 bytes (doesn't consume RNG offset)
-        // 2. generateRandomPRFKey() - consumes 32 bytes (advances RNG offset)
-        //
-        // Even though peek doesn't consume, we should call the actual function to ensure
-        // the RNG state is in the exact same condition. The peek reads from the current
-        // offset without advancing it, but we want to ensure we're reading from the same
-        // position in the RNG stream.
-        _ = try scheme.generateRandomParameter(); // Peek at 20 bytes (doesn't consume)
+        // Simulate RNG consumption from keyGen: peek parameter, consume PRF key
+        _ = try scheme.generateRandomParameter();
         var dummy_prf_key: [32]u8 = undefined;
-        scheme.rng.fill(&dummy_prf_key); // Consume 32 bytes to match generateRandomPRFKey()
+        scheme.rng.fill(&dummy_prf_key);
 
-        // We've already consumed 32 bytes to match PRF key generation, so pass true
         const kp = try scheme.keyGenWithParameter(sk_data.activation_epoch, sk_data.num_active_epochs, sk_data.parameter, sk_data.prf_key, true);
         break :blk kp;
     };
@@ -466,7 +426,6 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     }
 
     if (use_ssz) {
-        // IMPORTANT: Also update the public key SSZ to match the regenerated keypair.
         const pk_bytes = try keypair.public_key.toBytes(allocator);
         defer allocator.free(pk_bytes);
         var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.ssz", .{});
@@ -482,9 +441,6 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         try sig_file.writeAll(sig_bytes);
         std.debug.print("✅ Signature saved to tmp/zig_sig.ssz ({} bytes)\n", .{sig_bytes.len});
     } else {
-        // IMPORTANT: Also update the public key JSON to match the regenerated keypair.
-        // This ensures that verification (in both Zig and Rust) uses a public key that
-        // is consistent with the trees/roots used during signing.
         const pk_json = try hash_zig.serialization.serializePublicKey(allocator, &keypair.public_key);
         defer allocator.free(pk_json);
         var pk_file = try std.fs.cwd().createFile("tmp/zig_pk.json", .{});

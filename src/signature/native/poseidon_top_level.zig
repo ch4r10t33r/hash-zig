@@ -103,7 +103,7 @@ fn prepareLayerInfo(allocator: std.mem.Allocator, w: usize) !AllLayerInfoForBase
 
         const prev_info = all_info[v - 1];
         for (0..max_d + 1) |d| {
-            // CRITICAL FIX: Use Rust's formula from Lemma 8 in eprint 2025/889
+            // Use Rust's formula from Lemma 8 in eprint 2025/889
             // The original simple loop was incorrect - it worked for Zig→Zig because both
             // sign and verify used the same wrong formula, but Rust→Zig failed.
             // Rust's test confirms the formula is correct.
@@ -313,16 +313,16 @@ pub fn mapToVertexBig(
     log.print("ZIG_MAP_VERTEX_DEBUG: START layer={} d_curr={} x_curr={s}\n", .{ layer, d_curr, x_curr_str });
 
     for (1..DIMENSION) |i| {
-        // CRITICAL FIX: Initialize ji to a sentinel value matching Rust's usize::MAX
+        // Initialize ji to a sentinel value matching Rust's usize::MAX
         // Rust: let mut ji = usize::MAX;
         var ji: usize = std.math.maxInt(usize);
         const sub_dim = DIMENSION - i;
-        // CRITICAL FIX: Use saturating_sub to match Rust's behavior exactly
+        // Use saturating_sub to match Rust's behavior
         // Rust: range_start = d_curr.saturating_sub((w - 1) * (v - i))
         const range_start = if (d_curr >= (BASE - 1) * sub_dim) d_curr - (BASE - 1) * sub_dim else 0;
         const sub_info = layer_data.get(sub_dim);
 
-        // CRITICAL FIX: Match Rust's loop exactly: for j in range_start..=min(w - 1, d_curr)
+        // Match Rust's loop: for j in range_start..=min(w - 1, d_curr)
         // Rust uses inclusive range: range_start..=min(w - 1, d_curr)
         const limit = @min(BASE - 1, d_curr);
         var j: usize = range_start;
@@ -332,17 +332,16 @@ pub fn mapToVertexBig(
         defer self.allocator.free(x_curr_str_loop);
         log.print("ZIG_MAP_VERTEX_DEBUG: i={} d_curr={} range_start={} limit={} x_curr={s}\n", .{ i, d_curr, range_start, limit, x_curr_str_loop });
 
-        // CRITICAL: Loop must be inclusive on both ends (j <= limit), matching Rust's ..= operator
+        // Loop must be inclusive on both ends (j <= limit), matching Rust's ..= operator
         while (j <= limit) : (j += 1) {
             const sub_layer = d_curr - j;
-            // CRITICAL FIX: In Rust, accessing out-of-bounds would panic.
             // For valid inputs, sub_layer should always be within bounds.
             // If it's out of bounds, it means our input is invalid, so we should return an error.
             if (sub_layer >= sub_info.sizes.len) {
                 return error.InvalidHypercubeMapping;
             }
             const count = &sub_info.sizes[sub_layer];
-            // CRITICAL FIX: Match Rust's comparison exactly: if x_curr >= *count
+            // Match Rust's comparison: if x_curr >= *count
             const cmp = x_curr.order(count.*);
             const count_str = try std.fmt.allocPrint(self.allocator, "{}", .{count.*.toConst()});
             defer self.allocator.free(count_str);
@@ -360,7 +359,7 @@ pub fn mapToVertexBig(
             }
         }
 
-        // CRITICAL FIX: Match Rust's assertion: assert!(ji < w)
+        // Match Rust's assertion: assert!(ji < w)
         // If ji is still the sentinel value, it means we never found a valid j
         if (ji >= BASE) return error.InvalidHypercubeMapping;
 
@@ -385,7 +384,6 @@ pub fn mapIntoHypercubePart(
     final_layer: usize,
     field_elements: []const FieldElement,
 ) ![]u8 {
-    // CRITICAL DEBUG: Print immediately to verify function is called
     log.print("ZIG_HYPERCUBE_DEBUG: mapIntoHypercubePart CALLED DIMENSION={} BASE={} final_layer={} field_elements.len={}\n", .{ DIMENSION, BASE, final_layer, field_elements.len });
 
     const layer_data = try getLayerData(self, BASE);
@@ -403,7 +401,7 @@ pub fn mapIntoHypercubePart(
     // Reuse stderr from above (already declared at line 390)
     log.print("ZIG_HYPERCUBE_DEBUG: dom_size {s}\n", .{mod_str});
 
-    // CRITICAL FIX: Match Rust's algorithm exactly
+    // Match Rust's algorithm exactly
     // Rust: acc = 0; for fe in field_elements: acc = acc * ORDER + fe; acc %= dom_size
     // We must build the full big integer first, then apply modulo (not during combination)
     var acc = try BigInt.initSet(self.allocator, 0);
@@ -423,10 +421,10 @@ pub fn mapIntoHypercubePart(
             log.print("fe[{}]=0x{x:0>8} ", .{ i, fe.toCanonical() });
         }
         // Build big integer: acc = acc * ORDER + fe (matching Rust exactly)
-        // CRITICAL FIX: Use BigInt.add with temporary BigInt for field element to match Rust's BigUint addition
+        // Use BigInt.add with temporary BigInt for field element to match Rust's BigUint addition
         try BigInt.mul(&tmp, &acc, &multiplier);
         // Create BigInt from field element (matching Rust's fe.as_canonical_biguint())
-        // CRITICAL: Ensure we use the canonical value as u64 to match Rust's BigUint::from behavior
+        // Ensure we use the canonical value as u64 to match Rust's BigUint::from behavior
         const fe_canonical = fe.toCanonical();
         try fe_bigint.set(@as(u64, fe_canonical));
         try BigInt.add(&acc, &tmp, &fe_bigint);
@@ -491,7 +489,6 @@ pub fn applyTopLevelPoseidonMessageHash(
     randomness: []const FieldElement,
     message: [32]u8,
 ) ![]u8 {
-    // CRITICAL DEBUG: Print all inputs to compare signing vs verification
     log.print("ZIG_POS_INPUTS: epoch={} parameter[0] (canonical)=0x{x:0>8} (Montgomery)=0x{x:0>8} randomness[0] (Montgomery)=0x{x:0>8} message[0..4]=", .{ epoch, parameter[0].toCanonical(), parameter[0].toMontgomery(), randomness[0].toMontgomery() });
     for (0..@min(4, message.len)) |i| {
         log.print("0x{x:0>2} ", .{message[i]});

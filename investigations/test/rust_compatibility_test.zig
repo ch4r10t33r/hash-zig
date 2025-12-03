@@ -5,7 +5,7 @@ const std = @import("std");
 const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
-// CRITICAL: Comprehensive Rust compatibility test
+// Comprehensive Rust compatibility test
 test "rust compatibility: GeneralizedXMSS validation (CRITICAL)" {
     const allocator = std.testing.allocator;
 

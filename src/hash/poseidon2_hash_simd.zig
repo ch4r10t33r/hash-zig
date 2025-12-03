@@ -41,7 +41,7 @@ pub const Poseidon2SIMD = struct {
     /// Input: packed_input is [element][lane] format (vertical packing)
     /// Output: packed_output is [element][lane] format
     ///
-    /// CRITICAL OPTIMIZATION: Writes to pre-allocated output buffer instead of allocating.
+    /// Writes to pre-allocated output buffer instead of allocating.
     /// This matches Rust's approach of returning fixed-size stack arrays, eliminating
     /// 114,688 allocations in chain walking (64 chains × 7 steps × 256 batches).
     pub fn compress16SIMD(
@@ -187,7 +187,7 @@ pub const Poseidon2SIMD = struct {
     /// Input: packed_input is [element][lane] format (vertical packing)
     /// Output: packed_output is [element][lane] format
     ///
-    /// CRITICAL OPTIMIZATION: Writes to pre-allocated output buffer instead of allocating.
+    /// Writes to pre-allocated output buffer instead of allocating.
     /// This matches Rust's approach of returning fixed-size stack arrays.
     pub fn compress24SIMD(
         self: *Poseidon2SIMD,

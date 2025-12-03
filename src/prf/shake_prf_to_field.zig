@@ -6,7 +6,7 @@ const crypto = std.crypto;
 const plonky3_field = @import("../poseidon2/plonky3_field.zig");
 
 // Constants matching Rust implementation
-// CRITICAL: Rust uses 16 bytes per FE (reads as u128), not 8!
+// Rust uses 16 bytes per FE (reads as u128), not 8
 const PRF_BYTES_PER_FE: usize = 16;
 const KEY_LENGTH: usize = 32; // 32 bytes
 const MESSAGE_LENGTH: usize = 32; // From Rust hash-sig

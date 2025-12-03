@@ -142,7 +142,7 @@ pub fn sbox(x: F) F {
 }
 
 // Apply MDS matrix to 4 elements (exact Plonky3 logic from apply_mat4)
-// CRITICAL FIX: Rust uses .clone() to preserve original values, so we must store them first
+// Rust uses .clone() to preserve original values, so we must store them first
 // Matrix: [ 2 3 1 1 ]
 //         [ 1 2 3 1 ]
 //         [ 1 1 2 3 ]
@@ -520,7 +520,7 @@ pub fn poseidon2_24_plonky3(state: []F) void {
 // FIX: Rust applies MDS light BEFORE the first external round for 24-width!
 // This matches Rust's external_initial_permute_state which calls mds_light_permutation first.
 pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) void {
-    // CRITICAL FIX: Rust applies MDS light BEFORE the first external round for 24-width!
+    // Rust applies MDS light BEFORE the first external round for 24-width
     // This matches Rust's external_initial_permute_state behavior.
     // For 24-width, we should ALWAYS apply MDS light first (matching Rust).
     // The apply_mds_light parameter is kept for backward compatibility but should be true for 24-width.
@@ -529,7 +529,7 @@ pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) vo
     }
 
     // Initial external rounds (4 rounds)
-    // CRITICAL: Rust's external_terminal_permute_state applies MDS light INSIDE each round
+    // Rust's external_terminal_permute_state applies MDS light INSIDE each round
     // So each external round does: add_rc_and_sbox, then mds_light_permutation
     // NOT: add_rc_and_sbox, then full MDS matrix
     for (0..4) |i| {
@@ -541,7 +541,7 @@ pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) vo
         for (state) |*elem| {
             elem.* = sbox(elem.*);
         }
-        // CRITICAL FIX: Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
+        // Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
         mds_light_permutation_24(state);
     }
 
@@ -551,7 +551,7 @@ pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) vo
     }
 
     // Final external rounds (4 rounds)
-    // CRITICAL: Rust's external_terminal_permute_state applies MDS light INSIDE each round
+    // Rust's external_terminal_permute_state applies MDS light INSIDE each round
     // So each external round does: add_rc_and_sbox, then mds_light_permutation
     // NOT: add_rc_and_sbox, then full MDS matrix
     for (0..4) |i| {
@@ -563,7 +563,7 @@ pub fn poseidon2_24_plonky3_with_mds_light(state: []F, apply_mds_light: bool) vo
         for (state) |*elem| {
             elem.* = sbox(elem.*);
         }
-        // CRITICAL FIX: Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
+        // Apply MDS light (not full MDS matrix) - matching Rust's external_terminal_permute_state
         mds_light_permutation_24(state);
     }
 }

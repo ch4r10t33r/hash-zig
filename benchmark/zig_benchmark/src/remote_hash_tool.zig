@@ -164,7 +164,7 @@ pub fn writeSignatureBincode(path: []const u8, signature: *const hash_zig.Genera
     }
 
     // Write rho (7 u32 values in CANONICAL form, no length prefix for fixed array)
-    // CRITICAL: Rust's bincode serializes field elements in CANONICAL form (matching path and hashes)
+    // Rust's bincode serializes field elements in CANONICAL form
     // This must match Rust's FieldArray serialization which uses as_canonical_u32()
     const rho = signature.getRho();
     if (rand_len > rho.len) return BincodeError.InvalidRandLength;
@@ -217,7 +217,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     
     // Read path nodes (each has: HASH_LEN u32 values in CANONICAL form, NO length prefix for fixed arrays)
     // Rust's bincode serializes Vec<FieldArray<N>> as: Vec length + elements directly (no per-array length)
-    // CRITICAL: Rust writes FieldArray<HASH_LEN> which serializes exactly HASH_LEN elements using as_canonical_u32()
+    // Rust writes FieldArray<HASH_LEN> which serializes exactly HASH_LEN elements
     // For lifetime 2^8/2^32: HASH_LEN=8, Rust writes 8 elements
     // For lifetime 2^18: HASH_LEN=7, Rust writes 7 elements
     // We must read exactly hash_len elements to match Rust's serialization
@@ -225,7 +225,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     errdefer allocator.free(path_nodes);
     for (0..path_len) |i| {
         // Read array elements in canonical form (fixed-size array, no length prefix)
-        // CRITICAL: Read exactly hash_len elements (matching Rust's FieldArray<HASH_LEN>)
+        // Read exactly hash_len elements (matching Rust's FieldArray<HASH_LEN>)
         for (0..hash_len) |j| {
             const canonical = try reader.readInt(u32, .little);
             path_nodes[i][j] = FieldElement.fromCanonical(canonical);
@@ -241,7 +241,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     allocator.free(path_nodes);
 
     // Read rho (rand_len u32 values in CANONICAL form, no length prefix for fixed array)
-    // CRITICAL: Rust's bincode serializes field elements in CANONICAL form (matching path and hashes)
+    // Rust's bincode serializes field elements in CANONICAL form
     // This must match Rust's FieldArray serialization which uses as_canonical_u32()
     // For lifetime 2^8/2^32: rand_len=7, for lifetime 2^18: rand_len=6
     if (rand_len > 7) {
@@ -268,7 +268,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     
     // Read hashes (each has: HASH_LEN u32 values in CANONICAL form, NO length prefix for fixed arrays)
     // Rust's bincode serializes Vec<FieldArray<N>> as: Vec length + elements directly (no per-array length)
-    // CRITICAL: Rust writes FieldArray<HASH_LEN> which serializes exactly HASH_LEN elements using as_canonical_u32()
+    // Rust writes FieldArray<HASH_LEN> which serializes exactly HASH_LEN elements
     // For lifetime 2^8/2^32: HASH_LEN=8, Rust writes 8 elements
     // For lifetime 2^18: HASH_LEN=7, Rust writes 7 elements
     // We must read exactly hash_len elements to match Rust's serialization
@@ -276,7 +276,7 @@ pub fn readSignatureBincode(path: []const u8, allocator: std.mem.Allocator, rand
     errdefer allocator.free(hashes_tmp);
     for (0..hashes_len) |i| {
         // Read array elements in canonical form (fixed-size array, no length prefix)
-        // CRITICAL: Read exactly hash_len elements (matching Rust's FieldArray<HASH_LEN>)
+        // Read exactly hash_len elements (matching Rust's FieldArray<HASH_LEN>)
         for (0..hash_len) |j| {
             const canonical = try reader.readInt(u32, .little);
             hashes_tmp[i][j] = FieldElement.fromCanonical(canonical);
