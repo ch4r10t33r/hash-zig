@@ -84,11 +84,12 @@ def inspect_key_zig(sk_path: Path, pk_path: Path) -> Dict[str, any]:
     ])
     
     if returncode != 0:
-        print(f"   ❌ Failed to inspect keys: {stderr}")
+        print(f"   ❌ Failed to inspect keys: {stdout}{stderr}")
         return None
     
-    # Print the output
-    print(stdout, end='')
+    # Zig std.debug.print outputs to stderr, not stdout
+    output = stderr if stderr else stdout
+    print(output)
     
     # Parse key information from output
     sk_size = sk_path.stat().st_size
@@ -96,9 +97,9 @@ def inspect_key_zig(sk_path: Path, pk_path: Path) -> Dict[str, any]:
     
     # Extract first 8 bytes of public key from output
     pk_hex = None
-    for line in stdout.split('\n'):
-        if "Public key (first 8 bytes)" in line:
-            # Extract hex string
+    for line in output.split('\n'):
+        if "Public key (first 8 bytes):" in line:
+            # Extract hex string (format: "Public key (first 8 bytes): db0c2512f47f2609")
             parts = line.split(':')
             if len(parts) > 1:
                 pk_hex = parts[-1].strip()
@@ -145,16 +146,25 @@ def test_cross_language_with_pregenerated(validator_id: int) -> bool:
     print(f"   Zig  (first 8 bytes): {zig_info['pk_hex']}")
     
     if rust_info['pk_hex'] and zig_info['pk_hex']:
-        # Normalize hex strings for comparison (remove spaces, etc)
-        rust_hex_norm = rust_info['pk_hex'].replace(' ', '').replace(',', '').lower()
+        # Normalize hex strings for comparison
+        # Rust format: "[db, 0c, 25, 12, f4, 7f, 26, 09]"
+        # Zig format: "db0c2512f47f2609"
+        rust_hex_norm = rust_info['pk_hex'].replace('[', '').replace(']', '').replace(' ', '').replace(',', '').lower()
         zig_hex_norm = zig_info['pk_hex'].replace(' ', '').lower()
         
+        print(f"\n   Normalized comparison:")
+        print(f"   Rust: {rust_hex_norm}")
+        print(f"   Zig:  {zig_hex_norm}")
+        
         if rust_hex_norm == zig_hex_norm:
-            print(f"   ✅ Public keys match!")
+            print(f"\n   ✅ PUBLIC KEYS MATCH - Both tools deserialized the same value!")
         else:
-            print(f"   ⚠️  Public keys differ (this is expected - different deserialization representations)")
-    
-    print(f"\n   Both tools successfully deserialized the keys ✅")
+            print(f"\n   ❌ PUBLIC KEYS DIFFER - Deserialization mismatch detected!")
+            print(f"      This indicates a bug in one of the implementations.")
+            return False
+    else:
+        print(f"\n   ❌ Could not extract public keys from tool outputs")
+        return False
     
     # Test signing and verification
     message = f"Test message for validator {validator_id}"
