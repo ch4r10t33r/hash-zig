@@ -262,6 +262,8 @@ def run_rust_sign(cfg: ScenarioConfig, paths: Dict[str, Path]) -> OperationResul
     tmp_dir.mkdir(exist_ok=True)
     
     # Save active epochs to file for the tool to read
+    # Note: Rust leansig multiplies by 128 internally, Zig now does the same
+    # So we pass the same value to both
     (tmp_dir / "rust_active_epochs.txt").write_text(str(cfg.num_active_epochs))
     
     # Generate keypair first

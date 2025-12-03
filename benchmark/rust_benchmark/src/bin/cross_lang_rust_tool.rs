@@ -131,6 +131,8 @@ fn keygen_command(seed_hex: Option<&String>, lifetime: LifetimeTag, use_ssz: boo
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(256);
     
+    eprintln!("Using num_active_epochs: {}", num_active_epochs);
+    
     let seed = if let Some(hex) = seed_hex {
         let bytes = hex::decode(hex)?;
         if bytes.len() != 32 {
