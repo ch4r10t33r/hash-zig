@@ -217,32 +217,33 @@ pub const HashSubTree = struct {
 /// Helper function to deserialize HashSubTree from leansig SSZ format
 fn deserializeHashSubTree(allocator: std.mem.Allocator, serialized: []const u8) !*HashSubTree {
     if (serialized.len < 20) return error.InvalidLength;
-    
+
     var offset: usize = 0;
-    
+
     // Decode depth (u64)
-    const depth = std.mem.readInt(u64, serialized[offset..offset+8][0..8], .little);
+    const depth = std.mem.readInt(u64, serialized[offset .. offset + 8][0..8], .little);
     offset += 8;
-    
+
     // Decode lowest_layer (u64)
-    const lowest_layer = std.mem.readInt(u64, serialized[offset..offset+8][0..8], .little);
+    const lowest_layer = std.mem.readInt(u64, serialized[offset .. offset + 8][0..8], .little);
     offset += 8;
-    _ = lowest_layer; _ = depth;
-    
+    _ = lowest_layer;
+    _ = depth;
+
     // Decode layers_offset (u32)
-    const layers_offset = std.mem.readInt(u32, serialized[offset..offset+4][0..4], .little);
+    const layers_offset = std.mem.readInt(u32, serialized[offset .. offset + 4][0..4], .little);
     offset += 4;
-    
+
     // Layers array is a Vec<PaddedLayer>
     const layers_data_start = @as(usize, layers_offset);
     if (layers_data_start > serialized.len) return error.InvalidOffset;
-    
+
     const layers_data = serialized[layers_data_start..];
-    
+
     // Count number of layer offsets
     const first_layer_offset = std.mem.readInt(u32, layers_data[0..4], .little);
     const num_layers = first_layer_offset / 4;
-    
+
     // Allocate layers array
     const layers = try allocator.alloc(PaddedLayer, num_layers);
     errdefer {
@@ -251,57 +252,57 @@ fn deserializeHashSubTree(allocator: std.mem.Allocator, serialized: []const u8) 
         }
         allocator.free(layers);
     }
-    
+
     // Deserialize each layer
     for (0..num_layers) |i| {
-        const layer_rel_offset = std.mem.readInt(u32, layers_data[i*4..(i+1)*4], .little);
+        const layer_rel_offset = std.mem.readInt(u32, layers_data[i * 4 ..][0..4], .little);
         const layer_start = layers_data_start + layer_rel_offset;
-        
+
         // Determine layer end
         const layer_end = if (i + 1 < num_layers) blk: {
-            const next_offset = std.mem.readInt(u32, layers_data[(i+1)*4..(i+2)*4], .little);
+            const next_offset = std.mem.readInt(u32, layers_data[(i + 1) * 4 ..][0..4], .little);
             break :blk layers_data_start + next_offset;
         } else serialized.len;
-        
+
         const layer_bytes = serialized[layer_start..layer_end];
         layers[i] = try deserializePaddedLayer(allocator, layer_bytes);
     }
-    
+
     // Extract root from the last layer's last node
     const root_value = if (layers.len > 0 and layers[layers.len - 1].nodes.len > 0)
         layers[layers.len - 1].nodes[layers[layers.len - 1].nodes.len - 1]
     else
         [_]FieldElement{FieldElement{ .value = 0 }} ** 8;
-    
+
     return try HashSubTree.initWithLayers(allocator, root_value, layers);
 }
 
 /// Helper function to deserialize PaddedLayer from leansig SSZ format
 fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) !PaddedLayer {
     if (serialized.len < 12) return error.InvalidLength;
-    
+
     // Decode start_index (u64)
     const start_index = std.mem.readInt(u64, serialized[0..8], .little);
-    
+
     // Decode nodes_offset (u32)
     const nodes_offset = std.mem.readInt(u32, serialized[8..12], .little);
-    
+
     // Nodes array starts at nodes_offset
     const nodes_data = serialized[nodes_offset..];
-    
+
     // Each node is 8 x u32 = 32 bytes
     const num_nodes = nodes_data.len / 32;
     const nodes = try allocator.alloc([8]FieldElement, num_nodes);
     errdefer allocator.free(nodes);
-    
+
     // Deserialize nodes
     for (0..num_nodes) |i| {
         for (0..8) |j| {
-            const val = std.mem.readInt(u32, nodes_data[i*32 + j*4..i*32 + j*4 + 4][0..4], .little);
+            const val = std.mem.readInt(u32, nodes_data[i * 32 + j * 4 .. i * 32 + j * 4 + 4][0..4], .little);
             nodes[i][j] = FieldElement.fromCanonical(val);
         }
     }
-    
+
     return PaddedLayer{
         .start_index = @intCast(start_index),
         .nodes = nodes,
@@ -1311,7 +1312,7 @@ pub const GeneralizedXMSSSecretKey = struct {
     pub fn sszEncode(self: *const GeneralizedXMSSSecretKey, l: *std.ArrayList(u8)) !void {
         // Note: This is a simplified encoding that doesn't include trees (for compatibility with existing code)
         // For full leansig-compatible encoding with trees, use a separate method
-        
+
         // Encode prf_key (32 bytes, fixed-size)
         try ssz.serialize([32]u8, self.prf_key, l);
 
@@ -1331,9 +1332,9 @@ pub const GeneralizedXMSSSecretKey = struct {
 
     pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSecretKey, allocator: ?std.mem.Allocator) !void {
         const alloc = allocator orelse return error.AllocatorRequired;
-        
+
         if (serialized.len < 88) return error.InvalidLength;
-        
+
         var offset: usize = 0;
 
         // Decode prf_key (32 bytes)
