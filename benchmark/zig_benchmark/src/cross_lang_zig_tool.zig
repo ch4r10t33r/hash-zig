@@ -315,10 +315,15 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     // Deserialize the full secret key (including trees) from SSZ
                     try hash_zig.GeneralizedXMSSSecretKey.sszDecode(sk_ssz, secret_key, allocator);
 
-                    // Load public key from SSZ
-                    const pk_ssz = try std.fs.cwd().readFileAlloc(allocator, "tmp/zig_pk.ssz", std.math.maxInt(usize));
-                    defer allocator.free(pk_ssz);
-                    const public_key = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_ssz, null);
+                    // Derive public key from secret key's top tree root (not from file!)
+                    // The public key is: root = top_tree.root(), parameter = secret_key.parameter
+                    const top_tree_root = secret_key.top_tree.root();
+                    const hash_len_fe: usize = switch (actual_lifetime) {
+                        .lifetime_2_8 => 8,
+                        .lifetime_2_18 => 7,
+                        .lifetime_2_32 => 8,
+                    };
+                    const public_key = hash_zig.GeneralizedXMSSPublicKey.init(top_tree_root, secret_key.parameter, hash_len_fe);
 
                     std.debug.print("✅ Using pre-generated secret key (no regeneration)\n", .{});
                     std.debug.print("   Lifetime: 2^{}\n", .{tree_depth});
@@ -339,9 +344,10 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     // Use the deserialized parameters from the pre-generated key
                     std.debug.print("   Using deserialized parameters from pre-generated key\n", .{});
 
-                    // Initialize scheme with the PRF key and actual lifetime from SSZ
-                    // The scheme needs the same PRF key to generate correct hash values
-                    scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, actual_lifetime, secret_key.prf_key);
+                    // Initialize scheme with just the lifetime - we don't need to pass PRF key as seed!
+                    // The secret key already contains the PRF key, parameter, and all trees.
+                    // We just need a minimal scheme with the right lifetime_params and poseidon2 for hashing.
+                    scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, actual_lifetime);
 
                     // Return the loaded keypair
                     break :blk hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult{
