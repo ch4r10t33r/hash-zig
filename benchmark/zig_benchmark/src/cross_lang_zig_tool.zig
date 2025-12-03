@@ -274,60 +274,69 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
 
     var scheme: *hash_zig.GeneralizedXMSSSignatureScheme = undefined;
     const keypair: hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult = blk: {
-        // Try to load SSZ secret key first if use_ssz is true
+        // Try to load SSZ secret key first if use_ssz is true and file exists
         if (use_ssz) {
-            const sk_ssz = std.fs.cwd().readFileAlloc(allocator, "tmp/zig_sk.ssz", std.math.maxInt(usize)) catch |err| {
-                if (err != error.FileNotFound) {
-                    std.debug.print("⚠️  Error reading SSZ secret key: {}\n", .{err});
+            if (std.fs.cwd().readFileAlloc(allocator, "tmp/zig_sk.ssz", std.math.maxInt(usize))) |sk_ssz| {
+                defer allocator.free(sk_ssz);
+                
+                // Check if this is a full secret key (with trees) or minimal (just metadata)
+                // Minimal SSZ: 68 bytes (prf_key:32 + parameter:20 + activation_epoch:8 + num_active_epochs:8)
+                // Full SSZ: 8+ MB (includes all tree data)
+                const is_full_secret_key = sk_ssz.len > 1000; // Threshold: > 1KB means full key
+                
+                if (!is_full_secret_key) {
+                    std.debug.print("⚠️  SSZ secret key is minimal ({} bytes), falling back to regeneration\n", .{sk_ssz.len});
+                    // Fall through to JSON/regeneration path
+                } else {
+                    std.debug.print("✅ Loaded pre-generated full SSZ secret key ({} bytes)\n", .{sk_ssz.len});
+
+                    // Allocate secret key on heap
+                    const secret_key = try allocator.create(hash_zig.GeneralizedXMSSSecretKey);
+                    errdefer allocator.destroy(secret_key);
+                    
+                    // Deserialize the full secret key (including trees) from SSZ
+                    try hash_zig.GeneralizedXMSSSecretKey.sszDecode(sk_ssz, secret_key, allocator);
+                    
+                    // Load public key from SSZ
+                    const pk_ssz = try std.fs.cwd().readFileAlloc(allocator, "tmp/zig_pk.ssz", std.math.maxInt(usize));
+                    defer allocator.free(pk_ssz);
+                    const public_key = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_ssz, null);
+                    
+                    std.debug.print("✅ Using pre-generated secret key (no regeneration)\n", .{});
+                    std.debug.print("   Activation epoch: {}\n", .{secret_key.activation_epoch});
+                    std.debug.print("   Num active epochs: {}\n", .{secret_key.num_active_epochs});
+                    std.debug.print("   Left bottom tree index: {}\n", .{secret_key.left_bottom_tree_index});
+                    std.debug.print("   Secret key parameter: ", .{});
+                    for (secret_key.parameter[0..5]) |fe| {
+                        std.debug.print("0x{x:0>8} ", .{fe.toCanonical()});
+                    }
+                    std.debug.print("\n", .{});
+                    std.debug.print("   Public key parameter: ", .{});
+                    for (public_key.parameter[0..5]) |fe| {
+                        std.debug.print("0x{x:0>8} ", .{fe.toCanonical()});
+                    }
+                    std.debug.print("\n", .{});
+                    
+                    // Use the deserialized parameters from the pre-generated key
+                    std.debug.print("   Using deserialized parameters from pre-generated key\n", .{});
+                    
+                    // Initialize scheme with the PRF key and parameter from the secret key
+                    // The scheme needs the same PRF key to generate correct hash values
+                    scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, secret_key.prf_key);
+                    
+                    // Return the loaded keypair
+                    break :blk hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult{
+                        .secret_key = secret_key,
+                        .public_key = public_key,
+                    };
                 }
-                // Fall through to JSON/regeneration path
-                const dummy: u8 = 0;
-                _ = dummy;
-                @panic("SSZ secret key not found, falling back...");
-            };
-            defer allocator.free(sk_ssz);
-
-            std.debug.print("✅ Loaded pre-generated SSZ secret key ({} bytes)\n", .{sk_ssz.len});
-
-            // Allocate secret key on heap
-            const secret_key = try allocator.create(hash_zig.GeneralizedXMSSSecretKey);
-            errdefer allocator.destroy(secret_key);
-
-            // Deserialize the full secret key (including trees) from SSZ
-            try hash_zig.GeneralizedXMSSSecretKey.sszDecode(sk_ssz, secret_key, allocator);
-
-            // Load public key from SSZ
-            const pk_ssz = try std.fs.cwd().readFileAlloc(allocator, "tmp/zig_pk.ssz", std.math.maxInt(usize));
-            defer allocator.free(pk_ssz);
-            const public_key = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_ssz, null);
-
-            std.debug.print("✅ Using pre-generated secret key (no regeneration)\n", .{});
-            std.debug.print("   Activation epoch: {}\n", .{secret_key.activation_epoch});
-            std.debug.print("   Num active epochs: {}\n", .{secret_key.num_active_epochs});
-            std.debug.print("   Left bottom tree index: {}\n", .{secret_key.left_bottom_tree_index});
-            std.debug.print("   Secret key parameter: ", .{});
-            for (secret_key.parameter[0..5]) |fe| {
-                std.debug.print("0x{x:0>8} ", .{fe.toCanonical()});
+            } else |err| {
+                // If SSZ file not found or error reading, fall through to JSON/regeneration path
+                if (err != error.FileNotFound) {
+                    std.debug.print("⚠️  Error reading SSZ secret key: {}, falling back to JSON/regeneration\n", .{err});
+                }
+                // Fall through to JSON path below
             }
-            std.debug.print("\n", .{});
-            std.debug.print("   Public key parameter: ", .{});
-            for (public_key.parameter[0..5]) |fe| {
-                std.debug.print("0x{x:0>8} ", .{fe.toCanonical()});
-            }
-            std.debug.print("\n", .{});
-            
-            // Use the deserialized parameters from the pre-generated key
-            std.debug.print("   Using deserialized parameters from pre-generated key\n", .{});
-            
-            // Initialize scheme with the PRF key and parameter from the secret key
-            // The scheme needs the same PRF key to generate correct hash values
-            scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, secret_key.prf_key);
-
-            // Return the loaded keypair
-            break :blk hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult{
-                .secret_key = secret_key,
-                .public_key = public_key,
-            };
         }
 
         // JSON/regeneration path
