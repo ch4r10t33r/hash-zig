@@ -246,9 +246,10 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                 defer allocator.free(sk_ssz);
 
                 // Check if this is a full secret key (with trees) or minimal (just metadata)
-                // Minimal SSZ: 68 bytes (prf_key:32 + parameter:20 + activation_epoch:8 + num_active_epochs:8)
-                // Full SSZ: 8+ MB (includes all tree data)
-                const is_full_secret_key = sk_ssz.len > 1000; // Threshold: > 1KB means full key
+                // Minimal SSZ: exactly 68 bytes (prf_key:32 + parameter:20 + activation_epoch:8 + num_active_epochs:8)
+                // Full SSZ: 88+ bytes header + tree data (at least several KB even for smallest lifetime)
+                // A full key for 2^8 with 2 active epochs is ~3KB, so 500 bytes is a safe threshold
+                const is_full_secret_key = sk_ssz.len >= 500; // Threshold: >= 500 bytes means full key
 
                 if (!is_full_secret_key) {
                     std.debug.print("⚠️  SSZ secret key is minimal ({} bytes), falling back to regeneration\n", .{sk_ssz.len});
@@ -261,6 +262,11 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     // Tree structure: [depth:8][lowest_layer:8]...
                     if (sk_ssz.len < 96) return error.InvalidLength; // Need at least header + tree depth
                     const top_tree_offset = std.mem.readInt(u32, sk_ssz[68..72], .little);
+                    
+                    // Validate top_tree_offset to prevent overflow and out-of-bounds access
+                    if (top_tree_offset < 88 or top_tree_offset >= sk_ssz.len) return error.InvalidOffset;
+                    if (sk_ssz.len - top_tree_offset < 8) return error.InvalidLength;
+                    
                     const tree_depth = std.mem.readInt(u64, sk_ssz[top_tree_offset .. top_tree_offset + 8][0..8], .little);
 
                     const actual_lifetime: KeyLifetime = switch (tree_depth) {
@@ -558,12 +564,15 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     const top_tree_offset = std.mem.readInt(u32, sk_bytes[offset .. offset + 4][0..4], .little);
     offset += 4;
 
+    // Validate top_tree_offset to prevent overflow and out-of-bounds access
+    if (top_tree_offset < 88 or top_tree_offset >= sk_bytes.len) return error.InvalidOffset;
+    if (sk_bytes.len - top_tree_offset < 8) return error.InvalidLength;
+
     // Read left_bottom_tree_index (u64)
     const left_bottom_tree_index = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
 
     // Extract lifetime from tree depth field
     // Tree structure: [depth:8][lowest_layer:8][layers_offset:4]...
-    if (sk_bytes.len < top_tree_offset + 8) return error.InvalidLength;
     const tree_depth = std.mem.readInt(u64, sk_bytes[top_tree_offset .. top_tree_offset + 8][0..8], .little);
 
     // Determine actual lifetime from tree depth (log_lifetime)

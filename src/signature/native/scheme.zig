@@ -1520,12 +1520,21 @@ pub const GeneralizedXMSSSecretKey = struct {
 
         // Deserialize top_tree
         const top_tree = try deserializeHashSubTree(alloc, serialized[top_tree_offset..left_bottom_tree_offset]);
+        errdefer top_tree.deinit();
 
         // Deserialize left_bottom_tree
-        const left_bottom_tree = try deserializeHashSubTree(alloc, serialized[left_bottom_tree_offset..right_bottom_tree_offset]);
+        const left_bottom_tree = deserializeHashSubTree(alloc, serialized[left_bottom_tree_offset..right_bottom_tree_offset]) catch |err| {
+            top_tree.deinit();
+            return err;
+        };
+        errdefer left_bottom_tree.deinit();
 
         // Deserialize right_bottom_tree
-        const right_bottom_tree = try deserializeHashSubTree(alloc, serialized[right_bottom_tree_offset..]);
+        const right_bottom_tree = deserializeHashSubTree(alloc, serialized[right_bottom_tree_offset..]) catch |err| {
+            left_bottom_tree.deinit();
+            top_tree.deinit();
+            return err;
+        };
 
         // Initialize the secret key
         out.* = GeneralizedXMSSSecretKey{

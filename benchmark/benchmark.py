@@ -512,7 +512,9 @@ def run_scenario(cfg: ScenarioConfig, timeout_2_32: int) -> tuple[Dict[str, Oper
     results["zig_to_rust"] = run_rust_verify(cfg, paths["zig_pk"], paths["zig_sig"], "Zig sign → Rust verify")
 
     # Compare file sizes to detect serialization format mismatches
-    compare_file_sizes(cfg, paths)
+    sizes_match = compare_file_sizes(cfg, paths)
+    if not sizes_match:
+        print("\n⚠️  WARNING: File size mismatches detected. This may indicate serialization format issues.")
 
     return results, paths
 
