@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  {} keygen [seed_hex] [lifetime] [--ssz]  - Generate keypair (lifetime: 2^8, 2^18, or 2^32, default: 2^8)", args[0]);
         eprintln!("  {} sign <message> <epoch> [--ssz]       - Sign message using tmp/rust_sk.json, save to tmp/rust_sig.bin or tmp/rust_sig.ssz", args[0]);
         eprintln!("  {} verify <zig_sig.bin> <zig_pk.json> <message> <epoch> [--ssz] - Verify Zig signature", args[0]);
+        eprintln!("  {} inspect <sk_path> <pk_path> <lifetime> - Inspect SSZ keys and report public key", args[0]);
         eprintln!("\n  --ssz: Use SSZ serialization instead of JSON/bincode");
         std::process::exit(1);
     }
@@ -57,6 +58,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let use_ssz = args.iter().any(|arg| arg == "--ssz");
     
     match args[1].as_str() {
+        "inspect" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} inspect <sk_path> <pk_path> <lifetime>", args[0]);
+                eprintln!("Example: {} inspect validator_0_sk.ssz validator_0_pk.ssz 2^32", args[0]);
+                std::process::exit(1);
+            }
+            let sk_path = &args[2];
+            let pk_path = &args[3];
+            let lifetime_str = &args[4];
+            let lifetime = LifetimeTag::parse(Some(&lifetime_str.to_string()))?;
+            
+            if let Err(e) = inspect_command(sk_path, pk_path, lifetime) {
+                eprintln!("❌ Error: {}", e);
+                std::process::exit(1);
+            }
+        }
         "keygen" => {
             let seed_hex = args.get(2);
             let lifetime_str = args.get(3);
@@ -331,6 +348,72 @@ fn sign_command(message: &str, epoch: u32, lifetime: LifetimeTag, use_ssz: bool)
     
     eprintln!("Message signed successfully!");
     Ok(())
+}
+
+fn inspect_command(sk_path: &str, pk_path: &str, lifetime: LifetimeTag) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("🔍 Rust: Inspecting keys...");
+    eprintln!("  Secret key: {}", sk_path);
+    eprintln!("  Public key: {}", pk_path);
+    
+    match lifetime {
+        LifetimeTag::Pow8 => {
+            type SkType = <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::SecretKey;
+            type PkType = <SIGTopLevelTargetSumLifetime8Dim64Base8 as SignatureScheme>::PublicKey;
+            
+            let sk_bytes = fs::read(sk_path)?;
+            let _secret_key: SkType = Decode::from_ssz_bytes(&sk_bytes)
+                .map_err(|e: DecodeError| format!("Failed to decode secret key: {:?}", e))?;
+            
+            let pk_bytes = fs::read(pk_path)?;
+            let public_key: PkType = Decode::from_ssz_bytes(&pk_bytes)
+                .map_err(|e: DecodeError| format!("Failed to decode public key: {:?}", e))?;
+            
+            eprintln!("✅ Successfully deserialized keys for lifetime 2^8");
+            eprintln!("  Public key size: {} bytes", pk_bytes.len());
+            eprintln!("  Secret key size: {} bytes", sk_bytes.len());
+            eprintln!("  Public key (first 8 bytes): {:02x?}", &pk_bytes[..8.min(pk_bytes.len())]);
+            
+            Ok(())
+        }
+        LifetimeTag::Pow18 => {
+            type SkType = <SIGTopLevelTargetSumLifetime18Dim64Base8 as SignatureScheme>::SecretKey;
+            type PkType = <SIGTopLevelTargetSumLifetime18Dim64Base8 as SignatureScheme>::PublicKey;
+            
+            let sk_bytes = fs::read(sk_path)?;
+            let _secret_key: SkType = Decode::from_ssz_bytes(&sk_bytes)
+                .map_err(|e: DecodeError| format!("Failed to decode secret key: {:?}", e))?;
+            
+            let pk_bytes = fs::read(pk_path)?;
+            let public_key: PkType = Decode::from_ssz_bytes(&pk_bytes)
+                .map_err(|e: DecodeError| format!("Failed to decode public key: {:?}", e))?;
+            
+            eprintln!("✅ Successfully deserialized keys for lifetime 2^18");
+            eprintln!("  Public key size: {} bytes", pk_bytes.len());
+            eprintln!("  Secret key size: {} bytes", sk_bytes.len());
+            eprintln!("  Public key (first 8 bytes): {:02x?}", &pk_bytes[..8.min(pk_bytes.len())]);
+            
+            Ok(())
+        }
+        LifetimeTag::Pow32 => {
+            type SkType = <SIGTopLevelTargetSumLifetime32Dim64Base8 as SignatureScheme>::SecretKey;
+            type PkType = <SIGTopLevelTargetSumLifetime32Dim64Base8 as SignatureScheme>::PublicKey;
+            
+            let sk_bytes = fs::read(sk_path)?;
+            let _secret_key: SkType = Decode::from_ssz_bytes(&sk_bytes)
+                .map_err(|e: DecodeError| format!("Failed to decode secret key: {:?}", e))?;
+            
+            let pk_bytes = fs::read(pk_path)?;
+            let public_key: PkType = Decode::from_ssz_bytes(&pk_bytes)
+                .map_err(|e: DecodeError| format!("Failed to decode public key: {:?}", e))?;
+            
+            eprintln!("✅ Successfully deserialized keys for lifetime 2^32");
+            eprintln!("  Public key size: {} bytes", pk_bytes.len());
+            eprintln!("  Secret key size: {} bytes", sk_bytes.len());
+            eprintln!("  Public key (first 8 bytes): {:02x?}", &pk_bytes[..8.min(pk_bytes.len())]);
+            
+            Ok(())
+        }
+    }
 }
 
 fn verify_command(sig_path: &str, pk_path: &str, message: &str, epoch: u32, lifetime: LifetimeTag, use_ssz: bool) -> Result<(), Box<dyn std::error::Error>> {

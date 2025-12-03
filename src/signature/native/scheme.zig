@@ -268,11 +268,20 @@ fn deserializeHashSubTree(allocator: std.mem.Allocator, serialized: []const u8) 
         layers[i] = try deserializePaddedLayer(allocator, layer_bytes);
     }
 
-    // Extract root from the last layer's last node
-    const root_value = if (layers.len > 0 and layers[layers.len - 1].nodes.len > 0)
-        layers[layers.len - 1].nodes[layers[layers.len - 1].nodes.len - 1]
-    else
-        [_]FieldElement{FieldElement{ .value = 0 }} ** 8;
+    // Extract root from the last layer's FIRST node (not last!)
+    // In leansig's tree structure, the root is stored as the first node of the last layer
+    const root_value = if (layers.len > 0 and layers[layers.len - 1].nodes.len > 0) blk: {
+        const root_node = layers[layers.len - 1].nodes[0]; // FIRST node, not last!
+        std.debug.print("TREE_ROOT_EXTRACT: num_layers={d}, last_layer_nodes={d}\n", .{
+            layers.len,
+            layers[layers.len - 1].nodes.len,
+        });
+        std.debug.print("TREE_ROOT_EXTRACT: Extracted root[0]=0x{x:0>8} (Montgomery), canonical=0x{x:0>8}\n", .{
+            root_node[0].value,
+            root_node[0].toCanonical(),
+        });
+        break :blk root_node;
+    } else [_]FieldElement{FieldElement{ .value = 0 }} ** 8;
 
     return try HashSubTree.initWithLayers(allocator, root_value, layers);
 }
@@ -287,6 +296,8 @@ fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) 
     // Decode nodes_offset (u32)
     const nodes_offset = std.mem.readInt(u32, serialized[8..12], .little);
 
+    std.debug.print("LAYER_DECODE: start_index={d}, nodes_offset={d}\n", .{ start_index, nodes_offset });
+
     // Nodes array starts at nodes_offset
     const nodes_data = serialized[nodes_offset..];
 
@@ -296,22 +307,33 @@ fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) 
     errdefer allocator.free(nodes);
 
     // Deserialize nodes
-    // CRITICAL: Leansig stores field elements in SSZ as Montgomery form, NOT canonical!
-    // This is different from how we encode (we use canonical), but we must match leansig's format
+    // Leansig stores field elements in SSZ as CANONICAL form (confirmed by inspecting bytes)
     for (0..num_nodes) |i| {
         for (0..8) |j| {
             const val = std.mem.readInt(u32, nodes_data[i * 32 + j * 4 .. i * 32 + j * 4 + 4][0..4], .little);
-            // Leansig stores as Montgomery values directly, so use fromMontgomery
-            nodes[i][j] = FieldElement.fromMontgomery(val);
+            nodes[i][j] = FieldElement.fromCanonical(val);
 
-            if (i == num_nodes - 1 and j == 0) {
-                // Debug last node first element (the root)
-                std.debug.print("TREE_SSZ_DECODE: Last layer last node first element: raw_u32=0x{x:0>8}, as_montgomery=0x{x:0>8}, as_canonical=0x{x:0>8}\n", .{
+            // Log first 3 nodes completely to check correctness
+            if (i < 3 and j == 0) {
+                std.debug.print("TREE_NODE_DECODE: Layer node[{d}][0]: raw=0x{x:0>8}, montgomery=0x{x:0>8}, canonical=0x{x:0>8}\n", .{
+                    i,
                     val,
                     nodes[i][j].value,
                     nodes[i][j].toCanonical(),
                 });
             }
+        }
+    }
+
+    // Verify first node canonical matches raw value
+    if (num_nodes > 0) {
+        const first_node_raw = std.mem.readInt(u32, nodes_data[0..4], .little);
+        const first_node_canonical = nodes[0][0].toCanonical();
+        if (first_node_raw != first_node_canonical) {
+            std.debug.print("TREE_DECODE_ERROR: First node mismatch! raw=0x{x:0>8}, canonical=0x{x:0>8}\n", .{
+                first_node_raw,
+                first_node_canonical,
+            });
         }
     }
 

@@ -56,6 +56,7 @@ pub fn main() !void {
         std.debug.print("  {s} keygen [seed_hex] [lifetime] [--ssz]  - Generate keypair (lifetime: 2^8, 2^18, or 2^32, default: 2^8)\n", .{args[0]});
         std.debug.print("  {s} sign <message> <epoch> [--ssz]       - Sign message using tmp/zig_sk.json, save to tmp/zig_sig.bin or tmp/zig_sig.ssz\n", .{args[0]});
         std.debug.print("  {s} verify <rust_sig.bin> <rust_pk.json> <message> <epoch> [--ssz] - Verify Rust signature\n", .{args[0]});
+        std.debug.print("  {s} inspect <sk_path> <pk_path> <lifetime> - Inspect SSZ keys and report public key\n", .{args[0]});
         std.debug.print("\n  --ssz: Use SSZ serialization instead of JSON/bincode\n", .{});
         std.process.exit(1);
     }
@@ -69,7 +70,21 @@ pub fn main() !void {
         }
     }
 
-    if (std.mem.eql(u8, args[1], "keygen")) {
+    if (std.mem.eql(u8, args[1], "inspect")) {
+        if (args.len < 5) {
+            std.debug.print("Usage: {s} inspect <sk_path> <pk_path> <lifetime>\n", .{args[0]});
+            std.debug.print("Example: {s} inspect validator_0_sk.ssz validator_0_pk.ssz 2^32\n", .{args[0]});
+            std.process.exit(1);
+        }
+        const sk_path = args[2];
+        const pk_path = args[3];
+        const lifetime_str = args[4];
+        const lifetime = parseLifetime(lifetime_str) catch {
+            std.debug.print("Error: Invalid lifetime '{s}'. Must be one of: 2^8, 2^18, 2^32\n", .{lifetime_str});
+            std.process.exit(1);
+        };
+        try inspectCommand(allocator, sk_path, pk_path, lifetime);
+    } else if (std.mem.eql(u8, args[1], "keygen")) {
         const seed_hex = if (args.len > 2) args[2] else null;
         const lifetime_str = if (args.len > 3) args[3] else "2^8";
         const lifetime = parseLifetime(lifetime_str) catch {
@@ -554,6 +569,38 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
     }
 
     std.debug.print("Message signed successfully!\n", .{});
+}
+
+fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8, lifetime: KeyLifetime) !void {
+    std.debug.print("🔍 Zig: Inspecting keys...\n", .{});
+    std.debug.print("  Secret key: {s}\n", .{sk_path});
+    std.debug.print("  Public key: {s}\n", .{pk_path});
+    
+    // Read secret key
+    const sk_bytes = try std.fs.cwd().readFileAlloc(allocator, sk_path, std.math.maxInt(usize));
+    defer allocator.free(sk_bytes);
+    
+    // Read public key
+    const pk_bytes = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
+    defer allocator.free(pk_bytes);
+    
+    // Deserialize public key to verify it's valid
+    _ = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_bytes, null);
+    
+    const lifetime_str = switch (lifetime) {
+        .lifetime_2_8 => "2^8",
+        .lifetime_2_18 => "2^18",
+        .lifetime_2_32 => "2^32",
+    };
+    
+    std.debug.print("✅ Successfully deserialized keys for lifetime {s}\n", .{lifetime_str});
+    std.debug.print("  Public key size: {} bytes\n", .{pk_bytes.len});
+    std.debug.print("  Secret key size: {} bytes\n", .{sk_bytes.len});
+    std.debug.print("  Public key (first 8 bytes): ", .{});
+    for (pk_bytes[0..@min(8, pk_bytes.len)]) |byte| {
+        std.debug.print("{x:0>2}", .{byte});
+    }
+    std.debug.print("\n", .{});
 }
 
 fn verifyCommand(allocator: Allocator, sig_path: []const u8, pk_path: []const u8, message: []const u8, epoch: u32, lifetime: KeyLifetime, use_ssz: bool) !void {
