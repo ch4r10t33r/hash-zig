@@ -26,7 +26,7 @@ PREGENERATED_KEYS_DIR = SCRIPT_DIR / "pre-generated-keys"
 
 # Lifetime for pre-generated keys
 LIFETIME = "2^32"
-ACTIVE_EPOCHS = 1024
+ACTIVE_EPOCHS = None  # Will be read from deserialized secret key
 
 def run_command(cmd: List[str], cwd: Path = REPO_ROOT) -> Tuple[int, str, str]:
     """Run a command and return (returncode, stdout, stderr)"""
@@ -95,20 +95,37 @@ def inspect_key_zig(sk_path: Path, pk_path: Path) -> Dict[str, any]:
     sk_size = sk_path.stat().st_size
     pk_size = pk_path.stat().st_size
     
-    # Extract first 8 bytes of public key from output
+    # Extract information from output
     pk_hex = None
+    activation_epoch = None
+    num_active_epochs = None
+    left_bottom_tree_index = None
+    
     for line in output.split('\n'):
         if "Public key (first 8 bytes):" in line:
-            # Extract hex string (format: "Public key (first 8 bytes): db0c2512f47f2609")
             parts = line.split(':')
             if len(parts) > 1:
                 pk_hex = parts[-1].strip()
+        elif "Activation epoch:" in line:
+            parts = line.split(':')
+            if len(parts) > 1:
+                activation_epoch = int(parts[-1].strip())
+        elif "Num active epochs:" in line:
+            parts = line.split(':')
+            if len(parts) > 1:
+                num_active_epochs = int(parts[-1].strip())
+        elif "Left bottom tree index:" in line:
+            parts = line.split(':')
+            if len(parts) > 1:
+                left_bottom_tree_index = int(parts[-1].strip())
     
     return {
         "sk_size": sk_size,
         "pk_size": pk_size,
         "pk_hex": pk_hex,
-        "estimated_keys": ACTIVE_EPOCHS,
+        "activation_epoch": activation_epoch,
+        "num_active_epochs": num_active_epochs,
+        "left_bottom_tree_index": left_bottom_tree_index,
     }
 
 def test_cross_language_with_pregenerated(validator_id: int) -> bool:
@@ -133,12 +150,16 @@ def test_cross_language_with_pregenerated(validator_id: int) -> bool:
     if zig_info is None:
         return False
     
+    # Extract actual active epochs from deserialized key
+    actual_active_epochs = zig_info.get('num_active_epochs') or rust_info.get('num_active_epochs')
+    
     print(f"\n📊 Key Comparison:")
     print(f"   Lifetime: {LIFETIME}")
-    print(f"   Active Epochs: {ACTIVE_EPOCHS}")
+    print(f"   Activation Epoch: {zig_info.get('activation_epoch', 'N/A')}")
+    print(f"   Num Active Epochs: {actual_active_epochs}")
+    print(f"   Left Bottom Tree Index: {zig_info.get('left_bottom_tree_index', 'N/A')}")
     print(f"   Secret Key Size: {rust_info['sk_size']:,} bytes")
     print(f"   Public Key Size: {rust_info['pk_size']} bytes")
-    print(f"   Estimated Secret Keys: {rust_info['estimated_keys']}")
     
     # Compare public keys
     print(f"\n🔍 Public Key Comparison:")
@@ -236,9 +257,10 @@ def test_cross_language_with_pregenerated(validator_id: int) -> bool:
     shutil.copy2(sk_path, tmp_dir / "zig_sk.ssz")
     shutil.copy2(pk_path, tmp_dir / "zig_pk.ssz")
     
-    # Write lifetime and active epochs to files
+    # Write lifetime and active epochs to files (use actual value from deserialized key)
     (tmp_dir / "zig_lifetime.txt").write_text(LIFETIME)
-    (tmp_dir / "zig_active_epochs.txt").write_text(str(ACTIVE_EPOCHS))
+    if actual_active_epochs:
+        (tmp_dir / "zig_active_epochs.txt").write_text(str(actual_active_epochs))
     
     start = time.time()
     returncode, stdout, stderr = run_command([
@@ -349,7 +371,8 @@ def main():
     print(f"\n   Per-Validator Key Sizes:")
     print(f"   - Secret Key: 8,390,660 bytes (~8.0 MB)")
     print(f"   - Public Key: 52 bytes")
-    print(f"   - Estimated Secret Keys per Validator: {ACTIVE_EPOCHS}")
+    if actual_active_epochs:
+        print(f"   - Num Active Epochs: {actual_active_epochs}")
     
     print(f"\n🔐 Cross-Language Compatibility:")
     print(f"   ✅ Rust sign → Rust verify")
