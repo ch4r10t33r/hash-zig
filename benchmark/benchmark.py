@@ -126,8 +126,17 @@ def parse_args() -> argparse.Namespace:
 def build_scenarios(lifetimes: list[str], seed_hex: str) -> list[ScenarioConfig]:
     scenarios: list[ScenarioConfig] = []
     for lifetime in lifetimes:
-        # Use 1024 active epochs for 2^32 lifetime, 256 for others
-        num_active_epochs = 1024 if lifetime == "2^32" else 256
+        # Use appropriate active epochs for each lifetime
+        # Note: Zig/Rust multiply by 128 internally, so actual = input * 128
+        # 2^8: max 256 signatures, so max input = 256/128 = 2
+        # 2^18: max 262,144 signatures, so we can use 256 (256*128=32,768)
+        # 2^32: max 4B+ signatures, so we can use 1024 (1024*128=131,072)
+        if lifetime == "2^32":
+            num_active_epochs = 1024
+        elif lifetime == "2^18":
+            num_active_epochs = 256
+        else:  # 2^8
+            num_active_epochs = 2
         scenarios.append(
             ScenarioConfig(
                 lifetime=lifetime,

@@ -6,7 +6,8 @@ const crypto = std.crypto;
 const plonky3_field = @import("../poseidon2/plonky3_field.zig");
 
 // Constants matching Rust implementation
-const PRF_BYTES_PER_FE: usize = 8;
+// CRITICAL: Rust uses 16 bytes per FE (reads as u128), not 8!
+const PRF_BYTES_PER_FE: usize = 16;
 const KEY_LENGTH: usize = 32; // 32 bytes
 const MESSAGE_LENGTH: usize = 32; // From Rust hash-sig
 
@@ -71,9 +72,9 @@ pub fn ShakePRFtoF(comptime DOMAIN_LENGTH_FE: usize, comptime RAND_LENGTH_FE: us
                 const chunk_start = i * PRF_BYTES_PER_FE;
                 const chunk_end = chunk_start + PRF_BYTES_PER_FE;
 
-                // Convert big-endian bytes to u64
+                // Convert big-endian bytes to u128 (matching Rust's from_u128)
                 const bytes_array: [PRF_BYTES_PER_FE]u8 = prf_output[chunk_start..chunk_end][0..PRF_BYTES_PER_FE].*;
-                const integer_value = std.mem.readInt(u64, &bytes_array, .big);
+                const integer_value = std.mem.readInt(u128, &bytes_array, .big);
 
                 // Reduce modulo KoalaBear field order and map into Montgomery form
                 const reduced: u32 = @intCast(integer_value % KOALA_BEAR_MODULUS);
@@ -119,9 +120,9 @@ pub fn ShakePRFtoF(comptime DOMAIN_LENGTH_FE: usize, comptime RAND_LENGTH_FE: us
                 const chunk_start = i * PRF_BYTES_PER_FE;
                 const chunk_end = chunk_start + PRF_BYTES_PER_FE;
 
-                // Convert big-endian bytes to u64
+                // Convert big-endian bytes to u128 (matching Rust's from_u128)
                 const bytes_array: [PRF_BYTES_PER_FE]u8 = prf_output[chunk_start..chunk_end][0..PRF_BYTES_PER_FE].*;
-                const integer_value = std.mem.readInt(u64, &bytes_array, .big);
+                const integer_value = std.mem.readInt(u128, &bytes_array, .big);
 
                 // Reduce modulo KoalaBear field order and map into Montgomery form
                 const reduced: u32 = @intCast(integer_value % KOALA_BEAR_MODULUS);
