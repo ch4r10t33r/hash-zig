@@ -290,6 +290,24 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                 } else {
                     std.debug.print("✅ Loaded pre-generated full SSZ secret key ({} bytes)\n", .{sk_ssz.len});
 
+                    // Extract lifetime from tree depth field in SSZ
+                    // SSZ format: [header:88][top_tree_data...]
+                    // Tree structure: [depth:8][lowest_layer:8]...
+                    if (sk_ssz.len < 96) return error.InvalidLength; // Need at least header + tree depth
+                    const top_tree_offset = std.mem.readInt(u32, sk_ssz[68..72], .little);
+                    const tree_depth = std.mem.readInt(u64, sk_ssz[top_tree_offset .. top_tree_offset + 8][0..8], .little);
+                    
+                    const actual_lifetime: KeyLifetime = switch (tree_depth) {
+                        8 => .lifetime_2_8,
+                        18 => .lifetime_2_18,
+                        32 => .lifetime_2_32,
+                        else => return error.InvalidLifetime,
+                    };
+
+                    if (actual_lifetime != lifetime) {
+                        std.debug.print("⚠️  Using lifetime from SSZ file (log={d}) instead of provided lifetime\n", .{tree_depth});
+                    }
+
                     // Allocate secret key on heap
                     const secret_key = try allocator.create(hash_zig.GeneralizedXMSSSecretKey);
                     errdefer allocator.destroy(secret_key);
@@ -303,6 +321,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     const public_key = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_ssz, null);
 
                     std.debug.print("✅ Using pre-generated secret key (no regeneration)\n", .{});
+                    std.debug.print("   Lifetime: 2^{}\n", .{tree_depth});
                     std.debug.print("   Activation epoch: {}\n", .{secret_key.activation_epoch});
                     std.debug.print("   Num active epochs: {}\n", .{secret_key.num_active_epochs});
                     std.debug.print("   Left bottom tree index: {}\n", .{secret_key.left_bottom_tree_index});
@@ -320,9 +339,9 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     // Use the deserialized parameters from the pre-generated key
                     std.debug.print("   Using deserialized parameters from pre-generated key\n", .{});
 
-                    // Initialize scheme with the PRF key and parameter from the secret key
+                    // Initialize scheme with the PRF key and actual lifetime from SSZ
                     // The scheme needs the same PRF key to generate correct hash values
-                    scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, secret_key.prf_key);
+                    scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, actual_lifetime, secret_key.prf_key);
 
                     // Return the loaded keypair
                     break :blk hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult{
@@ -647,8 +666,8 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     defer allocator.free(pk_bytes);
 
     // Parse metadata from SSZ header without fully deserializing trees
-    // SSZ format: [prf_key:32][parameter:20][activation_epoch:8][num_active_epochs:8][offsets...]
-    if (sk_bytes.len < 68) return error.InvalidLength;
+    // SSZ format: [prf_key:32][parameter:20][activation_epoch:8][num_active_epochs:8][top_tree_offset:4][left_bottom_tree_index:8]...
+    if (sk_bytes.len < 88) return error.InvalidLength;
 
     var offset: usize = 0;
 
@@ -666,14 +685,42 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     const num_active_epochs = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
     offset += 8;
 
-    // Skip to left_bottom_tree_index (after top_tree_offset)
-    offset += 4; // skip top_tree_offset
+    // Read top_tree_offset (u32)
+    const top_tree_offset = std.mem.readInt(u32, sk_bytes[offset .. offset + 4][0..4], .little);
+    offset += 4;
+
+    // Read left_bottom_tree_index (u64)
     const left_bottom_tree_index = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
+
+    // Extract lifetime from tree depth field
+    // Tree structure: [depth:8][lowest_layer:8][layers_offset:4]...
+    if (sk_bytes.len < top_tree_offset + 8) return error.InvalidLength;
+    const tree_depth = std.mem.readInt(u64, sk_bytes[top_tree_offset .. top_tree_offset + 8][0..8], .little);
+    
+    // Determine actual lifetime from tree depth (log_lifetime)
+    const actual_lifetime: KeyLifetime = switch (tree_depth) {
+        8 => .lifetime_2_8,
+        18 => .lifetime_2_18,
+        32 => .lifetime_2_32,
+        else => return error.InvalidLifetime,
+    };
+
+    // Verify it matches the provided lifetime parameter
+    if (actual_lifetime != lifetime) {
+        std.debug.print("⚠️  WARNING: Provided lifetime {s} doesn't match SSZ file lifetime (log={d})\n", .{
+            switch (lifetime) {
+                .lifetime_2_8 => "2^8",
+                .lifetime_2_18 => "2^18",
+                .lifetime_2_32 => "2^32",
+            },
+            tree_depth,
+        });
+    }
 
     // Deserialize public key to verify it's valid
     _ = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_bytes, null);
 
-    const lifetime_str = switch (lifetime) {
+    const lifetime_str = switch (actual_lifetime) {
         .lifetime_2_8 => "2^8",
         .lifetime_2_18 => "2^18",
         .lifetime_2_32 => "2^32",

@@ -12,7 +12,7 @@ This directory contains pre-generated Generalized XMSS keys for testing and benc
 ## File Structure
 
 Each validator has two files:
-- `validator_N_sk.ssz` - Secret key (8,390,660 bytes / ~8.0 MB)
+- `validator_N_sk.ssz` - Secret key (8,390,596 bytes / ~8.0 MB)
 - `validator_N_pk.ssz` - Public key (52 bytes)
 
 Where `N` is the validator ID (0, 1, 2).
@@ -20,8 +20,8 @@ Where `N` is the validator ID (0, 1, 2).
 ## Key Information
 
 ### Secret Key
-- **Size**: 8,390,660 bytes (~8.0 MB per validator)
-- **Contains**: 1024 bottom tree secret keys (one per active epoch)
+- **Size**: 8,390,596 bytes (~8.0 MB per validator)
+- **Contains**: Full tree structure (top tree + 2 bottom trees) with 131,072 active epochs (1024 * 128)
 - **Format**: SSZ-serialized `GeneralizedXMSSSecretKey`
 
 ### Public Key
