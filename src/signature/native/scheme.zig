@@ -215,6 +215,69 @@ pub const HashSubTree = struct {
 };
 
 /// Helper function to deserialize HashSubTree from leansig SSZ format
+/// Serialize HashSubTree to SSZ format (matching Rust leansig)
+fn serializeHashSubTree(tree: *const HashSubTree, l: *std.ArrayList(u8)) !void {
+    // Format: [depth:8][lowest_layer:8][layers_offset:4][layers_data]
+    const layers = tree.getLayers() orelse return error.NoLayers;
+    
+    // Write depth (u64)
+    try ssz.serialize(u64, @as(u64, @intCast(layers.len)), l);
+    
+    // Write lowest_layer (u64) - always 0 for our trees
+    try ssz.serialize(u64, @as(u64, 0), l);
+    
+    // Write layers_offset (u32) - points to start of layers array
+    const layers_offset: u32 = 20; // 8 + 8 + 4 = 20
+    try ssz.serialize(u32, layers_offset, l);
+    
+    // Now serialize layers array
+    // First, serialize all layers to get their sizes
+    var layer_bytes_list = try tree.allocator.alloc(std.ArrayList(u8), layers.len);
+    defer {
+        for (layer_bytes_list) |*lb| {
+            lb.deinit();
+        }
+        tree.allocator.free(layer_bytes_list);
+    }
+    
+    for (layers, 0..) |layer, i| {
+        layer_bytes_list[i] = std.ArrayList(u8).init(tree.allocator);
+        try serializePaddedLayer(&layer, &layer_bytes_list[i]);
+    }
+    
+    // Write layer offsets (relative to start of layers array)
+    var current_offset: u32 = @as(u32, @intCast(layers.len * 4)); // Space for offsets
+    for (layer_bytes_list) |*lb| {
+        try ssz.serialize(u32, current_offset, l);
+        current_offset += @as(u32, @intCast(lb.items.len));
+    }
+    
+    // Write layer data
+    for (layer_bytes_list) |*lb| {
+        try l.appendSlice(lb.items);
+    }
+}
+
+/// Serialize PaddedLayer to SSZ format (matching Rust leansig)
+fn serializePaddedLayer(layer: *const PaddedLayer, l: *std.ArrayList(u8)) !void {
+    // Format: [start_index:8][nodes_offset:4][nodes_data]
+    
+    // Write start_index (u64)
+    try ssz.serialize(u64, @as(u64, @intCast(layer.start_index)), l);
+    
+    // Write nodes_offset (u32) - points to start of nodes array
+    const nodes_offset: u32 = 12; // 8 + 4 = 12
+    try ssz.serialize(u32, nodes_offset, l);
+    
+    // Write nodes as raw field element arrays (no length prefix, Vec<[FE; 8]> in Rust)
+    for (layer.nodes) |node| {
+        // Each node is [8]FieldElement, serialize as 8 u32s in canonical form
+        for (node) |fe| {
+            try ssz.serialize(u32, fe.toCanonical(), l);
+        }
+    }
+}
+
 fn deserializeHashSubTree(allocator: std.mem.Allocator, serialized: []const u8) !*HashSubTree {
     if (serialized.len < 20) return error.InvalidLength;
 
@@ -1350,10 +1413,12 @@ pub const GeneralizedXMSSSecretKey = struct {
 
     // SSZ serialization methods
     pub fn sszEncode(self: *const GeneralizedXMSSSecretKey, l: *std.ArrayList(u8)) !void {
-        // Note: This is a simplified encoding that doesn't include trees (for compatibility with existing code)
-        // For full leansig-compatible encoding with trees, use a separate method
+        // Full leansig-compatible encoding with trees
+        // Format: [prf_key:32][parameter:20][activation_epoch:8][num_active_epochs:8]
+        //         [top_tree_offset:4][left_bottom_tree_index:8][left_bottom_tree_offset:4][right_bottom_tree_offset:4]
+        //         [top_tree_data][left_bottom_tree_data][right_bottom_tree_data]
 
-        // Encode prf_key (32 bytes, fixed-size)
+        // Encode fixed-size fields
         try ssz.serialize([32]u8, self.prf_key, l);
 
         // Convert parameter to canonical u32 array and serialize (20 bytes for 5 u32s)
@@ -1368,6 +1433,40 @@ pub const GeneralizedXMSSSecretKey = struct {
 
         // Encode num_active_epochs as u64 (8 bytes)
         try ssz.serialize(u64, @as(u64, @intCast(self.num_active_epochs)), l);
+
+        // Now we're at offset 68 (32+20+8+8)
+        // Encode offsets for variable-size fields
+        const fixed_part_end: u32 = 88; // 68 + 4 + 8 + 4 + 4 = 88
+        
+        // Serialize top_tree to get its size
+        var top_tree_bytes = std.ArrayList(u8).init(self.allocator);
+        defer top_tree_bytes.deinit();
+        try serializeHashSubTree(self.top_tree, &top_tree_bytes);
+        
+        // Serialize left_bottom_tree to get its size
+        var left_bottom_tree_bytes = std.ArrayList(u8).init(self.allocator);
+        defer left_bottom_tree_bytes.deinit();
+        try serializeHashSubTree(self.left_bottom_tree, &left_bottom_tree_bytes);
+        
+        // Serialize right_bottom_tree to get its size
+        var right_bottom_tree_bytes = std.ArrayList(u8).init(self.allocator);
+        defer right_bottom_tree_bytes.deinit();
+        try serializeHashSubTree(self.right_bottom_tree, &right_bottom_tree_bytes);
+        
+        // Write offsets
+        const top_tree_offset = fixed_part_end;
+        const left_bottom_tree_offset = top_tree_offset + @as(u32, @intCast(top_tree_bytes.items.len));
+        const right_bottom_tree_offset = left_bottom_tree_offset + @as(u32, @intCast(left_bottom_tree_bytes.items.len));
+        
+        try ssz.serialize(u32, top_tree_offset, l);
+        try ssz.serialize(u64, @as(u64, @intCast(self.left_bottom_tree_index)), l);
+        try ssz.serialize(u32, left_bottom_tree_offset, l);
+        try ssz.serialize(u32, right_bottom_tree_offset, l);
+        
+        // Write tree data
+        try l.appendSlice(top_tree_bytes.items);
+        try l.appendSlice(left_bottom_tree_bytes.items);
+        try l.appendSlice(right_bottom_tree_bytes.items);
     }
 
     pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSecretKey, allocator: ?std.mem.Allocator) !void {

@@ -278,12 +278,12 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
         if (use_ssz) {
             if (std.fs.cwd().readFileAlloc(allocator, "tmp/zig_sk.ssz", std.math.maxInt(usize))) |sk_ssz| {
                 defer allocator.free(sk_ssz);
-                
+
                 // Check if this is a full secret key (with trees) or minimal (just metadata)
                 // Minimal SSZ: 68 bytes (prf_key:32 + parameter:20 + activation_epoch:8 + num_active_epochs:8)
                 // Full SSZ: 8+ MB (includes all tree data)
                 const is_full_secret_key = sk_ssz.len > 1000; // Threshold: > 1KB means full key
-                
+
                 if (!is_full_secret_key) {
                     std.debug.print("⚠️  SSZ secret key is minimal ({} bytes), falling back to regeneration\n", .{sk_ssz.len});
                     // Fall through to JSON/regeneration path
@@ -293,15 +293,15 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     // Allocate secret key on heap
                     const secret_key = try allocator.create(hash_zig.GeneralizedXMSSSecretKey);
                     errdefer allocator.destroy(secret_key);
-                    
+
                     // Deserialize the full secret key (including trees) from SSZ
                     try hash_zig.GeneralizedXMSSSecretKey.sszDecode(sk_ssz, secret_key, allocator);
-                    
+
                     // Load public key from SSZ
                     const pk_ssz = try std.fs.cwd().readFileAlloc(allocator, "tmp/zig_pk.ssz", std.math.maxInt(usize));
                     defer allocator.free(pk_ssz);
                     const public_key = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_ssz, null);
-                    
+
                     std.debug.print("✅ Using pre-generated secret key (no regeneration)\n", .{});
                     std.debug.print("   Activation epoch: {}\n", .{secret_key.activation_epoch});
                     std.debug.print("   Num active epochs: {}\n", .{secret_key.num_active_epochs});
@@ -316,14 +316,14 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                         std.debug.print("0x{x:0>8} ", .{fe.toCanonical()});
                     }
                     std.debug.print("\n", .{});
-                    
+
                     // Use the deserialized parameters from the pre-generated key
                     std.debug.print("   Using deserialized parameters from pre-generated key\n", .{});
-                    
+
                     // Initialize scheme with the PRF key and parameter from the secret key
                     // The scheme needs the same PRF key to generate correct hash values
                     scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, lifetime, secret_key.prf_key);
-                    
+
                     // Return the loaded keypair
                     break :blk hash_zig.GeneralizedXMSSSignatureScheme.KeyGenResult{
                         .secret_key = secret_key,
@@ -637,48 +637,48 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     std.debug.print("🔍 Zig: Inspecting keys...\n", .{});
     std.debug.print("  Secret key: {s}\n", .{sk_path});
     std.debug.print("  Public key: {s}\n", .{pk_path});
-    
+
     // Read secret key
     const sk_bytes = try std.fs.cwd().readFileAlloc(allocator, sk_path, std.math.maxInt(usize));
     defer allocator.free(sk_bytes);
-    
+
     // Read public key
     const pk_bytes = try std.fs.cwd().readFileAlloc(allocator, pk_path, std.math.maxInt(usize));
     defer allocator.free(pk_bytes);
-    
+
     // Parse metadata from SSZ header without fully deserializing trees
     // SSZ format: [prf_key:32][parameter:20][activation_epoch:8][num_active_epochs:8][offsets...]
     if (sk_bytes.len < 68) return error.InvalidLength;
-    
+
     var offset: usize = 0;
-    
+
     // Skip prf_key (32 bytes)
     offset += 32;
-    
+
     // Skip parameter (20 bytes for 5 u32s)
     offset += 20;
-    
+
     // Read activation_epoch (u64)
     const activation_epoch = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
     offset += 8;
-    
+
     // Read num_active_epochs (u64)
     const num_active_epochs = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
     offset += 8;
-    
+
     // Skip to left_bottom_tree_index (after top_tree_offset)
     offset += 4; // skip top_tree_offset
     const left_bottom_tree_index = std.mem.readInt(u64, sk_bytes[offset .. offset + 8][0..8], .little);
-    
+
     // Deserialize public key to verify it's valid
     _ = try hash_zig.GeneralizedXMSSPublicKey.fromBytes(pk_bytes, null);
-    
+
     const lifetime_str = switch (lifetime) {
         .lifetime_2_8 => "2^8",
         .lifetime_2_18 => "2^18",
         .lifetime_2_32 => "2^32",
     };
-    
+
     std.debug.print("✅ Successfully deserialized keys for lifetime {s}\n", .{lifetime_str});
     std.debug.print("  Public key size: {} bytes\n", .{pk_bytes.len});
     std.debug.print("  Secret key size: {} bytes\n", .{sk_bytes.len});
