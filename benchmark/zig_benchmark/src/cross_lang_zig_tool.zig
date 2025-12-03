@@ -296,7 +296,7 @@ fn signCommand(allocator: Allocator, message: []const u8, epoch: u32, lifetime: 
                     if (sk_ssz.len < 96) return error.InvalidLength; // Need at least header + tree depth
                     const top_tree_offset = std.mem.readInt(u32, sk_ssz[68..72], .little);
                     const tree_depth = std.mem.readInt(u64, sk_ssz[top_tree_offset .. top_tree_offset + 8][0..8], .little);
-                    
+
                     const actual_lifetime: KeyLifetime = switch (tree_depth) {
                         8 => .lifetime_2_8,
                         18 => .lifetime_2_18,
@@ -696,7 +696,7 @@ fn inspectCommand(allocator: Allocator, sk_path: []const u8, pk_path: []const u8
     // Tree structure: [depth:8][lowest_layer:8][layers_offset:4]...
     if (sk_bytes.len < top_tree_offset + 8) return error.InvalidLength;
     const tree_depth = std.mem.readInt(u64, sk_bytes[top_tree_offset .. top_tree_offset + 8][0..8], .little);
-    
+
     // Determine actual lifetime from tree depth (log_lifetime)
     const actual_lifetime: KeyLifetime = switch (tree_depth) {
         8 => .lifetime_2_8,
