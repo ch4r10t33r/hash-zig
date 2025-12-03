@@ -361,14 +361,6 @@ fn deserializeHashSubTree(allocator: std.mem.Allocator, serialized: []const u8) 
     // In leansig's tree structure, the root is stored as the first node of the last layer
     const root_value = if (layers.len > 0 and layers[layers.len - 1].nodes.len > 0) blk: {
         const root_node = layers[layers.len - 1].nodes[0]; // FIRST node, not last!
-        std.debug.print("TREE_ROOT_EXTRACT: num_layers={d}, last_layer_nodes={d}\n", .{
-            layers.len,
-            layers[layers.len - 1].nodes.len,
-        });
-        std.debug.print("TREE_ROOT_EXTRACT: Extracted root[0]=0x{x:0>8} (Montgomery), canonical=0x{x:0>8}\n", .{
-            root_node[0].value,
-            root_node[0].toCanonical(),
-        });
         break :blk root_node;
     } else [_]FieldElement{FieldElement{ .value = 0 }} ** 8;
 
@@ -385,8 +377,6 @@ fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) 
     // Decode nodes_offset (u32)
     const nodes_offset = std.mem.readInt(u32, serialized[8..12], .little);
 
-    std.debug.print("LAYER_DECODE: start_index={d}, nodes_offset={d}\n", .{ start_index, nodes_offset });
-
     // Nodes array starts at nodes_offset
     const nodes_data = serialized[nodes_offset..];
 
@@ -401,16 +391,6 @@ fn deserializePaddedLayer(allocator: std.mem.Allocator, serialized: []const u8) 
         for (0..8) |j| {
             const val = std.mem.readInt(u32, nodes_data[i * 32 + j * 4 .. i * 32 + j * 4 + 4][0..4], .little);
             nodes[i][j] = FieldElement.fromCanonical(val);
-
-            // Log first 3 nodes completely to check correctness
-            if (i < 3 and j == 0) {
-                std.debug.print("TREE_NODE_DECODE: Layer node[{d}][0]: raw=0x{x:0>8}, montgomery=0x{x:0>8}, canonical=0x{x:0>8}\n", .{
-                    i,
-                    val,
-                    nodes[i][j].value,
-                    nodes[i][j].toCanonical(),
-                });
-            }
         }
     }
 
@@ -1289,11 +1269,6 @@ pub const GeneralizedXMSSPublicKey = struct {
             // Direct little-endian read instead of ssz.deserialize which may have issues
             const bytes = serialized[root_offset .. root_offset + 4];
             const val = std.mem.readInt(u32, bytes[0..4], .little);
-            if (i == 0) {
-                std.debug.print("PK_SSZ_DECODE: First 4 bytes: {x:0>2}{x:0>2}{x:0>2}{x:0>2} -> u32=0x{x:0>8}\n", .{
-                    bytes[0], bytes[1], bytes[2], bytes[3], val,
-                });
-            }
             root_canonical[i] = val;
             root_offset += 4;
         }
