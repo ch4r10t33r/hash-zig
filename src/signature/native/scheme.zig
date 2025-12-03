@@ -1309,12 +1309,8 @@ pub const GeneralizedXMSSSecretKey = struct {
 
     // SSZ serialization methods
     pub fn sszEncode(self: *const GeneralizedXMSSSecretKey, l: *std.ArrayList(u8)) !void {
-        // SSZ Container encoding for GeneralizedXMSSSecretKey:
-        // Fixed fields: prf_key(32) + parameter(20) + activation_epoch(8) + num_active_epochs(8) = 68 bytes
-        // Variable fields: top_tree, left_bottom_tree_index, left_bottom_tree, right_bottom_tree
-        
-        // Calculate fixed-size portion
-        const fixed_size: usize = 68 + 4 + 8 + 4 + 4; // fixed fields + offsets for 3 variable fields + left_bottom_tree_index
+        // Note: This is a simplified encoding that doesn't include trees (for compatibility with existing code)
+        // For full leansig-compatible encoding with trees, use a separate method
         
         // Encode prf_key (32 bytes, fixed-size)
         try ssz.serialize([32]u8, self.prf_key, l);
@@ -1331,27 +1327,6 @@ pub const GeneralizedXMSSSecretKey = struct {
 
         // Encode num_active_epochs as u64 (8 bytes)
         try ssz.serialize(u64, @as(u64, @intCast(self.num_active_epochs)), l);
-        
-        // Encode offset for top_tree (u32)
-        try ssz.serialize(u32, @as(u32, @intCast(fixed_size)), l);
-        
-        // Encode left_bottom_tree_index (u64, fixed-size)
-        try ssz.serialize(u64, @as(u64, @intCast(self.left_bottom_tree_index)), l);
-        
-        // Calculate offset for left_bottom_tree
-        const top_tree_size = try calculateTreeSize(self.top_tree);
-        const left_tree_offset = fixed_size + top_tree_size;
-        try ssz.serialize(u32, @as(u32, @intCast(left_tree_offset)), l);
-        
-        // Calculate offset for right_bottom_tree
-        const left_tree_size = try calculateTreeSize(self.left_bottom_tree);
-        const right_tree_offset = left_tree_offset + left_tree_size;
-        try ssz.serialize(u32, @as(u32, @intCast(right_tree_offset)), l);
-        
-        // Encode variable-length trees
-        try encodeTree(self.top_tree, l);
-        try encodeTree(self.left_bottom_tree, l);
-        try encodeTree(self.right_bottom_tree, l);
     }
 
     pub fn sszDecode(serialized: []const u8, out: *GeneralizedXMSSSecretKey, allocator: ?std.mem.Allocator) !void {
