@@ -1,18 +1,17 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.print("Zig hash-zig Determinism Check (lifetime 2^8)\n", .{});
-    log.print("================================================\n", .{});
+    std.debug.print("Zig hash-zig Determinism Check (lifetime 2^8)\n", .{});
+    std.debug.print("================================================\n", .{});
 
     // Read seed from environment variable or use default
     var seed: [32]u8 = undefined;
-    if (std.process.getEnvVarOwned(allocator, "SEED_HEX")) |seed_hex| {
+    if (envVarOwned(allocator, init, "SEED_HEX")) |seed_hex| {
         defer allocator.free(seed_hex);
         if (seed_hex.len == 64) { // 32 bytes = 64 hex chars
             for (0..32) |i| {
@@ -26,8 +25,8 @@ pub fn main() !void {
         @memset(&seed, 0x42); // fallback to default
     }
 
-    log.print("SEED: {s}\n", .{std.fmt.fmtSliceHexLower(&seed)});
-    log.print("SEED (bytes): {any}\n", .{seed});
+    std.debug.print("SEED: {s}\n", .{std.fmt.bytesToHex(&seed, .lower)});
+    std.debug.print("SEED (bytes): {any}\n", .{seed});
 
     var scheme1 = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed);
     defer scheme1.deinit();
@@ -36,8 +35,8 @@ pub fn main() !void {
     defer scheme2.deinit();
 
     // Add debug output for RNG state
-    log.print("Scheme1 RNG state after creation: {any}\n", .{scheme1.getRngState()});
-    log.print("Scheme2 RNG state after creation: {any}\n", .{scheme2.getRngState()});
+    std.debug.print("Scheme1 RNG state after creation: {any}\n", .{scheme1.getRngState()});
+    std.debug.print("Scheme2 RNG state after creation: {any}\n", .{scheme2.getRngState()});
 
     const kp1 = try scheme1.keyGen(0, 256);
     defer kp1.secret_key.deinit();
@@ -67,25 +66,30 @@ pub fn main() !void {
     }
 
     const equal = roots_equal and params_equal;
-    log.print("Public keys equal: {}\n", .{equal});
+    std.debug.print("Public keys equal: {}\n", .{equal});
     if (equal) {
-        log.print("✅ Deterministic: same seed -> identical public keys (2^8)\n", .{});
+        std.debug.print("✅ Deterministic: same seed -> identical public keys (2^8)\n", .{});
     } else {
-        log.print("❌ Different public keys (2^8).\n", .{});
+        std.debug.print("❌ Different public keys (2^8).\n", .{});
     }
 
     // Print the public key for inspection (JSON format to match Rust)
     const pk1_json = try kp1.public_key.serialize(allocator);
     defer allocator.free(pk1_json);
 
-    log.print("\nPublic Key (JSON):\n", .{});
-    log.print("{s}\n", .{pk1_json});
+    std.debug.print("\nPublic Key (JSON):\n", .{});
+    std.debug.print("{s}\n", .{pk1_json});
 
-    log.print("\nPublic Key (JSON bytes):\n", .{});
+    std.debug.print("\nPublic Key (JSON bytes):\n", .{});
     const display_len = @min(32, pk1_json.len);
-    log.print("{any}", .{pk1_json[0..display_len]});
+    std.debug.print("{any}", .{pk1_json[0..display_len]});
     if (pk1_json.len > 32) {
-        log.print("... (total {} bytes)", .{pk1_json.len});
+        std.debug.print("... (total {} bytes)", .{pk1_json.len});
     }
-    log.print("\n", .{});
+    std.debug.print("\n", .{});
+}
+
+fn envVarOwned(allocator: std.mem.Allocator, init: std.process.Init, key: []const u8) ![]u8 {
+    const value = init.environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, value);
 }

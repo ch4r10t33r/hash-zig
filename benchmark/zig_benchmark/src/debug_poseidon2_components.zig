@@ -1,13 +1,12 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.print("=== Zig Poseidon2 Components Debug ===\n", .{});
+    std.debug.print("=== Zig Poseidon2 Components Debug ===\n", .{});
 
     // Test with the exact inputs that should produce 0x31461cb0
     const test_message = [_]hash_zig.FieldElement{
@@ -23,14 +22,14 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = 0x4da34f48 },
     };
 
-    log.print("Test message (2 elements):\n", .{});
+    std.debug.print("Test message (2 elements):\n", .{});
     for (test_message, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("Test parameter (5 elements):\n", .{});
+    std.debug.print("Test parameter (5 elements):\n", .{});
     for (test_parameter, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test tweak computation
@@ -43,14 +42,14 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = @as(u32, @intCast((tweak_bigint / p) % p)) },
     };
 
-    log.print("\nTweak computation:\n", .{});
-    log.print("  Level: {}, Position: {}\n", .{ level, pos });
-    log.print("  Tweak bigint: 0x{x}\n", .{tweak_bigint});
-    log.print("  Tweak[0]: 0x{x} ({})\n", .{ tweak[0].value, tweak[0].value });
-    log.print("  Tweak[1]: 0x{x} ({})\n", .{ tweak[1].value, tweak[1].value });
+    std.debug.print("\nTweak computation:\n", .{});
+    std.debug.print("  Level: {}, Position: {}\n", .{ level, pos });
+    std.debug.print("  Tweak bigint: 0x{x}\n", .{tweak_bigint});
+    std.debug.print("  Tweak[0]: 0x{x} ({})\n", .{ tweak[0].value, tweak[0].value });
+    std.debug.print("  Tweak[1]: 0x{x} ({})\n", .{ tweak[1].value, tweak[1].value });
 
     // Test the complete input preparation
-    log.print("\n=== Input Preparation Analysis ===\n", .{});
+    std.debug.print("\n=== Input Preparation Analysis ===\n", .{});
 
     // Prepare combined input: parameter + tweak + message
     const total_input_len = 5 + 2 + test_message.len;
@@ -77,22 +76,22 @@ pub fn main() !void {
         input_index += 1;
     }
 
-    log.print("Complete input ({} elements):\n", .{total_input_len});
+    std.debug.print("Complete input ({} elements):\n", .{total_input_len});
     for (combined_input, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test if the issue is in the input size or format
-    log.print("\n=== Test Different Input Sizes ===\n", .{});
+    std.debug.print("\n=== Test Different Input Sizes ===\n", .{});
 
     // Test with 1 element
     const single_input = [_]hash_zig.FieldElement{
         hash_zig.FieldElement{ .value = 0x1640cb16 },
     };
 
-    log.print("Single element input:\n", .{});
+    std.debug.print("Single element input:\n", .{});
     for (single_input, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test with 3 elements
@@ -102,9 +101,9 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = 0x7e118cb3 },
     };
 
-    log.print("Triple element input:\n", .{});
+    std.debug.print("Triple element input:\n", .{});
     for (triple_input, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test with 16 elements
@@ -127,14 +126,14 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = 0x4915976b },
     };
 
-    log.print("Sixteen element input:\n", .{});
+    std.debug.print("Sixteen element input:\n", .{});
     for (sixteen_input, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("\n=== Analysis ===\n", .{});
-    log.print("The issue appears to be in the Poseidon2 hash function implementation itself.\n", .{});
-    log.print("Even with identical inputs, the results are completely different than expected.\n", .{});
-    log.print("This suggests there are still subtle differences in our Plonky3-compatible implementation.\n", .{});
-    log.print("The next step is to debug the individual components of the Poseidon2 algorithm.\n", .{});
+    std.debug.print("\n=== Analysis ===\n", .{});
+    std.debug.print("The issue appears to be in the Poseidon2 hash function implementation itself.\n", .{});
+    std.debug.print("Even with identical inputs, the results are completely different than expected.\n", .{});
+    std.debug.print("This suggests there are still subtle differences in our Plonky3-compatible implementation.\n", .{});
+    std.debug.print("The next step is to debug the individual components of the Poseidon2 algorithm.\n", .{});
 }

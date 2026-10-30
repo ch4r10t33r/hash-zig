@@ -1,13 +1,12 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.print("=== Zig Poseidon2 Direct Permutation Debug ===\n", .{});
+    std.debug.print("=== Zig Poseidon2 Direct Permutation Debug ===\n", .{});
 
     // Test with the exact inputs that should produce 0x31461cb0
     const test_message = [_]hash_zig.FieldElement{
@@ -58,13 +57,13 @@ pub fn main() !void {
         input_index += 1;
     }
 
-    log.print("Complete input ({} elements):\n", .{total_input_len});
+    std.debug.print("Complete input ({} elements):\n", .{total_input_len});
     for (combined_input, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test the Poseidon2 hash function directly
-    log.print("\n=== Test Poseidon2 Hash Function Directly ===\n", .{});
+    std.debug.print("\n=== Test Poseidon2 Hash Function Directly ===\n", .{});
 
     // Create a scheme to access the Poseidon2 implementation
     const seed_hex = "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
@@ -84,17 +83,17 @@ pub fn main() !void {
     const hash_result = try scheme.applyPoseidonTreeTweakHash(test_message[0..], level, pos, test_parameter);
     defer allocator.free(hash_result);
 
-    log.print("Tree hash result:\n", .{});
+    std.debug.print("Tree hash result:\n", .{});
     for (hash_result, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("\nExpected result: 0x31461cb0\n", .{});
-    log.print("Actual result: 0x{x}\n", .{hash_result[0].value});
-    log.print("Match: {}\n", .{hash_result[0].value == 0x31461cb0});
+    std.debug.print("\nExpected result: 0x31461cb0\n", .{});
+    std.debug.print("Actual result: 0x{x}\n", .{hash_result[0].value});
+    std.debug.print("Match: {}\n", .{hash_result[0].value == 0x31461cb0});
 
     // Test if the issue is in the input size
-    log.print("\n=== Test Different Input Sizes ===\n", .{});
+    std.debug.print("\n=== Test Different Input Sizes ===\n", .{});
 
     // Test with 1 element
     const single_input = [_]hash_zig.FieldElement{
@@ -104,7 +103,7 @@ pub fn main() !void {
     const single_result = try scheme.applyPoseidonTreeTweakHash(single_input[0..], level, pos, test_parameter);
     defer allocator.free(single_result);
 
-    log.print("Single element result: 0x{x}\n", .{single_result[0].value});
+    std.debug.print("Single element result: 0x{x}\n", .{single_result[0].value});
 
     // Test with 3 elements
     const triple_input = [_]hash_zig.FieldElement{
@@ -116,7 +115,7 @@ pub fn main() !void {
     const triple_result = try scheme.applyPoseidonTreeTweakHash(triple_input[0..], level, pos, test_parameter);
     defer allocator.free(triple_result);
 
-    log.print("Triple element result: 0x{x}\n", .{triple_result[0].value});
+    std.debug.print("Triple element result: 0x{x}\n", .{triple_result[0].value});
 
     // Test with 16 elements
     const sixteen_input = [_]hash_zig.FieldElement{
@@ -141,25 +140,25 @@ pub fn main() !void {
     const sixteen_result = try scheme.applyPoseidonTreeTweakHash(sixteen_input[0..], level, pos, test_parameter);
     defer allocator.free(sixteen_result);
 
-    log.print("Sixteen element result: 0x{x}\n", .{sixteen_result[0].value});
+    std.debug.print("Sixteen element result: 0x{x}\n", .{sixteen_result[0].value});
 
-    log.print("\n=== Analysis ===\n", .{});
-    log.print("The issue appears to be in the Poseidon2 hash function implementation itself.\n", .{});
-    log.print("Even with identical inputs, the results are completely different than expected.\n", .{});
-    log.print("This suggests there are still subtle differences in our Plonky3-compatible implementation.\n", .{});
-    log.print("The next step is to debug the individual components of the Poseidon2 algorithm.\n", .{});
+    std.debug.print("\n=== Analysis ===\n", .{});
+    std.debug.print("The issue appears to be in the Poseidon2 hash function implementation itself.\n", .{});
+    std.debug.print("Even with identical inputs, the results are completely different than expected.\n", .{});
+    std.debug.print("This suggests there are still subtle differences in our Plonky3-compatible implementation.\n", .{});
+    std.debug.print("The next step is to debug the individual components of the Poseidon2 algorithm.\n", .{});
 
     // Test if the issue is in the input preparation
-    log.print("\n=== Input Preparation Analysis ===\n", .{});
+    std.debug.print("\n=== Input Preparation Analysis ===\n", .{});
 
-    log.print("Complete input ({} elements):\n", .{total_input_len});
+    std.debug.print("Complete input ({} elements):\n", .{total_input_len});
     for (combined_input, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("\n=== Conclusion ===\n", .{});
-    log.print("The issue is definitively in the Poseidon2 hash function implementation.\n", .{});
-    log.print("All inputs are identical, but the outputs are completely different.\n", .{});
-    log.print("This suggests there are still subtle differences in our Plonky3-compatible implementation.\n", .{});
-    log.print("The next step is to debug the individual components of the Poseidon2 algorithm.\n", .{});
+    std.debug.print("\n=== Conclusion ===\n", .{});
+    std.debug.print("The issue is definitively in the Poseidon2 hash function implementation.\n", .{});
+    std.debug.print("All inputs are identical, but the outputs are completely different.\n", .{});
+    std.debug.print("This suggests there are still subtle differences in our Plonky3-compatible implementation.\n", .{});
+    std.debug.print("The next step is to debug the individual components of the Poseidon2 algorithm.\n", .{});
 }

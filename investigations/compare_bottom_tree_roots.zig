@@ -1,5 +1,4 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 const FieldElement = hash_zig.core.FieldElement;
@@ -10,8 +9,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.print("=== BOTTOM TREE ROOTS COMPARISON ===\n", .{});
-    log.print("Comparing bottom tree roots between Zig and expected Rust\n", .{});
+    std.debug.print("=== BOTTOM TREE ROOTS COMPARISON ===\n", .{});
+    std.debug.print("Comparing bottom tree roots between Zig and expected Rust\n", .{});
 
     // Initialize with same seed
     const seed: [32]u8 = [_]u8{42} ** 32;
@@ -21,19 +20,19 @@ pub fn main() !void {
     const parameter = try generateParameters(&rng);
     const prf_key = try generatePRFKey(&rng);
 
-    log.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
-    log.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    std.debug.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
+    std.debug.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
 
     // Build bottom trees and compare roots
     const num_bottom_trees = 16;
     var bottom_tree_roots = try allocator.alloc([8]FieldElement, num_bottom_trees);
     defer allocator.free(bottom_tree_roots);
 
-    log.print("\n=== BOTTOM TREE ROOTS COMPARISON ===\n", .{});
+    std.debug.print("\n=== BOTTOM TREE ROOTS COMPARISON ===\n", .{});
 
     // Build first few bottom trees for detailed comparison
     for (0..@min(4, num_bottom_trees)) |tree_index| {
-        log.print("\n--- Bottom Tree {} ---\n", .{tree_index});
+        std.debug.print("\n--- Bottom Tree {} ---\n", .{tree_index});
 
         // Generate leaves
         const tree_leafs = try generateLeavesFromPrfKey(prf_key, tree_index, parameter, allocator);
@@ -50,16 +49,16 @@ pub fn main() !void {
         }
 
         // Print first few leaves for debugging
-        log.print("Leaves (first 3):\n", .{});
+        std.debug.print("Leaves (first 3):\n", .{});
         for (0..@min(3, leafs_array.len)) |j| {
-            log.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leafs_array[j][0].value, leafs_array[j][1].value, leafs_array[j][2].value, leafs_array[j][3].value, leafs_array[j][4].value, leafs_array[j][5].value, leafs_array[j][6].value, leafs_array[j][7].value });
+            std.debug.print("  Leaf {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ j, leafs_array[j][0].value, leafs_array[j][1].value, leafs_array[j][2].value, leafs_array[j][3].value, leafs_array[j][4].value, leafs_array[j][5].value, leafs_array[j][6].value, leafs_array[j][7].value });
         }
 
         // Build bottom tree using the real implementation
         const bottom_tree = try new_bottom_tree_real(8, tree_index, parameter, leafs_array, &rng);
         bottom_tree_roots[tree_index] = root(&bottom_tree);
 
-        log.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
+        std.debug.print("Bottom tree {} root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ tree_index, bottom_tree_roots[tree_index][0].value, bottom_tree_roots[tree_index][1].value, bottom_tree_roots[tree_index][2].value, bottom_tree_roots[tree_index][3].value, bottom_tree_roots[tree_index][4].value, bottom_tree_roots[tree_index][5].value, bottom_tree_roots[tree_index][6].value, bottom_tree_roots[tree_index][7].value });
     }
 
     // Build remaining bottom trees
@@ -81,9 +80,9 @@ pub fn main() !void {
     }
 
     // Print all bottom tree roots for comparison
-    log.print("\n=== ALL BOTTOM TREE ROOTS ===\n", .{});
+    std.debug.print("\n=== ALL BOTTOM TREE ROOTS ===\n", .{});
     for (bottom_tree_roots, 0..) |tree_root, i| {
-        log.print("Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, tree_root[0].value, tree_root[1].value, tree_root[2].value, tree_root[3].value, tree_root[4].value, tree_root[5].value, tree_root[6].value, tree_root[7].value });
+        std.debug.print("Root {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, tree_root[0].value, tree_root[1].value, tree_root[2].value, tree_root[3].value, tree_root[4].value, tree_root[5].value, tree_root[6].value, tree_root[7].value });
     }
 
     // Expected Rust bottom tree roots (from previous runs)
@@ -94,14 +93,14 @@ pub fn main() !void {
         [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 }, // Placeholder - need to get from Rust
     };
 
-    log.print("\n=== COMPARISON WITH EXPECTED RUST ===\n", .{});
+    std.debug.print("\n=== COMPARISON WITH EXPECTED RUST ===\n", .{});
     for (0..@min(4, bottom_tree_roots.len)) |i| {
         const zig_root = bottom_tree_roots[i];
         const rust_root = expected_rust_roots[i];
 
-        log.print("Bottom tree {} comparison:\n", .{i});
-        log.print("  Zig:  [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ zig_root[0].value, zig_root[1].value, zig_root[2].value, zig_root[3].value, zig_root[4].value, zig_root[5].value, zig_root[6].value, zig_root[7].value });
-        log.print("  Rust: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ rust_root[0], rust_root[1], rust_root[2], rust_root[3], rust_root[4], rust_root[5], rust_root[6], rust_root[7] });
+        std.debug.print("Bottom tree {} comparison:\n", .{i});
+        std.debug.print("  Zig:  [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ zig_root[0].value, zig_root[1].value, zig_root[2].value, zig_root[3].value, zig_root[4].value, zig_root[5].value, zig_root[6].value, zig_root[7].value });
+        std.debug.print("  Rust: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ rust_root[0], rust_root[1], rust_root[2], rust_root[3], rust_root[4], rust_root[5], rust_root[6], rust_root[7] });
 
         // Check if they match
         var matches = true;
@@ -111,7 +110,7 @@ pub fn main() !void {
                 break;
             }
         }
-        log.print("  Match: {}\n", .{matches});
+        std.debug.print("  Match: {}\n", .{matches});
     }
 }
 
@@ -175,7 +174,7 @@ fn new_bottom_tree_real(
     // Add root layer with expected values
     var root_nodes = try std.heap.page_allocator.alloc([8]FieldElement, 1);
     for (0..8) |i| {
-        root_nodes[0][i] = FieldElement.fromCanonical(@intCast(bottom_tree_index * 8 + i + 2000));
+        root_nodes[0][i] = FieldElement{ .value = @as(u32, @intCast(bottom_tree_index * 8 + i + 2000)) };
     }
     const root_layer = HashTreeLayer{ .start_index = 0, .nodes = root_nodes };
     try layers.append(root_layer);

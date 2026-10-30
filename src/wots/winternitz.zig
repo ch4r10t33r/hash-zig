@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const params = @import("params.zig");
-const tweakable_hash = @import("../hash/tweakable_hash.zig");
+const tweakable_hash = @import("tweakable_hash.zig");
 const encoding = @import("encoding.zig");
 const Parameters = params.Parameters;
 const TweakableHash = tweakable_hash.TweakableHash;
@@ -52,7 +52,7 @@ pub const WinternitzOTS = struct {
         chain_len: u32,
         parent_allocator: Allocator,
         errors: []?anyerror,
-        mutex: std.Thread.Mutex,
+        mutex: std.atomic.Mutex,
     };
 
     fn generateChainRange(context: *ChainGenContext, start: usize, end: usize) void {
@@ -63,7 +63,7 @@ pub const WinternitzOTS = struct {
 
         for (start..end) |i| {
             var current = allocator.dupe(u8, context.private_key[i]) catch |err| {
-                context.mutex.lock();
+                while (!context.mutex.tryLock()) std.atomic.spinLoopHint();
                 defer context.mutex.unlock();
                 context.errors[i] = err;
                 return;
@@ -71,7 +71,7 @@ pub const WinternitzOTS = struct {
 
             for (0..context.chain_len) |_| {
                 const next = context.wots.hash.hash(allocator, current, i) catch |err| {
-                    context.mutex.lock();
+                    while (!context.mutex.tryLock()) std.atomic.spinLoopHint();
                     defer context.mutex.unlock();
                     context.errors[i] = err;
                     return;
@@ -81,7 +81,7 @@ pub const WinternitzOTS = struct {
 
             // Duplicate to parent allocator since thread arena will be freed
             // Must lock mutex because parent allocator may not be thread-safe
-            context.mutex.lock();
+            while (!context.mutex.tryLock()) std.atomic.spinLoopHint();
             const result = context.parent_allocator.dupe(u8, current) catch |err| {
                 context.errors[i] = err;
                 context.mutex.unlock();
@@ -140,7 +140,7 @@ pub const WinternitzOTS = struct {
                 .chain_len = chain_len,
                 .parent_allocator = allocator,
                 .errors = errors,
-                .mutex = std.Thread.Mutex{},
+                .mutex = .unlocked,
             };
 
             var threads = try allocator.alloc(std.Thread, num_threads);

@@ -1,17 +1,16 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
+    const seed_hex = envVarOwned(allocator, init, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    log.print("=== Zig Tree Building Step-by-Step Analysis ===\n", .{});
-    log.print("SEED: {s}\n", .{seed_hex});
+    std.debug.print("=== Zig Tree Building Step-by-Step Analysis ===\n", .{});
+    std.debug.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -26,22 +25,27 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
-    log.print("\n=== Key Generation ===\n", .{});
+    std.debug.print("\n=== Key Generation ===\n", .{});
     const result = try scheme.keyGen(0, 256);
     defer result.secret_key.deinit();
 
-    log.print("Final root values: {any}\n", .{result.public_key.root});
-    log.print("Parameter values: {any}\n", .{result.public_key.parameter});
+    std.debug.print("Final root values: {any}\n", .{result.public_key.root});
+    std.debug.print("Parameter values: {any}\n", .{result.public_key.parameter});
 
     // Show the exact values in hex
-    log.print("\n=== Hex Values ===\n", .{});
-    log.print("Root values (hex):\n", .{});
+    std.debug.print("\n=== Hex Values ===\n", .{});
+    std.debug.print("Root values (hex):\n", .{});
     for (result.public_key.root, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("Parameter values (hex):\n", .{});
+    std.debug.print("Parameter values (hex):\n", .{});
     for (result.public_key.parameter, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
+}
+
+fn envVarOwned(allocator: std.mem.Allocator, init: std.process.Init, key: []const u8) ![]u8 {
+    const value = init.environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, value);
 }

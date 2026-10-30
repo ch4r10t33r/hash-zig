@@ -2,18 +2,17 @@
 //! Based on https://github.com/b-wagn/hash-sig instantiations
 
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 /// Test Winternitz encoding variants (w=1,2,4,8)
 fn testWinternitzVariants(allocator: std.mem.Allocator) !void {
-    log.print("Testing Winternitz encoding variants...\n", .{});
+    std.debug.print("Testing Winternitz encoding variants...\n", .{});
 
     const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{.lifetime_2_8};
     const test_epochs = [_]u32{ 0, 1, 2, 13, 31, 127 };
 
     for (lifetimes) |lifetime| {
-        log.print("Testing Winternitz with lifetime {}\n", .{lifetime});
+        std.debug.print("Testing Winternitz with lifetime {}\n", .{lifetime});
 
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
         defer scheme.deinit();
@@ -47,18 +46,18 @@ fn testWinternitzVariants(allocator: std.mem.Allocator) !void {
         }
     }
 
-    log.print("✅ Winternitz encoding variants test passed\n", .{});
+    std.debug.print("✅ Winternitz encoding variants test passed\n", .{});
 }
 
 /// Test TargetSum encoding variants
 fn testTargetSumVariants(allocator: std.mem.Allocator) !void {
-    log.print("Testing TargetSum encoding variants...\n", .{});
+    std.debug.print("Testing TargetSum encoding variants...\n", .{});
 
     const lifetimes = [_]hash_zig.KeyLifetimeRustCompat{.lifetime_2_8};
     const test_epochs = [_]u32{ 0, 1, 2, 13, 31, 127 };
 
     for (lifetimes) |lifetime| {
-        log.print("Testing TargetSum with lifetime {}\n", .{lifetime});
+        std.debug.print("Testing TargetSum with lifetime {}\n", .{lifetime});
 
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
         defer scheme.deinit();
@@ -92,12 +91,12 @@ fn testTargetSumVariants(allocator: std.mem.Allocator) !void {
         }
     }
 
-    log.print("✅ TargetSum encoding variants test passed\n", .{});
+    std.debug.print("✅ TargetSum encoding variants test passed\n", .{});
 }
 
 /// Test multiple lifetime configurations
 fn testMultipleLifetimeConfigurations(allocator: std.mem.Allocator) !void {
-    log.print("Testing multiple lifetime configurations...\n", .{});
+    std.debug.print("Testing multiple lifetime configurations...\n", .{});
 
     const lifetime_configs = [_]struct {
         lifetime: hash_zig.KeyLifetimeRustCompat,
@@ -107,7 +106,7 @@ fn testMultipleLifetimeConfigurations(allocator: std.mem.Allocator) !void {
     };
 
     for (lifetime_configs) |config| {
-        log.print("Testing lifetime {} configuration\n", .{config.lifetime});
+        std.debug.print("Testing lifetime {} configuration\n", .{config.lifetime});
 
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, config.lifetime);
         defer scheme.deinit();
@@ -141,12 +140,12 @@ fn testMultipleLifetimeConfigurations(allocator: std.mem.Allocator) !void {
         }
     }
 
-    log.print("✅ Multiple lifetime configurations test passed\n", .{});
+    std.debug.print("✅ Multiple lifetime configurations test passed\n", .{});
 }
 
 /// Test signature scheme correctness for various parameters
 fn testSignatureSchemeCorrectnessVariants(allocator: std.mem.Allocator) !void {
-    log.print("Testing signature scheme correctness variants...\n", .{});
+    std.debug.print("Testing signature scheme correctness variants...\n", .{});
 
     const test_cases = [_]struct {
         lifetime: hash_zig.KeyLifetimeRustCompat,
@@ -162,7 +161,7 @@ fn testSignatureSchemeCorrectnessVariants(allocator: std.mem.Allocator) !void {
     };
 
     for (test_cases) |test_case| {
-        log.print("Testing correctness: lifetime {}, epoch {}\n", .{ test_case.lifetime, test_case.test_epoch });
+        std.debug.print("Testing correctness: lifetime {}, epoch {}\n", .{ test_case.lifetime, test_case.test_epoch });
 
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, test_case.lifetime);
         defer scheme.deinit();
@@ -191,17 +190,17 @@ fn testSignatureSchemeCorrectnessVariants(allocator: std.mem.Allocator) !void {
         try std.testing.expect(is_valid);
     }
 
-    log.print("✅ Signature scheme correctness variants test passed\n", .{});
+    std.debug.print("✅ Signature scheme correctness variants test passed\n", .{});
 }
 
 // Main test suite
 test "encoding variants test suite" {
     const allocator = std.testing.allocator;
 
-    log.print("\n" ++ "=" ** 80 ++ "\n", .{});
-    log.print("🧪 ENCODING VARIANTS TEST SUITE\n", .{});
-    log.print("Testing different encoding variants and configurations\n", .{});
-    log.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+    std.debug.print("🧪 ENCODING VARIANTS TEST SUITE\n", .{});
+    std.debug.print("Testing different encoding variants and configurations\n", .{});
+    std.debug.print("=" ** 80 ++ "\n\n", .{});
 
     // Run all encoding variant tests
     try testWinternitzVariants(allocator);
@@ -209,10 +208,10 @@ test "encoding variants test suite" {
     try testMultipleLifetimeConfigurations(allocator);
     try testSignatureSchemeCorrectnessVariants(allocator);
 
-    log.print("\n" ++ "=" ** 80 ++ "\n", .{});
-    log.print("🎉 ALL ENCODING VARIANTS TESTS PASSED! 🎉\n", .{});
-    log.print("✅ All encoding variants tested successfully\n", .{});
-    log.print("✅ Multiple lifetime configurations validated\n", .{});
-    log.print("✅ Signature scheme correctness verified\n", .{});
-    log.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+    std.debug.print("🎉 ALL ENCODING VARIANTS TESTS PASSED! 🎉\n", .{});
+    std.debug.print("✅ All encoding variants tested successfully\n", .{});
+    std.debug.print("✅ Multiple lifetime configurations validated\n", .{});
+    std.debug.print("✅ Signature scheme correctness verified\n", .{});
+    std.debug.print("=" ** 80 ++ "\n\n", .{});
 }

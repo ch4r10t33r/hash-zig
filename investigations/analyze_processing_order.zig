@@ -1,5 +1,4 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 const FieldElement = hash_zig.core.FieldElement;
@@ -10,8 +9,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.print("=== ANALYZE PROCESSING ORDER ===\n", .{});
-    log.print("Analyzing processing order differences between Rust par_chunks_exact(2) and Zig sequential processing\n", .{});
+    std.debug.print("=== ANALYZE PROCESSING ORDER ===\n", .{});
+    std.debug.print("Analyzing processing order differences between Rust par_chunks_exact(2) and Zig sequential processing\n", .{});
 
     // Initialize with same seed
     const seed: [32]u8 = [_]u8{42} ** 32;
@@ -21,11 +20,11 @@ pub fn main() !void {
     const parameter = try generateParameters(&rng);
     const prf_key = try generatePRFKey(&rng);
 
-    log.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
-    log.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    std.debug.print("Parameters: [{}, {}, {}, {}, {}]\n", .{ parameter[0].value, parameter[1].value, parameter[2].value, parameter[3].value, parameter[4].value });
+    std.debug.print("PRF key: {x}\n", .{std.fmt.fmtSliceHexLower(&prf_key)});
 
     // Simulate the top tree building process with detailed logging
-    log.print("\n=== SIMULATING TOP TREE BUILDING PROCESS ===\n", .{});
+    std.debug.print("\n=== SIMULATING TOP TREE BUILDING PROCESS ===\n", .{});
 
     // Use the actual bottom tree roots from the rust_algorithm_port.zig output
     const bottom_tree_roots = [_][8]FieldElement{
@@ -48,7 +47,7 @@ pub fn main() !void {
     };
 
     // Simulate the top tree building process step by step
-    log.print("\n=== TOP TREE BUILDING SIMULATION ===\n", .{});
+    std.debug.print("\n=== TOP TREE BUILDING SIMULATION ===\n", .{});
 
     // Start with the bottom tree roots (layer 4)
     var current_layer = try allocator.alloc([8]FieldElement, 16);
@@ -58,28 +57,28 @@ pub fn main() !void {
         current_layer[i] = root;
     }
 
-    log.print("Layer 4 (bottom tree roots): {} nodes\n", .{current_layer.len});
+    std.debug.print("Layer 4 (bottom tree roots): {} nodes\n", .{current_layer.len});
     for (current_layer, 0..) |node, i| {
-        log.print("  Node {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, node[0].value, node[1].value, node[2].value, node[3].value, node[4].value, node[5].value, node[6].value, node[7].value });
+        std.debug.print("  Node {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, node[0].value, node[1].value, node[2].value, node[3].value, node[4].value, node[5].value, node[6].value, node[7].value });
     }
 
     // Simulate the tree building process layer by layer
     var current_level: usize = 4;
     while (current_level < 8) : (current_level += 1) {
-        log.print("\n--- Building Layer {} -> {} ---\n", .{ current_level, current_level + 1 });
+        std.debug.print("\n--- Building Layer {} -> {} ---\n", .{ current_level, current_level + 1 });
 
         // Calculate parent layer properties
         const parent_start = 0; // Simplified for this analysis
         const parents_len = current_layer.len / 2;
 
-        log.print("Processing {} pairs to create {} parents\n", .{ current_layer.len, parents_len });
+        std.debug.print("Processing {} pairs to create {} parents\n", .{ current_layer.len, parents_len });
 
         // Simulate the processing order
         for (0..parents_len) |i| {
             const parent_pos = @as(u32, @intCast(parent_start + i));
             const tweak_level = @as(u8, @intCast(current_level)) + 1;
 
-            log.print("  Pair {}: children [{}] and [{}] -> parent [{}] (tweak_level={}, pos={})\n", .{ i, i * 2, i * 2 + 1, i, tweak_level, parent_pos });
+            std.debug.print("  Pair {}: children [{}] and [{}] -> parent [{}] (tweak_level={}, pos={})\n", .{ i, i * 2, i * 2 + 1, i, tweak_level, parent_pos });
         }
 
         // Create next layer
@@ -90,13 +89,13 @@ pub fn main() !void {
         for (0..parents_len) |i| {
             // Simplified parent creation for analysis
             for (0..8) |j| {
-                next_layer[i][j] = FieldElement.fromCanonical(@intCast(current_level * 1000 + i * 8 + j));
+                next_layer[i][j] = FieldElement{ .value = @as(u32, @intCast(current_level * 1000 + i * 8 + j)) };
             }
         }
 
-        log.print("Layer {}: {} nodes\n", .{ current_level + 1, next_layer.len });
+        std.debug.print("Layer {}: {} nodes\n", .{ current_level + 1, next_layer.len });
         for (next_layer, 0..) |node, i| {
-            log.print("  Node {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, node[0].value, node[1].value, node[2].value, node[3].value, node[4].value, node[5].value, node[6].value, node[7].value });
+            std.debug.print("  Node {}: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ i, node[0].value, node[1].value, node[2].value, node[3].value, node[4].value, node[5].value, node[6].value, node[7].value });
         }
 
         // Update current layer
@@ -105,8 +104,8 @@ pub fn main() !void {
         // Don't free next_layer here as it becomes current_layer
     }
 
-    log.print("\n=== FINAL RESULT ===\n", .{});
-    log.print("Final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ current_layer[0][0].value, current_layer[0][1].value, current_layer[0][2].value, current_layer[0][3].value, current_layer[0][4].value, current_layer[0][5].value, current_layer[0][6].value, current_layer[0][7].value });
+    std.debug.print("\n=== FINAL RESULT ===\n", .{});
+    std.debug.print("Final root: [{}, {}, {}, {}, {}, {}, {}, {}]\n", .{ current_layer[0][0].value, current_layer[0][1].value, current_layer[0][2].value, current_layer[0][3].value, current_layer[0][4].value, current_layer[0][5].value, current_layer[0][6].value, current_layer[0][7].value });
 
     // Free the final layer
     allocator.free(current_layer);

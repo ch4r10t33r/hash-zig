@@ -1,20 +1,19 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.print("Testing Zig internal signing and verification...\n", .{});
+    std.debug.print("Testing Zig internal signing and verification...\n", .{});
 
     // Initialize the scheme
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
     defer scheme.deinit();
 
     // Generate keypair
-    log.print("Generating keypair...\n", .{});
+    std.debug.print("Generating keypair...\n", .{});
     var keypair = try scheme.keyGen(0, 256);
     defer keypair.secret_key.deinit();
 
@@ -28,19 +27,19 @@ pub fn main() !void {
     @memcpy(message_bytes[0..@min(test_message.len, 32)], test_message);
 
     // Sign the message
-    log.print("Signing message...\n", .{});
+    std.debug.print("Signing message...\n", .{});
     const signature = try scheme.sign(keypair.secret_key, epoch, message_bytes);
     defer signature.deinit();
 
     // Verify the signature
-    log.print("Verifying signature...\n", .{});
+    std.debug.print("Verifying signature...\n", .{});
     const is_valid = try scheme.verify(&keypair.public_key, epoch, message_bytes, signature);
 
-    log.print("Result: {}\n", .{is_valid});
-
+    std.debug.print("Result: {}\n", .{is_valid});
+    
     if (is_valid) {
-        log.print("✅ SUCCESS: Zig internal signing and verification works!\n", .{});
+        std.debug.print("✅ SUCCESS: Zig internal signing and verification works!\n", .{});
     } else {
-        log.print("❌ FAILED: Zig internal verification failed!\n", .{});
+        std.debug.print("❌ FAILED: Zig internal verification failed!\n", .{});
     }
 }

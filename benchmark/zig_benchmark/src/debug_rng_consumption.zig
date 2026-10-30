@@ -1,18 +1,17 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 const GeneralizedXMSSSignatureScheme = hash_zig.GeneralizedXMSSSignatureScheme;
 const LifetimeParams = hash_zig.LifetimeParams;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
+    const seed_hex = envVarOwned(allocator, init, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
 
-    log.print("=== Zig RNG Consumption Investigation ===\n", .{});
-    log.print("SEED: {s}\n", .{seed_hex});
+    std.debug.print("=== Zig RNG Consumption Investigation ===\n", .{});
+    std.debug.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed - use first 8 bytes as u64 seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -27,25 +26,30 @@ pub fn main() !void {
     // Use first 8 bytes as u64 seed for DefaultPrng
     const seed_u64 = std.mem.readInt(u64, seed_array[0..8], .little);
 
-    log.print("\n=== Step 1: First 10 RNG values ===\n", .{});
+    std.debug.print("\n=== Step 1: First 10 RNG values ===\n", .{});
     var rng = std.Random.DefaultPrng.init(seed_u64);
     for (0..10) |i| {
         const val = rng.random().int(u32);
-        log.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
+        std.debug.print("  [{}] = {} (0x{x})\n", .{ i, val, val });
     }
 
-    log.print("\n=== Step 2: Run key_gen and check parameters ===\n", .{});
+    std.debug.print("\n=== Step 2: Run key_gen and check parameters ===\n", .{});
     var scheme = try GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
     const result = try scheme.keyGen(0, 256);
     defer result.secret_key.deinit();
 
-    log.print("Public key parameters: {any}\n", .{result.public_key.parameter});
+    std.debug.print("Public key parameters: {any}\n", .{result.public_key.parameter});
 
-    log.print("\n=== Step 4: Check RNG state after key_gen ===\n", .{});
+    std.debug.print("\n=== Step 4: Check RNG state after key_gen ===\n", .{});
     // Create a new RNG to check the state
     var rng4 = std.Random.DefaultPrng.init(seed_u64);
     const next_val = rng4.random().int(u32);
-    log.print("Next RNG value after key_gen: {} (0x{x})\n", .{ next_val, next_val });
+    std.debug.print("Next RNG value after key_gen: {} (0x{x})\n", .{ next_val, next_val });
+}
+
+fn envVarOwned(allocator: std.mem.Allocator, init: std.process.Init, key: []const u8) ![]u8 {
+    const value = init.environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, value);
 }

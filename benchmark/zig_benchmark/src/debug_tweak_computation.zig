@@ -1,17 +1,16 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
+    const seed_hex = envVarOwned(allocator, init, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    log.print("=== Zig Tweak Computation Analysis ===\n", .{});
-    log.print("SEED: {s}\n", .{seed_hex});
+    std.debug.print("=== Zig Tweak Computation Analysis ===\n", .{});
+    std.debug.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -26,7 +25,7 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
-    log.print("\n=== Tweak Computation Test ===\n", .{});
+    std.debug.print("\n=== Tweak Computation Test ===\n", .{});
 
     // Test tweak computation for different levels and positions
     const test_cases = [_]struct { level: u8, pos: u32 }{
@@ -49,14 +48,19 @@ pub fn main() !void {
             hash_zig.FieldElement{ .value = @as(u32, @intCast((tweak_bigint / p) % p)) },
         };
 
-        log.print("Level {}, Pos {}: tweak_bigint = 0x{x}, tweak[0] = 0x{x}, tweak[1] = 0x{x}\n", .{ test_case.level, test_case.pos, tweak_bigint, tweak[0].value, tweak[1].value });
+        std.debug.print("Level {}, Pos {}: tweak_bigint = 0x{x}, tweak[0] = 0x{x}, tweak[1] = 0x{x}\n", .{ test_case.level, test_case.pos, tweak_bigint, tweak[0].value, tweak[1].value });
     }
 
-    log.print("\n=== Tree Building with Tweak Debug ===\n", .{});
+    std.debug.print("\n=== Tree Building with Tweak Debug ===\n", .{});
 
     // Generate a key to see the tree building process
     const result = try scheme.keyGen(0, 256);
     defer result.secret_key.deinit();
 
-    log.print("Final root values: {any}\n", .{result.public_key.root});
+    std.debug.print("Final root values: {any}\n", .{result.public_key.root});
+}
+
+fn envVarOwned(allocator: std.mem.Allocator, init: std.process.Init, key: []const u8) ![]u8 {
+    const value = init.environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, value);
 }

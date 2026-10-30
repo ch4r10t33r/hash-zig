@@ -2,10 +2,6 @@
 zig-cache/
 zig-out/
 .zig-cache/
-.cargo/
-.rustup
-.zig-global-cache/
-
 
 # Build outputs
 *.o
@@ -27,8 +23,6 @@ zig-out/
 # Test artifacts
 test_*
 *.test
-# Keep investigation test sources
-!investigations/test_*.zig
 # Temporary files
 tmp/
 temp/
@@ -77,8 +71,3 @@ debug_*
 benchmark/rust_hash_sig_debug
 benchmark/rust-hash-sig-source
 benchmark/rust-hash-sig-debug
-
-# Repo-local temporary artifacts
-/tmp/
-zig-verify-signature.o
-analysis/

@@ -42,6 +42,11 @@ pub const TweakableHash = hash.TweakableHash;
 pub const WinternitzOTS = wots.WinternitzOTS;
 pub const MerkleTree = merkle.MerkleTree;
 pub const MerkleTreeNative = merkle.MerkleTreeNative;
+pub const HashSignature = signature.HashSignature;
+pub const HashSignatureNative = signature.HashSignatureNative;
+pub const HashSignatureRustCompat = signature.HashSignatureRustCompat;
+pub const HashSignatureShakeCompat = signature.HashSignatureShakeCompat;
+
 // Primary Rust-compatible GeneralizedXMSS implementation (now the main implementation)
 pub const GeneralizedXMSSSignatureScheme = signature.GeneralizedXMSSSignatureScheme;
 pub const GeneralizedXMSSPublicKey = signature.GeneralizedXMSSPublicKey;
@@ -51,6 +56,9 @@ pub const GeneralizedXMSSSignature = signature.GeneralizedXMSSSignature;
 // Serialization utilities
 pub const serialization = @import("signature/serialization.zig");
 
+// Legacy implementation (kept for compatibility)
+pub const HashSignatureShakeCompatLegacy = signature.HashSignatureShakeCompatLegacy;
+
 // Rust-compatible exports from zig-poseidon
 pub const TargetSumEncoding = poseidon2.TargetSumEncoding;
 pub const TopLevelPoseidonMessageHash = poseidon2.TopLevelPoseidonMessageHash;
@@ -58,7 +66,6 @@ pub const TopLevelPoseidonMessageHash = poseidon2.TopLevelPoseidonMessageHash;
 // Export modules for testing
 pub const chacha12_rng = @import("prf/chacha12_rng.zig");
 pub const ShakePRFtoF_8_7 = @import("prf/shake_prf_to_field.zig").ShakePRFtoF_8_7;
-pub const ShakePRFtoF_7_6 = @import("prf/shake_prf_to_field.zig").ShakePRFtoF_7_6;
 
 test "hash-zig root loads" {
     // Smoke test to ensure the root module compiles.

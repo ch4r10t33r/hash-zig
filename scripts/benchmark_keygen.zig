@@ -1,5 +1,4 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 pub fn main() !void {
@@ -23,18 +22,18 @@ pub fn main() !void {
         } else if (std.mem.startsWith(u8, arg, "--iterations=")) {
             const iterations_str = arg[13..];
             num_iterations = std.fmt.parseInt(u32, iterations_str, 10) catch {
-                log.print("Error: Invalid iterations value: {s}\n", .{iterations_str});
+                std.debug.print("Error: Invalid iterations value: {s}\n", .{iterations_str});
                 return;
             };
         } else if (std.mem.startsWith(u8, arg, "-i")) {
             const iterations_str = arg[2..];
             num_iterations = std.fmt.parseInt(u32, iterations_str, 10) catch {
-                log.print("Error: Invalid iterations value: {s}\n", .{iterations_str});
+                std.debug.print("Error: Invalid iterations value: {s}\n", .{iterations_str});
                 return;
             };
         } else {
-            log.print("Unknown argument: {s}\n", .{arg});
-            log.print("Use --help for usage information\n", .{});
+            std.debug.print("Unknown argument: {s}\n", .{arg});
+            std.debug.print("Use --help for usage information\n", .{});
             return;
         }
     }
@@ -44,12 +43,12 @@ pub fn main() !void {
         return;
     }
 
-    log.print("hash-zig Key Generation Benchmark (Multiple Lifetimes)\n", .{});
-    log.print("=======================================================\n", .{});
-    log.print("Iterations per configuration: {}\n", .{num_iterations});
-    log.print("Include 2^32 lifetime: {}\n", .{include_2_32});
-    log.print("Note: All tests generate 256 keys to compare lifetime performance\n", .{});
-    log.print("\n", .{});
+    std.debug.print("hash-zig Key Generation Benchmark (Multiple Lifetimes)\n", .{});
+    std.debug.print("=======================================================\n", .{});
+    std.debug.print("Iterations per configuration: {}\n", .{num_iterations});
+    std.debug.print("Include 2^32 lifetime: {}\n", .{include_2_32});
+    std.debug.print("Note: All tests generate 256 keys to compare lifetime performance\n", .{});
+    std.debug.print("\n", .{});
 
     // Benchmark configurations - test different lifetimes but only generate 256 keys each
     var benchmarks = std.ArrayList(BenchmarkConfig).init(allocator);
@@ -70,8 +69,8 @@ pub fn main() !void {
     });
 
     if (include_2_32) {
-        log.print("⚠️  Warning: 2^32 lifetime test will take longer due to larger tree structures!\n", .{});
-        log.print("   This is recommended only for comprehensive benchmarking.\n\n", .{});
+        std.debug.print("⚠️  Warning: 2^32 lifetime test will take longer due to larger tree structures!\n", .{});
+        std.debug.print("   This is recommended only for comprehensive benchmarking.\n\n", .{});
 
         try benchmarks.append(.{
             .name = "2^32",
@@ -84,11 +83,11 @@ pub fn main() !void {
     // Run benchmarks
     for (benchmarks.items) |config| {
         try runBenchmark(allocator, config, num_iterations);
-        log.print("\n", .{});
+        std.debug.print("\n", .{});
     }
 
-    log.print("🎉 Benchmark completed!\n", .{});
-    log.print("💡 Tip: Use 'zig build -Doptimize=ReleaseFast' for production builds\n", .{});
+    std.debug.print("🎉 Benchmark completed!\n", .{});
+    std.debug.print("💡 Tip: Use 'zig build -Doptimize=ReleaseFast' for production builds\n", .{});
 }
 
 const BenchmarkConfig = struct {
@@ -99,16 +98,16 @@ const BenchmarkConfig = struct {
 };
 
 fn runBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig, num_iterations: u32) !void {
-    log.print("Benchmarking lifetime {s} (generating {} keys)\n", .{ config.name, config.epochs });
-    log.print("Description: {s}\n", .{config.description});
-    log.print("{s}\n", .{"=" ** 60});
+    std.debug.print("Benchmarking lifetime {s} (generating {} keys)\n", .{ config.name, config.epochs });
+    std.debug.print("Description: {s}\n", .{config.description});
+    std.debug.print("{s}\n", .{"=" ** 60});
 
     var times = std.ArrayList(f64).init(allocator);
     defer times.deinit();
 
     for (0..num_iterations) |i| {
-        log.print("Iteration {}/{}... ", .{ i + 1, num_iterations });
-        log.print("\x1b[2K\r", .{}); // Clear line
+        std.debug.print("Iteration {}/{}... ", .{ i + 1, num_iterations });
+        std.debug.print("\x1b[2K\r", .{}); // Clear line
 
         // Initialize scheme
         var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, config.lifetime);
@@ -126,26 +125,26 @@ fn runBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig, num_itera
         // Clean up
         keypair.secret_key.deinit();
 
-        log.print("✅ {d:.2}s", .{elapsed_s});
+        std.debug.print("✅ {d:.2}s", .{elapsed_s});
         if (i < num_iterations - 1) {
-            log.print(" | ", .{});
+            std.debug.print(" | ", .{});
         }
     }
 
-    log.print("\n", .{});
+    std.debug.print("\n", .{});
 
     // Calculate statistics
     const stats = calculateStats(times.items);
 
-    log.print("📊 Results for lifetime {s} ({} keys):\n", .{ config.name, config.epochs });
-    log.print("  Average time: {d:.2} seconds\n", .{stats.average});
-    log.print("  Min time:     {d:.2} seconds\n", .{stats.min});
-    log.print("  Max time:     {d:.2} seconds\n", .{stats.max});
-    log.print("  Std deviation: {d:.2} seconds\n", .{stats.std_dev});
-    log.print("  Generation rate: {d:.1} keys/second\n", .{@as(f64, @floatFromInt(config.epochs)) / stats.average});
+    std.debug.print("📊 Results for lifetime {s} ({} keys):\n", .{ config.name, config.epochs });
+    std.debug.print("  Average time: {d:.2} seconds\n", .{stats.average});
+    std.debug.print("  Min time:     {d:.2} seconds\n", .{stats.min});
+    std.debug.print("  Max time:     {d:.2} seconds\n", .{stats.max});
+    std.debug.print("  Std deviation: {d:.2} seconds\n", .{stats.std_dev});
+    std.debug.print("  Generation rate: {d:.1} keys/second\n", .{@as(f64, @floatFromInt(config.epochs)) / stats.average});
 
     if (stats.average < 1.0) {
-        log.print("  Generation rate: {d:.0} keys/second\n", .{@as(f64, @floatFromInt(config.epochs)) / stats.average});
+        std.debug.print("  Generation rate: {d:.0} keys/second\n", .{@as(f64, @floatFromInt(config.epochs)) / stats.average});
     }
 }
 
@@ -186,20 +185,20 @@ fn calculateStats(times: []f64) Stats {
 }
 
 fn printUsage() void {
-    log.print("hash-zig Key Generation Benchmark (Multiple Lifetimes)\n", .{});
-    log.print("Usage: zig run benchmark_keygen.zig [options]\n\n", .{});
-    log.print("Options:\n", .{});
-    log.print("  --include-2-32, -32    Include 2^32 lifetime test (slower due to larger trees)\n", .{});
-    log.print("  --iterations=N, -iN     Number of iterations per configuration (default: 3)\n", .{});
-    log.print("  --help, -h              Show this help message\n\n", .{});
-    log.print("Note: All tests generate 256 keys to compare performance across different lifetimes\n", .{});
-    log.print("      Tests: 2^8, 2^18, and optionally 2^32 lifetimes\n\n", .{});
-    log.print("Examples:\n", .{});
-    log.print("  zig run benchmark_keygen.zig                    # Basic benchmark (2^8, 2^18)\n", .{});
-    log.print("  zig run benchmark_keygen.zig --include-2-32     # Include 2^32 lifetime test\n", .{});
-    log.print("  zig run benchmark_keygen.zig -i5                # 5 iterations\n", .{});
-    log.print("  zig run benchmark_keygen.zig -32 -i10           # Full benchmark\n\n", .{});
-    log.print("Performance Tips:\n", .{});
-    log.print("  - Use optimized builds for production: -Doptimize=ReleaseFast\n", .{});
-    log.print("  - 2^32 lifetime tests take longer due to larger tree structures\n", .{});
+    std.debug.print("hash-zig Key Generation Benchmark (Multiple Lifetimes)\n", .{});
+    std.debug.print("Usage: zig run benchmark_keygen.zig [options]\n\n", .{});
+    std.debug.print("Options:\n", .{});
+    std.debug.print("  --include-2-32, -32    Include 2^32 lifetime test (slower due to larger trees)\n", .{});
+    std.debug.print("  --iterations=N, -iN     Number of iterations per configuration (default: 3)\n", .{});
+    std.debug.print("  --help, -h              Show this help message\n\n", .{});
+    std.debug.print("Note: All tests generate 256 keys to compare performance across different lifetimes\n", .{});
+    std.debug.print("      Tests: 2^8, 2^18, and optionally 2^32 lifetimes\n\n", .{});
+    std.debug.print("Examples:\n", .{});
+    std.debug.print("  zig run benchmark_keygen.zig                    # Basic benchmark (2^8, 2^18)\n", .{});
+    std.debug.print("  zig run benchmark_keygen.zig --include-2-32     # Include 2^32 lifetime test\n", .{});
+    std.debug.print("  zig run benchmark_keygen.zig -i5                # 5 iterations\n", .{});
+    std.debug.print("  zig run benchmark_keygen.zig -32 -i10           # Full benchmark\n\n", .{});
+    std.debug.print("Performance Tips:\n", .{});
+    std.debug.print("  - Use optimized builds for production: -Doptimize=ReleaseFast\n", .{});
+    std.debug.print("  - 2^32 lifetime tests take longer due to larger tree structures\n", .{});
 }

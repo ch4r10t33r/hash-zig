@@ -1,17 +1,16 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const seed_hex = std.process.getEnvVarOwned(allocator, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
+    const seed_hex = envVarOwned(allocator, init, "SEED_HEX") catch "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242";
     defer allocator.free(seed_hex);
 
-    log.print("=== Zig Poseidon2 Input Analysis ===\n", .{});
-    log.print("SEED: {s}\n", .{seed_hex});
+    std.debug.print("=== Zig Poseidon2 Input Analysis ===\n", .{});
+    std.debug.print("SEED: {s}\n", .{seed_hex});
 
     // Parse seed
     const seed_bytes = try std.fmt.allocPrint(allocator, "{s}", .{seed_hex});
@@ -26,7 +25,7 @@ pub fn main() !void {
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.initWithSeed(allocator, .lifetime_2_8, seed_array);
     defer scheme.deinit();
 
-    log.print("\n=== Analyze Poseidon2 Input Preparation ===\n", .{});
+    std.debug.print("\n=== Analyze Poseidon2 Input Preparation ===\n", .{});
 
     // Test with the exact inputs from the debug output
     const left_child = [_]hash_zig.FieldElement{
@@ -59,19 +58,19 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = 1302548296 },
     };
 
-    log.print("Left child values:\n", .{});
+    std.debug.print("Left child values:\n", .{});
     for (left_child, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("Right child values:\n", .{});
+    std.debug.print("Right child values:\n", .{});
     for (right_child, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("Parameter values:\n", .{});
+    std.debug.print("Parameter values:\n", .{});
     for (test_parameter, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Concatenate left and right children
@@ -80,9 +79,9 @@ pub fn main() !void {
     @memcpy(combined_children[0..left_child.len], left_child[0..]);
     @memcpy(combined_children[left_child.len..], right_child[0..]);
 
-    log.print("\nCombined children (16 elements):\n", .{});
+    std.debug.print("\nCombined children (16 elements):\n", .{});
     for (combined_children, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
     // Test tweak computation
@@ -95,37 +94,42 @@ pub fn main() !void {
         hash_zig.FieldElement{ .value = @as(u32, @intCast((tweak_bigint / p) % p)) },
     };
 
-    log.print("\nTweak computation:\n", .{});
-    log.print("  Level: {}, Pos: {}\n", .{ level, pos_in_level });
-    log.print("  Tweak bigint: 0x{x}\n", .{tweak_bigint});
-    log.print("  Tweak[0]: 0x{x} ({})\n", .{ tweak[0].value, tweak[0].value });
-    log.print("  Tweak[1]: 0x{x} ({})\n", .{ tweak[1].value, tweak[1].value });
+    std.debug.print("\nTweak computation:\n", .{});
+    std.debug.print("  Level: {}, Pos: {}\n", .{ level, pos_in_level });
+    std.debug.print("  Tweak bigint: 0x{x}\n", .{tweak_bigint});
+    std.debug.print("  Tweak[0]: 0x{x} ({})\n", .{ tweak[0].value, tweak[0].value });
+    std.debug.print("  Tweak[1]: 0x{x} ({})\n", .{ tweak[1].value, tweak[1].value });
 
     // Show the complete input that will be passed to Poseidon2
-    log.print("\nComplete Poseidon2 input (parameter + tweak + message):\n", .{});
-    log.print("Parameter (5 elements):\n", .{});
+    std.debug.print("\nComplete Poseidon2 input (parameter + tweak + message):\n", .{});
+    std.debug.print("Parameter (5 elements):\n", .{});
     for (test_parameter, 0..) |val, i| {
-        log.print("  [{}] = 0x{x}\n", .{ i, val.value });
+        std.debug.print("  [{}] = 0x{x}\n", .{ i, val.value });
     }
-    log.print("Tweak (2 elements):\n", .{});
+    std.debug.print("Tweak (2 elements):\n", .{});
     for (tweak, 0..) |val, i| {
-        log.print("  [{}] = 0x{x}\n", .{ i, val.value });
+        std.debug.print("  [{}] = 0x{x}\n", .{ i, val.value });
     }
-    log.print("Message (16 elements):\n", .{});
+    std.debug.print("Message (16 elements):\n", .{});
     for (combined_children, 0..) |val, i| {
-        log.print("  [{}] = 0x{x}\n", .{ i, val.value });
+        std.debug.print("  [{}] = 0x{x}\n", .{ i, val.value });
     }
 
     // Test the hash function
     const hash_result = try scheme.applyPoseidonTreeTweakHash(combined_children, level, pos_in_level, test_parameter);
     defer allocator.free(hash_result);
 
-    log.print("\nPoseidon2 hash result:\n", .{});
+    std.debug.print("\nPoseidon2 hash result:\n", .{});
     for (hash_result, 0..) |val, i| {
-        log.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
+        std.debug.print("  [{}] = 0x{x} ({})\n", .{ i, val.value, val.value });
     }
 
-    log.print("\nExpected result: 0x31461cb0\n", .{});
-    log.print("Actual result: 0x{x}\n", .{hash_result[0].value});
-    log.print("Match: {}\n", .{hash_result[0].value == 0x31461cb0});
+    std.debug.print("\nExpected result: 0x31461cb0\n", .{});
+    std.debug.print("Actual result: 0x{x}\n", .{hash_result[0].value});
+    std.debug.print("Match: {}\n", .{hash_result[0].value == 0x31461cb0});
+}
+
+fn envVarOwned(allocator: std.mem.Allocator, init: std.process.Init, key: []const u8) ![]u8 {
+    const value = init.environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, value);
 }

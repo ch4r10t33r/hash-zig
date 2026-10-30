@@ -15,17 +15,17 @@ pub const MemoryPool = struct {
 
     parent_allocator: std.mem.Allocator,
     block_size: usize,
-    blocks: std.ArrayList(*Block),
+    blocks: std.array_list.Managed(*Block),
     free_blocks: ?*Block,
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
 
     pub fn init(parent_allocator: std.mem.Allocator, block_size: usize) MemoryPool {
         return MemoryPool{
             .parent_allocator = parent_allocator,
             .block_size = block_size,
-            .blocks = std.ArrayList(*Block).init(parent_allocator),
+            .blocks = std.array_list.Managed(*Block).init(parent_allocator),
             .free_blocks = null,
-            .mutex = std.Thread.Mutex{},
+            .mutex = .unlocked,
         };
     }
 
@@ -59,7 +59,7 @@ pub const MemoryPool = struct {
             return null;
         }
 
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
         defer self.mutex.unlock();
 
         // Try to reuse a free block
@@ -107,7 +107,7 @@ pub const MemoryPool = struct {
 
         if (buf.len != self.block_size) return;
 
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
         defer self.mutex.unlock();
 
         // Find the block and mark it as free

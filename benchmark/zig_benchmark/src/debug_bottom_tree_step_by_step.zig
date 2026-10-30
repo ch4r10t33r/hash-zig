@@ -1,9 +1,8 @@
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("../../src/root.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -16,7 +15,7 @@ pub fn main() !void {
         seed[i] = (hi << 4) | lo;
     }
 
-    log.print("SEED (bytes): {any}\n", .{seed});
+    std.debug.print("SEED (bytes): {any}\n", .{seed});
 
     // Create signature scheme
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, .lifetime_2_8);
@@ -26,13 +25,13 @@ pub fn main() !void {
     const parameter = try scheme.generateRandomParameter();
     const prf_key = try scheme.generateRandomPRFKey();
 
-    log.print("Parameter: {any}\n", .{parameter});
-    log.print("PRF key: {}\n", .{std.fmt.fmtSliceHexLower(prf_key)});
+    std.debug.print("Parameter: {any}\n", .{parameter});
+    std.debug.print("PRF key: {}\n", .{std.fmt.bytesToHex(prf_key, .lower)});
 
     // Generate first bottom tree
     const bottom_tree = try scheme.bottomTreeFromPrfKey(prf_key, 0, parameter);
     defer bottom_tree.deinit();
 
     const root = bottom_tree.root();
-    log.print("Bottom tree 0 root: {any}\n", .{root});
+    std.debug.print("Bottom tree 0 root: {any}\n", .{root});
 }

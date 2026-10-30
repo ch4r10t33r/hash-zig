@@ -2,7 +2,6 @@
 //! Based on https://github.com/b-wagn/hash-sig benchmark suite
 
 const std = @import("std");
-const log = @import("hash-zig").utils.log;
 const hash_zig = @import("hash-zig");
 
 const BenchmarkResult = struct {
@@ -17,7 +16,7 @@ const BenchmarkResult = struct {
 
 /// Benchmark key generation performance
 fn benchmarkKeyGeneration(allocator: std.mem.Allocator, lifetime: hash_zig.KeyLifetimeRustCompat, iterations: usize) !BenchmarkResult {
-    log.print("Benchmarking key generation for lifetime {} ({} iterations)...\n", .{ lifetime, iterations });
+    std.debug.print("Benchmarking key generation for lifetime {} ({} iterations)...\n", .{ lifetime, iterations });
 
     var timer = try std.time.Timer.start();
     const start_ns = timer.read();
@@ -52,7 +51,7 @@ fn benchmarkKeyGeneration(allocator: std.mem.Allocator, lifetime: hash_zig.KeyLi
 
 /// Benchmark signing performance
 fn benchmarkSigning(allocator: std.mem.Allocator, lifetime: hash_zig.KeyLifetimeRustCompat, iterations: usize) !BenchmarkResult {
-    log.print("Benchmarking signing for lifetime {} ({} iterations)...\n", .{ lifetime, iterations });
+    std.debug.print("Benchmarking signing for lifetime {} ({} iterations)...\n", .{ lifetime, iterations });
 
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
     defer scheme.deinit();
@@ -105,7 +104,7 @@ fn benchmarkSigning(allocator: std.mem.Allocator, lifetime: hash_zig.KeyLifetime
 
 /// Benchmark verification performance
 fn benchmarkVerification(allocator: std.mem.Allocator, lifetime: hash_zig.KeyLifetimeRustCompat, iterations: usize) !BenchmarkResult {
-    log.print("Benchmarking verification for lifetime {} ({} iterations)...\n", .{ lifetime, iterations });
+    std.debug.print("Benchmarking verification for lifetime {} ({} iterations)...\n", .{ lifetime, iterations });
 
     var scheme = try hash_zig.GeneralizedXMSSSignatureScheme.init(allocator, lifetime);
     defer scheme.deinit();
@@ -160,7 +159,7 @@ fn benchmarkVerification(allocator: std.mem.Allocator, lifetime: hash_zig.KeyLif
 
 /// Run comprehensive performance benchmarks
 fn runPerformanceBenchmarks(allocator: std.mem.Allocator) !void {
-    log.print("Running comprehensive performance benchmarks...\n", .{});
+    std.debug.print("Running comprehensive performance benchmarks...\n", .{});
 
     const benchmark_configs = [_]struct {
         lifetime: hash_zig.KeyLifetimeRustCompat,
@@ -189,46 +188,46 @@ fn runPerformanceBenchmarks(allocator: std.mem.Allocator) !void {
     }
 
     // Print benchmark results
-    log.print("\n📊 PERFORMANCE BENCHMARK RESULTS\n", .{});
-    log.print("=" ** 60 ++ "\n", .{});
+    std.debug.print("\n📊 PERFORMANCE BENCHMARK RESULTS\n", .{});
+    std.debug.print("=" ** 60 ++ "\n", .{});
 
     for (results.items) |result| {
-        log.print("Operation: {s}\n", .{result.operation});
-        log.print("Lifetime: {}\n", .{result.lifetime});
-        log.print("Iterations: {}\n", .{result.iterations});
-        log.print("Duration: {d:.3}s ({d} ms)\n", .{ result.duration_s, result.duration_ms });
-        log.print("Rate: {d:.1} operations/second\n", .{result.rate_per_sec});
-        log.print("-" ** 40 ++ "\n", .{});
+        std.debug.print("Operation: {s}\n", .{result.operation});
+        std.debug.print("Lifetime: {}\n", .{result.lifetime});
+        std.debug.print("Iterations: {}\n", .{result.iterations});
+        std.debug.print("Duration: {d:.3}s ({d} ms)\n", .{ result.duration_s, result.duration_ms });
+        std.debug.print("Rate: {d:.1} operations/second\n", .{result.rate_per_sec});
+        std.debug.print("-" ** 40 ++ "\n", .{});
     }
 
     // Performance assessment
-    log.print("\n🎯 PERFORMANCE ASSESSMENT\n", .{});
-    log.print("=" ** 30 ++ "\n", .{});
+    std.debug.print("\n🎯 PERFORMANCE ASSESSMENT\n", .{});
+    std.debug.print("=" ** 30 ++ "\n", .{});
 
     for (results.items) |result| {
         if (std.mem.eql(u8, result.operation, "key_generation")) {
             if (result.duration_s < 5.0) {
-                log.print("✅ Key generation for {}: FAST ({d:.2}s)\n", .{ result.lifetime, result.duration_s });
+                std.debug.print("✅ Key generation for {}: FAST ({d:.2}s)\n", .{ result.lifetime, result.duration_s });
             } else if (result.duration_s < 30.0) {
-                log.print("⚠️  Key generation for {}: MODERATE ({d:.2}s)\n", .{ result.lifetime, result.duration_s });
+                std.debug.print("⚠️  Key generation for {}: MODERATE ({d:.2}s)\n", .{ result.lifetime, result.duration_s });
             } else {
-                log.print("🐌 Key generation for {}: SLOW ({d:.2}s)\n", .{ result.lifetime, result.duration_s });
+                std.debug.print("🐌 Key generation for {}: SLOW ({d:.2}s)\n", .{ result.lifetime, result.duration_s });
             }
         } else if (std.mem.eql(u8, result.operation, "signing")) {
             if (result.rate_per_sec > 1000.0) {
-                log.print("✅ Signing for {}: FAST ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
+                std.debug.print("✅ Signing for {}: FAST ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
             } else if (result.rate_per_sec > 100.0) {
-                log.print("⚠️  Signing for {}: MODERATE ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
+                std.debug.print("⚠️  Signing for {}: MODERATE ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
             } else {
-                log.print("🐌 Signing for {}: SLOW ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
+                std.debug.print("🐌 Signing for {}: SLOW ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
             }
         } else if (std.mem.eql(u8, result.operation, "verification")) {
             if (result.rate_per_sec > 10000.0) {
-                log.print("✅ Verification for {}: FAST ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
+                std.debug.print("✅ Verification for {}: FAST ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
             } else if (result.rate_per_sec > 1000.0) {
-                log.print("⚠️  Verification for {}: MODERATE ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
+                std.debug.print("⚠️  Verification for {}: MODERATE ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
             } else {
-                log.print("🐌 Verification for {}: SLOW ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
+                std.debug.print("🐌 Verification for {}: SLOW ({d:.0} ops/sec)\n", .{ result.lifetime, result.rate_per_sec });
             }
         }
     }
@@ -238,16 +237,16 @@ fn runPerformanceBenchmarks(allocator: std.mem.Allocator) !void {
 test "performance benchmark test suite" {
     const allocator = std.testing.allocator;
 
-    log.print("\n" ++ "=" ** 80 ++ "\n", .{});
-    log.print("🚀 PERFORMANCE BENCHMARK TEST SUITE\n", .{});
-    log.print("Matching Rust hash-sig criterion benchmarks\n", .{});
-    log.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+    std.debug.print("🚀 PERFORMANCE BENCHMARK TEST SUITE\n", .{});
+    std.debug.print("Matching Rust hash-sig criterion benchmarks\n", .{});
+    std.debug.print("=" ** 80 ++ "\n\n", .{});
 
     try runPerformanceBenchmarks(allocator);
 
-    log.print("\n" ++ "=" ** 80 ++ "\n", .{});
-    log.print("🎉 PERFORMANCE BENCHMARKS COMPLETED! 🎉\n", .{});
-    log.print("✅ All performance benchmarks executed successfully\n", .{});
-    log.print("✅ Performance metrics collected and analyzed\n", .{});
-    log.print("=" ** 80 ++ "\n\n", .{});
+    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+    std.debug.print("🎉 PERFORMANCE BENCHMARKS COMPLETED! 🎉\n", .{});
+    std.debug.print("✅ All performance benchmarks executed successfully\n", .{});
+    std.debug.print("✅ Performance metrics collected and analyzed\n", .{});
+    std.debug.print("=" ** 80 ++ "\n\n", .{});
 }

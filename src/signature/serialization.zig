@@ -2,7 +2,6 @@
 //! Provides JSON-based serialization for cross-compatibility testing
 
 const std = @import("std");
-const log = @import("../utils/log.zig");
 const Allocator = std.mem.Allocator;
 const FieldElement = @import("../core/field.zig").FieldElement;
 const GeneralizedXMSSSignature = @import("signature_native.zig").GeneralizedXMSSSignature;
@@ -10,24 +9,31 @@ const GeneralizedXMSSPublicKey = @import("signature_native.zig").GeneralizedXMSS
 const GeneralizedXMSSSecretKey = @import("signature_native.zig").GeneralizedXMSSSecretKey;
 const HashTreeOpening = @import("signature_native.zig").HashTreeOpening;
 
-fn fromMontgomeryValue(value: u32) FieldElement {
-    return FieldElement.fromMontgomery(value);
+const KOALABEAR_PRIME: u64 = 0x7f000001;
+
+/// Montgomery limb for a canonical field element. Rust's verifier loads JSON
+/// integers as Montgomery limbs.
+fn toMonty(x: u32) u32 {
+    return @intCast((@as(u64, x) << 32) % KOALABEAR_PRIME);
 }
 
-/// Serialize a FieldElement to a decimal string (Montgomery residue)
+fn wireLimbHex(allocator: Allocator, canonical: FieldElement) ![]u8 {
+    return serializeFieldElement(allocator, FieldElement{ .value = toMonty(canonical.value) });
+}
+
+/// Serialize a FieldElement to a hex string
 pub fn serializeFieldElement(allocator: Allocator, elem: FieldElement) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "{}", .{elem.toMontgomery()});
+    const bytes = elem.toBytes();
+    return try std.fmt.allocPrint(allocator, "0x{x:0>8}", .{std.mem.readInt(u32, &bytes, .little)});
 }
 
 /// Deserialize a FieldElement from a hex string
 pub fn deserializeFieldElement(hex_str: []const u8) !FieldElement {
-    const clean_hex = if (std.mem.startsWith(u8, hex_str, "0x") or std.mem.startsWith(u8, hex_str, "0X"))
-        hex_str[2..]
-    else
-        hex_str;
+    // Remove 0x prefix if present
+    const clean_hex = if (std.mem.startsWith(u8, hex_str, "0x")) hex_str[2..] else hex_str;
 
     const value = try std.fmt.parseInt(u32, clean_hex, 16);
-    return FieldElement.fromMontgomery(value);
+    return FieldElement.fromU32(value);
 }
 
 /// Flexibly parse a FieldElement from a generic JSON value.
@@ -42,23 +48,23 @@ fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
             if (std.mem.startsWith(u8, s, "0x") or std.mem.startsWith(u8, s, "0X")) {
                 return deserializeFieldElement(s);
             }
-            // Interpret decimal or plain-hex strings as Montgomery values
+            // try decimal first, then hex fallback
             if (std.fmt.parseInt(u32, s, 10)) |dec| {
-                return FieldElement.fromMontgomery(dec);
+                return FieldElement.fromU32(dec);
             } else |_| {}
             const value = try std.fmt.parseInt(u32, s, 16);
-            return FieldElement.fromMontgomery(value);
+            return FieldElement.fromU32(value);
         },
         .integer => |i| {
             if (i < 0) return error.InvalidJsonFormat;
             const as_u64: u64 = @intCast(i);
             const as_u32: u32 = @intCast(@min(as_u64, @as(u64, std.math.maxInt(u32))));
-            return FieldElement.fromMontgomery(as_u32);
+            return FieldElement.fromU32(as_u32);
         },
         .float => |f| {
             const clamped: f64 = if (f < 0) 0 else f;
             const as_u32: u32 = @intFromFloat(@min(clamped, @as(f64, @floatFromInt(std.math.maxInt(u32)))));
-            return FieldElement.fromMontgomery(as_u32);
+            return FieldElement.fromU32(as_u32);
         },
         .object => |o| {
             if (o.get("value")) |inner| {
@@ -83,17 +89,28 @@ fn parseFieldElementFromJsonValue(val: std.json.Value) !FieldElement {
     }
 }
 
-/// Serialize a FieldElement array to JSON array of decimal numbers
+/// Serialize a FieldElement array to JSON array of hex strings
 pub fn serializeFieldElementArray(allocator: Allocator, elements: []const FieldElement) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
+    var json_parts = std.array_list.Managed([]u8).init(allocator);
+    defer {
+        for (json_parts.items) |part| allocator.free(part);
+        json_parts.deinit();
+    }
+
+    for (elements) |elem| {
+        const hex_str = try serializeFieldElement(allocator, elem);
+        try json_parts.append(hex_str);
+    }
+
+    var result = std.array_list.Managed(u8).init(allocator);
     defer result.deinit();
 
     try result.append('[');
-    for (elements, 0..) |elem, i| {
+    for (json_parts.items, 0..) |part, i| {
         if (i > 0) try result.append(',');
-        const value_str = try serializeFieldElement(allocator, elem);
-        defer allocator.free(value_str);
-        try result.appendSlice(value_str);
+        try result.append('"');
+        try result.appendSlice(part);
+        try result.append('"');
     }
     try result.append(']');
 
@@ -103,7 +120,7 @@ pub fn serializeFieldElementArray(allocator: Allocator, elements: []const FieldE
 /// Deserialize a FieldElement array from JSON array of hex strings
 pub fn deserializeFieldElementArray(allocator: Allocator, json_str: []const u8) ![]FieldElement {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch |err| {
-        log.print("JSON parse error: {}\n", .{err});
+        std.debug.print("JSON parse error: {}\n", .{err});
         return err;
     };
     defer parsed.deinit();
@@ -122,38 +139,16 @@ pub fn deserializeFieldElementArray(allocator: Allocator, json_str: []const u8) 
 
 /// Serialize a GeneralizedXMSSSignature to JSON
 pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMSSSignature) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
+    var result = std.array_list.Managed(u8).init(allocator);
     defer result.deinit();
 
     try result.appendSlice("{");
 
-    // Serialize hashes as array of 8-element arrays (domains) first to match Rust ordering
-    try result.appendSlice("\"hashes\":");
-    const hashes = signature.getHashes();
-    var hashes_str = std.ArrayList(u8).init(allocator);
-    defer hashes_str.deinit();
-    try hashes_str.append('[');
-    for (hashes, 0..) |domain, i| {
-        if (i > 0) try hashes_str.append(',');
-        try hashes_str.append('[');
-        for (domain, 0..) |fe, j| {
-            if (j > 0) try hashes_str.append(',');
-            const value_str = try serializeFieldElement(allocator, fe);
-            defer allocator.free(value_str);
-            try hashes_str.appendSlice(value_str);
-        }
-        try hashes_str.append(']');
-    }
-    try hashes_str.append(']');
-    const hashes_slice = try hashes_str.toOwnedSlice();
-    defer allocator.free(hashes_slice);
-    try result.appendSlice(hashes_slice);
-
     // Serialize path using controlled access as array of 8-element arrays
     const path = signature.getPath();
-    try result.appendSlice(",\"path\":{");
+    try result.appendSlice("\"path\":{");
     try result.appendSlice("\"nodes\":");
-    var nodes_str = std.ArrayList(u8).init(allocator);
+    var nodes_str = std.array_list.Managed(u8).init(allocator);
     defer nodes_str.deinit();
     try nodes_str.append('[');
     const nodes = path.getNodes();
@@ -162,9 +157,11 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
         try nodes_str.append('[');
         for (node, 0..) |fe, j| {
             if (j > 0) try nodes_str.append(',');
-            const value_str = try serializeFieldElement(allocator, fe);
-            defer allocator.free(value_str);
-            try nodes_str.appendSlice(value_str);
+            const hex_str = try wireLimbHex(allocator, fe);
+            defer allocator.free(hex_str);
+            try nodes_str.append('"');
+            try nodes_str.appendSlice(hex_str);
+            try nodes_str.append('"');
         }
         try nodes_str.append(']');
     }
@@ -177,19 +174,37 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
     // Serialize rho using controlled access
     try result.appendSlice(",\"rho\":");
     const rho = signature.getRho();
-    var rho_json_builder = std.ArrayList(u8).init(allocator);
-    defer rho_json_builder.deinit();
-    try rho_json_builder.append('[');
-    for (&rho, 0..) |fe, i| {
-        if (i > 0) try rho_json_builder.append(',');
-        const value_str = try serializeFieldElement(allocator, fe);
-        defer allocator.free(value_str);
-        try rho_json_builder.appendSlice(value_str);
+    var rho_wire: [7]FieldElement = undefined;
+    for (rho, 0..) |fe, i| {
+        rho_wire[i] = FieldElement{ .value = toMonty(fe.value) };
     }
-    try rho_json_builder.append(']');
-    const rho_json = try rho_json_builder.toOwnedSlice();
+    const rho_json = try serializeFieldElementArray(allocator, &rho_wire);
     defer allocator.free(rho_json);
     try result.appendSlice(rho_json);
+
+    // Serialize hashes as array of 8-element arrays (domains)
+    try result.appendSlice(",\"hashes\":");
+    const hashes = signature.getHashes();
+    var hashes_str = std.array_list.Managed(u8).init(allocator);
+    defer hashes_str.deinit();
+    try hashes_str.append('[');
+    for (hashes, 0..) |domain, i| {
+        if (i > 0) try hashes_str.append(',');
+        try hashes_str.append('[');
+        for (domain, 0..) |fe, j| {
+            if (j > 0) try hashes_str.append(',');
+            const hex_str = try serializeFieldElement(allocator, fe);
+            defer allocator.free(hex_str);
+            try hashes_str.append('"');
+            try hashes_str.appendSlice(hex_str);
+            try hashes_str.append('"');
+        }
+        try hashes_str.append(']');
+    }
+    try hashes_str.append(']');
+    const hashes_slice = try hashes_str.toOwnedSlice();
+    defer allocator.free(hashes_slice);
+    try result.appendSlice(hashes_slice);
 
     try result.appendSlice("}");
 
@@ -199,7 +214,7 @@ pub fn serializeSignature(allocator: Allocator, signature: *const GeneralizedXMS
 /// Deserialize a GeneralizedXMSSSignature from JSON
 pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*GeneralizedXMSSSignature {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch |err| {
-        log.print("JSON parse error: {}\n", .{err});
+        std.debug.print("JSON parse error: {}\n", .{err});
         return err;
     };
     defer parsed.deinit();
@@ -246,9 +261,7 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         }
     }
 
-    errdefer allocator.free(path_nodes);
     const path = try HashTreeOpening.init(allocator, path_nodes);
-    allocator.free(path_nodes);
 
     // Parse rho (6 for lifetime 2^18, 7 for lifetime 2^8)
     const rho_array = obj.get("rho") orelse return error.MissingRhoField;
@@ -286,32 +299,33 @@ pub fn deserializeSignature(allocator: Allocator, json_str: []const u8) !*Genera
         }
     }
 
-    errdefer allocator.free(hashes_domains);
-    const signature = try GeneralizedXMSSSignature.initDeserialized(allocator, path, rho, hashes_domains);
-    allocator.free(hashes_domains);
-    return signature;
+    return try GeneralizedXMSSSignature.initDeserialized(allocator, path, rho, hashes_domains);
 }
 
 /// Serialize a GeneralizedXMSSPublicKey to JSON
 pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXMSSPublicKey) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
+    var result = std.array_list.Managed(u8).init(allocator);
     defer result.deinit();
 
     try result.appendSlice("{");
 
-    // Serialize parameter using controlled access
-    try result.appendSlice("\"parameter\":");
-    const parameter = public_key.getParameter();
-    const param_json = try serializeFieldElementArray(allocator, &parameter);
-    defer allocator.free(param_json);
-    try result.appendSlice(param_json);
-
-    // Serialize root using controlled access (as array to match Rust)
+    // Root is already a Montgomery limb. Rust loads that integer as the limb.
     const root = public_key.getRoot();
     const root_json = try serializeFieldElementArray(allocator, &root);
     defer allocator.free(root_json);
-    try result.appendSlice(",\"root\":");
+    try result.appendSlice("\"root\":");
     try result.appendSlice(root_json);
+
+    // Serialize parameter using controlled access
+    try result.appendSlice(",\"parameter\":");
+    const parameter = public_key.getParameter();
+    var parameter_wire: [5]FieldElement = undefined;
+    for (parameter, 0..) |fe, i| {
+        parameter_wire[i] = FieldElement{ .value = toMonty(fe.value) };
+    }
+    const param_json = try serializeFieldElementArray(allocator, &parameter_wire);
+    defer allocator.free(param_json);
+    try result.appendSlice(param_json);
 
     try result.appendSlice("}");
 
@@ -321,7 +335,7 @@ pub fn serializePublicKey(allocator: Allocator, public_key: *const GeneralizedXM
 /// Deserialize a GeneralizedXMSSPublicKey from JSON
 pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
     var parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, json_str, .{}) catch |err| {
-        log.print("JSON parse error: {}\n", .{err});
+        std.debug.print("JSON parse error: {}\n", .{err});
         return err;
     };
     defer parsed.deinit();
@@ -363,14 +377,14 @@ pub fn deserializePublicKey(json_str: []const u8) !GeneralizedXMSSPublicKey {
 
 /// Serialize a secret key (simplified - just the essential data for testing)
 pub fn serializeSecretKey(allocator: Allocator, secret_key: *const GeneralizedXMSSSecretKey) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
+    var result = std.array_list.Managed(u8).init(allocator);
     defer result.deinit();
 
     try result.appendSlice("{");
 
     // Serialize PRF key using controlled access
     const prf_key = secret_key.getPrfKey();
-    const prf_key_hex = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{std.fmt.fmtSliceHexLower(&prf_key)});
+    const prf_key_hex = try std.fmt.allocPrint(allocator, "0x{x:0>64}", .{std.fmt.bytesToHex(&prf_key, .lower)});
     defer allocator.free(prf_key_hex);
     try result.appendSlice("\"prf_key\":");
     try result.appendSlice(prf_key_hex);
@@ -425,7 +439,7 @@ test "serialize and deserialize FieldElement array" {
     defer allocator.free(serialized);
 
     // Debug: print the generated JSON
-    log.print("Generated JSON: {s}\n", .{serialized});
+    std.debug.print("Generated JSON: {s}\n", .{serialized});
 
     const deserialized = try deserializeFieldElementArray(allocator, serialized);
     defer allocator.free(deserialized);
